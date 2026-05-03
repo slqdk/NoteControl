@@ -79,3 +79,13 @@ public sealed record VaultMemberDto(
 public sealed record ShareVaultRequest(
     string Username,
     string Role);                      // "editor" | "viewer" — owner cannot be granted via this endpoint
+
+/// <summary>
+/// Ship 52: response from POST /api/vaults/{id}/install-sample-data.
+/// Returns the counts so the tray can show "wrote N notes, created K
+/// folders" in its status bar / message box. Both numbers are
+/// post-install totals; on a re-install over an existing sample set
+/// the FoldersCreated will typically be 0 while FilesWritten stays
+/// at the full file count (we always overwrite).
+/// </summary>
+public sealed record InstallSampleDataResponse(int FilesWritten, int FoldersCreated);

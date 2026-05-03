@@ -64,6 +64,16 @@ public interface IAdminClient
     Task<VaultMemberDto> ShareVaultAsync(Guid vaultId, ShareVaultRequest request, CancellationToken ct = default);
     Task UnshareVaultAsync(Guid vaultId, Guid userId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Ship 52: install bundled sample data into a vault. Owner-or-admin
+    /// only; the server-side endpoint enforces the permission gate. On
+    /// success the server kicks off a background search-index rebuild
+    /// — same pattern Register uses — so the new notes show up in
+    /// search within a few seconds. The response carries the file +
+    /// folder counts the tray surfaces in the status bar.
+    /// </summary>
+    Task<InstallSampleDataResponse> InstallSampleDataAsync(Guid vaultId, CancellationToken ct = default);
+
     // -- Server config (step 16) --
     Task<ServerConfigDto> GetServerConfigAsync(CancellationToken ct = default);
     Task<ServerConfigDto> UpdateServerConfigAsync(ServerConfigDto config, CancellationToken ct = default);

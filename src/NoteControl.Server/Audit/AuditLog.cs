@@ -92,6 +92,13 @@ public static class AuditEventTypes
     public const string VaultShared      = "vault.shared";
     public const string VaultUnshared    = "vault.unshared";
 
+    // Ship 52: tray's "Install Sample Data" button writes this.
+    // Re-running over an existing install (which overwrites files)
+    // emits one event per click — useful for distinguishing "user
+    // explored the demo content fresh" from "user reset to demo
+    // state after editing".
+    public const string VaultSampleDataInstalled = "vault.sample_data.installed";
+
     public const string AdminBootstrap   = "admin.bootstrap";
 
     // Step 19: structural note ops (deliberately NOT note.updated —

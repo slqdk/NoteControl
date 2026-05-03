@@ -87,6 +87,10 @@ public partial class VaultsWindow : Window
         // someone else's user folder, Explorer just shows an empty
         // window or a permission prompt. We don't second-guess.
         OpenFolderButton.IsEnabled = hasSelection;
+        // Ship 52: Install Sample Data is owner-only with admin
+        // override. Same gate as Share / Delete because it writes
+        // into the vault, just additively rather than destructively.
+        InstallSampleDataButton.IsEnabled = hasSelection && CanActAsOwner;
     }
 
     private async Task ReloadAsync()
@@ -284,6 +288,38 @@ public partial class VaultsWindow : Window
         {
             SetStatus("Could not open: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Ship 52: install bundled sample data into the selected vault.
+    /// Always-overwrite semantics (per the design choice) — the
+    /// confirmation dialog warns explicitly so the user can opt out.
+    /// On success, surface the file/folder counts in the status bar.
+    /// </summary>
+    private async void InstallSampleDataButton_Click(object sender, RoutedEventArgs e)
+    {
+        var sel = Selected; if (sel is null) return;
+
+        var confirm = MessageBox.Show(
+            this,
+            $"Install sample data into '{sel.Path}'?\n\n" +
+            "This creates the folders 'Welcome', 'Examples', and 'Daily journal' " +
+            "with a few sample notes inside each, demonstrating headings, code " +
+            "blocks (incl. Structured Text), tables, callouts, and links.\n\n" +
+            "If you've already installed the sample data and edited any of the " +
+            "sample notes, your edits will be overwritten. Notes you've added " +
+            "(with different filenames) are not touched.",
+            "Install Sample Data",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Information);
+        if (confirm != MessageBoxResult.OK) return;
+
+        await CallAsync(
+            () => _client.InstallSampleDataAsync(sel.Id),
+            onSuccess: r => SetStatus(
+                $"Installed sample data into {sel.Path} — wrote {r.FilesWritten} note{(r.FilesWritten == 1 ? "" : "s")}, " +
+                $"created {r.FoldersCreated} new folder{(r.FoldersCreated == 1 ? "" : "s")}. " +
+                "Search index is rebuilding in the background."));
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();

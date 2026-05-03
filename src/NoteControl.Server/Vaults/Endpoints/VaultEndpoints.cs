@@ -3,6 +3,7 @@ using NoteControl.Server.Audit;
 using NoteControl.Server.Auth;
 using NoteControl.Server.Data;
 using NoteControl.Server.Search.Services;
+using NoteControl.Server.Vaults.SampleData;
 using NoteControl.Server.Vaults.Services;
 using NoteControl.Shared.Vaults;
 
@@ -43,6 +44,12 @@ public static class VaultEndpoints
         group.MapGet("/{vaultId:guid}/permissions", ListMembersAsync);
         group.MapPost("/{vaultId:guid}/permissions", ShareAsync);
         group.MapDelete("/{vaultId:guid}/permissions/{userId:guid}", UnshareAsync);
+
+        // Ship 52: tray-only "Install Sample Data" entry point. The tray's
+        // Vaults window button calls this; same permission gate as Delete
+        // (owner-or-admin), but the action is creative rather than
+        // destructive (no permanent data loss, just file overwrites).
+        group.MapPost("/{vaultId:guid}/install-sample-data", InstallSampleDataAsync);
 
         return app;
     }
@@ -379,5 +386,97 @@ public static class VaultEndpoints
         {
             return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Ship 52: install bundled sample data into a vault. Owner-or-admin
+    /// only. The actual unpacking + atomic-write logic lives in
+    /// <see cref="ISampleDataInstaller"/>; this endpoint enforces the
+    /// permission gate and writes the audit entry.
+    ///
+    /// On success kicks a background search-index rebuild so the new
+    /// notes show up in search within seconds. Same fire-and-forget
+    /// pattern Register uses.
+    /// </summary>
+    private static async Task<IResult> InstallSampleDataAsync(
+        Guid vaultId,
+        HttpContext http,
+        IVaultService vaults,
+        ISampleDataInstaller installer,
+        IIndexService index,
+        IAuditLog audit,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var user = http.RequireUser();
+        var isAdmin = http.IsAdmin();
+
+        // Permission gate: caller must be owner of the vault, OR admin.
+        // We don't share the same role-checking that Delete delegates to
+        // VaultService because the installer doesn't need any service-
+        // layer state — it just needs the vault to exist and the caller
+        // to be allowed.
+        var role = await vaults.GetEffectiveRoleAsync(vaultId, user.Id, ct);
+        var isOwner = string.Equals(role, "owner", StringComparison.OrdinalIgnoreCase);
+        if (!isOwner && !isAdmin)
+        {
+            // Mirror the "not found vs forbidden" disclosure choice
+            // ListMembers makes: 404 when the caller can't even see
+            // the vault (no role at all), 403 when they can see it
+            // but aren't owner. This avoids leaking vault existence
+            // to randos while being honest with editors/viewers about
+            // the permission-not-action distinction.
+            return role is null
+                ? Results.NotFound()
+                : Results.Problem(statusCode: 403,
+                    title: "Only the vault owner (or an administrator) can install sample data.");
+        }
+
+        SampleDataInstallResult result;
+        try
+        {
+            result = await installer.InstallAsync(vaultId, ct);
+        }
+        catch (VaultException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+
+        await audit.WriteAsync(
+            AuditEventTypes.VaultSampleDataInstalled,
+            user.Id,
+            http.GetClientIp(),
+            new
+            {
+                vaultId,
+                filesWritten = result.FilesWritten,
+                foldersCreated = result.FoldersCreated,
+                asAdmin = isAdmin && !isOwner ? (bool?)true : null,
+            },
+            ct);
+
+        // Background re-index so the new notes appear in search.
+        // Identical pattern to Register's rebuild kickoff. Failures
+        // are logged but don't fail the response — the operator can
+        // re-trigger the rebuild manually.
+        var log = loggerFactory.CreateLogger("VaultSampleData");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var count = await index.RebuildAsync(vaultId);
+                log.LogInformation(
+                    "Post-sample-install index rebuild for {VaultId} indexed {Count} notes.",
+                    vaultId, count);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex,
+                    "Post-sample-install index rebuild failed for {VaultId}.", vaultId);
+            }
+        });
+
+        return Results.Ok(new InstallSampleDataResponse(
+            result.FilesWritten, result.FoldersCreated));
     }
 }

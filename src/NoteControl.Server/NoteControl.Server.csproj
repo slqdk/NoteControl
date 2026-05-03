@@ -42,4 +42,27 @@
     </None>
   </ItemGroup>
 
+  <!--
+    Ship 52: bundled sample data for the tray's "Install Sample Data"
+    button. Each file is embedded with an explicit LogicalName so the
+    runtime path-resolution code (SampleDataInstaller) doesn't have to
+    reverse-engineer the SDK's default name-mangling rules. The
+    resource names use forward slashes; SampleDataInstaller maps them
+    to OS-native separators on disk.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Welcome\Start here.md"
+                      LogicalName="SampleNotes/Welcome/Start here.md" />
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Welcome\Slash menu reference.md"
+                      LogicalName="SampleNotes/Welcome/Slash menu reference.md" />
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Examples\Code blocks.md"
+                      LogicalName="SampleNotes/Examples/Code blocks.md" />
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Examples\Tables and lists.md"
+                      LogicalName="SampleNotes/Examples/Tables and lists.md" />
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Examples\Images and links.md"
+                      LogicalName="SampleNotes/Examples/Images and links.md" />
+    <EmbeddedResource Include="Vaults\SampleData\SampleNotes\Daily journal\2026-05-03.md"
+                      LogicalName="SampleNotes/Daily journal/2026-05-03.md" />
+  </ItemGroup>
+
 </Project>

@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="NoteControl — Vaults"
-        Width="980" Height="540"
+        Width="1080" Height="540"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="12">
         <Grid.RowDefinitions>
@@ -64,6 +64,13 @@
                    Foreground="#555"
                    TextWrapping="Wrap"/>
 
+        <!--
+            Ship 52: window widened from 980 to 1080 to fit the new
+            "Install Sample Data..." button without crowding. Button
+            sits between Open folder and Delete because it's a vault-
+            scope action like the others; gated to owner-or-admin via
+            the same CanActAsOwner check used by Share / Delete.
+        -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
             <Button Content="Create vault…" Width="110" Height="28" Margin="0,0,8,0"
                     Click="CreateButton_Click"/>
@@ -81,6 +88,11 @@
                     Click="OpenFolderButton_Click"
                     IsEnabled="False"
                     ToolTip="Open this vault's folder in Windows Explorer"/>
+            <Button Content="Install Sample Data…" Width="160" Height="28" Margin="0,0,8,0"
+                    x:Name="InstallSampleDataButton"
+                    Click="InstallSampleDataButton_Click"
+                    IsEnabled="False"
+                    ToolTip="Drop a few sample folders + notes into this vault to demo what NoteControl can do. Existing files with the same names are overwritten."/>
             <Button Content="Delete"        Width="80"  Height="28" Margin="0,0,8,0"
                     x:Name="DeleteButton"   Click="DeleteButton_Click"   IsEnabled="False"
                     Foreground="Crimson"/>
