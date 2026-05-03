@@ -1,0 +1,54 @@
+# NoteControl — Caddy reverse-proxy configuration
+#
+# Replace `notecontrol.example.com` with your real hostname before use.
+# Caddy automatically provisions and renews a Let's Encrypt certificate.
+#
+# Run with:    caddy run --config Caddyfile
+# Validate:    caddy validate --config Caddyfile
+
+notecontrol.example.com {
+
+    # Forward traffic to the ASP.NET Core backend on localhost.
+    reverse_proxy 127.0.0.1:8080
+
+    # --------------------------------------------------------------------
+    # Rate limiting on the login endpoint.
+    # Requires the rate_limit plugin — build a custom Caddy via xcaddy:
+    #   xcaddy build --with github.com/mholt/caddy-ratelimit
+    # --------------------------------------------------------------------
+    # rate_limit {
+    #     zone login {
+    #         match {
+    #             path /api/auth/login
+    #         }
+    #         key    {remote_host}
+    #         events 5
+    #         window 1m
+    #     }
+    # }
+
+    # --------------------------------------------------------------------
+    # Security headers (in addition to those set by the backend).
+    # --------------------------------------------------------------------
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        Permissions-Policy        "camera=(), microphone=(), geolocation=()"
+        # Remove the Server header to reduce fingerprinting.
+        -Server
+    }
+
+    # --------------------------------------------------------------------
+    # Access log — rotate daily, keep 30 days.
+    # --------------------------------------------------------------------
+    log {
+        output file C:/ProgramData/NoteControl/logs/caddy-access.log {
+            roll_size  10mb
+            roll_keep  30
+            roll_keep_for 720h
+        }
+        format json
+    }
+}

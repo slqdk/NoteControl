@@ -1,0 +1,324 @@
+<Window x:Class="NoteControl.Tray.Admin.Windows.ServerSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NoteControl — Server Settings"
+        Width="700" Height="640"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock DockPanel.Dock="Left"
+                       FontSize="16" FontWeight="SemiBold"
+                       Text="Server Settings"
+                       VerticalAlignment="Center"/>
+            <Button DockPanel.Dock="Right"
+                    Content="Reload"
+                    Width="80" Height="26"
+                    Click="ReloadButton_Click"/>
+        </DockPanel>
+
+        <!-- Tabs -->
+        <TabControl Grid.Row="1" x:Name="Tabs">
+
+            <!-- =================== Storage =================== -->
+            <TabItem Header="Storage">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="The data folder is the root of everything NoteControl stores: vaults, the user database, audit log, and this very settings file. It's the only thing you need to back up — copying this folder to a new machine and pointing the server at it gives you a complete restore."/>
+
+                    <TextBlock Text="Data folder" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBox x:Name="DataRootBox" IsReadOnly="True" Background="#F5F5F5" Padding="6,4" Margin="0,0,0,8"/>
+                    <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,12"
+                               Text="Read-only. To change the data path, stop the server, edit Storage:DataRoot in appsettings.json, then start the server. The server reads this value before any other config so it can find the rest of its settings inside the data folder."/>
+
+                    <TextBlock Text="Settings file" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                    <TextBox x:Name="ConfigFileBox" IsReadOnly="True" Background="#F5F5F5" Padding="6,4" Margin="0,0,0,8"/>
+                    <TextBlock TextWrapping="Wrap" Foreground="#666"
+                               Text="This is the file Save writes to. It lives inside the data folder so it travels with backups."/>
+                </StackPanel>
+            </TabItem>
+
+            <!-- =================== Network =================== -->
+            <TabItem Header="Network">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+
+                        <!-- Restart-required notice -->
+                        <Border Background="#FFF8E1" BorderBrush="#FFC107" BorderThickness="1"
+                                Padding="10,8" Margin="0,0,0,12" CornerRadius="3">
+                            <TextBlock TextWrapping="Wrap" Foreground="#5D4037"
+                                       Text="Network changes apply on next server restart. Kestrel binds its sockets at startup, so the toggles below take effect after you Save and stop+start the server."/>
+                        </Border>
+
+                        <!-- Bind URL — read only, derived -->
+                        <TextBlock Text="Currently listening on" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox x:Name="BindUrlBox" IsReadOnly="True" Background="#F5F5F5" Padding="6,4" Margin="0,0,0,4"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,16"
+                                   Text="What Kestrel is actually bound to right now. Loopback (127.0.0.1) means LAN devices can't reach the server. Toggle 'Expose on LAN' below to bind on all interfaces."/>
+
+                        <!-- Expose on LAN toggle -->
+                        <CheckBox x:Name="ExposeOnLanCheckbox"
+                                  Content="Expose on LAN"
+                                  Margin="0,0,0,4"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,16"
+                                   Text="When checked, Kestrel binds to 0.0.0.0 on the configured port — other devices on your home Wi-Fi can reach the server. When unchecked, Kestrel binds only to 127.0.0.1 (loopback) — only this PC can reach it. Default off."/>
+
+                        <!-- Port -->
+                        <TextBlock Text="Port" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox x:Name="PortBox" Padding="6,4" Margin="0,0,0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,16"
+                                   Text="TCP port. Default 8080. Range 1024-65535. Lower ports require Administrator on Windows; we don't go there."/>
+
+                        <!-- LAN URLs -->
+                        <TextBlock Text="LAN URLs (when exposed)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox x:Name="LanUrlsBox"
+                                 IsReadOnly="True" Background="#F5F5F5"
+                                 FontFamily="Consolas"
+                                 Padding="6,4" Margin="0,0,0,4"
+                                 MinHeight="60"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,16"
+                                   Text="All IPv4 addresses on this machine (excluding loopback). When 'Expose on LAN' is checked and the server has restarted, you can reach NoteControl from another device on the same network by typing one of these URLs into the browser. The list may include virtual adapters (Hyper-V, WSL, VPN) that aren't useful — pick the one matching your physical LAN. (Tip: a DHCP reservation on your router gives this PC a stable IP so the URL doesn't change.)"/>
+
+                        <!-- Public URL -->
+                        <TextBlock Text="Public URL (for outbound emails)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox x:Name="PublicUrlBox" Padding="6,4" Margin="0,0,0,4"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666"
+                                   Text="Optional. Inserted into password-reset and login-notification emails so links point at the right address (e.g. http://192.168.1.42:8080). Leave empty for a local-style fallback."/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- =================== Authentication =================== -->
+            <TabItem Header="Authentication">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                                   Text="Sessions, password rules, and login throttling. Most of these take effect for new requests and new sessions; existing logins keep their original settings until they expire."/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Label Grid.Row="0" Grid.Column="0" Content="Idle timeout (minutes)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="IdleTimeoutBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="1" Grid.Column="0" Content="Absolute lifetime (minutes)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="AbsoluteTimeoutBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="2" Grid.Column="0" Content="Minimum password length" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="MinPasswordLengthBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="3" Grid.Column="0" Content="Check pwned passwords (HIBP)" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="3" Grid.Column="1" x:Name="CheckHibpBox" VerticalAlignment="Center" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="4" Grid.Column="0" Content="Login attempts / IP / minute" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="LoginAttemptsIpBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="5" Grid.Column="0" Content="Login attempts / account / hour" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="LoginAttemptsAccountBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="6" Grid.Column="0" Content="Account lockout duration (min)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="LockoutMinutesBox" Padding="6,4" Margin="0,0,0,6"/>
+                        </Grid>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,12,0,0"
+                                   Text="⚠ Most of these are picked up at server startup in this version. Save persists them to config.json; restart the server to apply."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- =================== SMTP =================== -->
+            <TabItem Header="Email (SMTP)">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                                   Text="Outbound email for password resets and login notifications. Disabled by default — features that need email log a warning instead."/>
+
+                        <CheckBox x:Name="SmtpEnabledBox" Content="Enable SMTP" Margin="0,0,0,12"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Label Grid.Row="0" Grid.Column="0" Content="Host" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SmtpHostBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="1" Grid.Column="0" Content="Port" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="SmtpPortBox" Padding="6,4" Margin="0,0,0,6" Width="100" HorizontalAlignment="Left"/>
+
+                            <Label Grid.Row="2" Grid.Column="0" Content="Security" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="SmtpSecurityBox" Width="140" HorizontalAlignment="Left" Margin="0,0,0,6">
+                                <ComboBoxItem Content="STARTTLS"/>
+                                <ComboBoxItem Content="SSL"/>
+                                <ComboBoxItem Content="None"/>
+                            </ComboBox>
+
+                            <Label Grid.Row="3" Grid.Column="0" Content="Username" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="SmtpUsernameBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="4" Grid.Column="0" Content="Password" VerticalAlignment="Center"/>
+                            <DockPanel Grid.Row="4" Grid.Column="1" Margin="0,0,0,6">
+                                <TextBlock x:Name="SmtpPasswordHint" DockPanel.Dock="Right" VerticalAlignment="Center"
+                                           Foreground="#888" Margin="8,0,0,0"
+                                           Text="(leave blank to keep current)"/>
+                                <PasswordBox x:Name="SmtpPasswordBox" Padding="6,4"/>
+                            </DockPanel>
+
+                            <Label Grid.Row="5" Grid.Column="0" Content="From address" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="SmtpFromBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="6" Grid.Column="0" Content="From display name" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="SmtpFromNameBox" Padding="6,4" Margin="0,0,0,6"/>
+                        </Grid>
+
+                        <Border Margin="0,16,0,0" Padding="8" Background="#F5F5F5" BorderBrush="#DDD" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Test send" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right"
+                                            Content="Send test"
+                                            Width="100" Height="26"
+                                            Margin="8,0,0,0"
+                                            Click="TestSmtpButton_Click"/>
+                                    <TextBox x:Name="SmtpTestToBox" Padding="6,4"/>
+                                </DockPanel>
+                                <TextBlock x:Name="SmtpTestResultText"
+                                           Margin="0,8,0,0"
+                                           Foreground="#555"
+                                           TextWrapping="Wrap"/>
+                                <TextBlock TextWrapping="Wrap" Foreground="#888" Margin="0,8,0,0"
+                                           Text="Saves the current settings first, then attempts to send a test email."/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- =================== Backups =================== -->
+            <TabItem Header="Backups">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                                   Text="Settings persisted by this ship. The actual scheduled run + run-now + restore controls land in the next ship's Backups window."/>
+
+                        <CheckBox x:Name="BackupEnabledBox" Content="Enable scheduled backups" Margin="0,0,0,12"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Label Grid.Row="0" Grid.Column="0" Content="Target path (or UNC \\nas\…)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="BackupTargetBox" Padding="6,4" Margin="0,0,0,6"/>
+
+                            <Label Grid.Row="1" Grid.Column="0" Content="Daily run time (HH:MM)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="BackupDailyTimeBox" Padding="6,4" Margin="0,0,0,6" Width="100" HorizontalAlignment="Left"/>
+
+                            <Label Grid.Row="2" Grid.Column="0" Content="Keep daily backups (count)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="BackupRetainDailyBox" Padding="6,4" Margin="0,0,0,6" Width="100" HorizontalAlignment="Left"/>
+
+                            <Label Grid.Row="3" Grid.Column="0" Content="Keep weekly backups (count)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="BackupRetainWeeklyBox" Padding="6,4" Margin="0,0,0,6" Width="100" HorizontalAlignment="Left"/>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- =================== Logging =================== -->
+            <TabItem Header="Logging">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Minimum log level + retention. Serilog itself reads its main config from appsettings.json (file rolling, output template) — these knobs are admin-friendly overrides."/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Label Grid.Row="0" Grid.Column="0" Content="Minimum level" VerticalAlignment="Center"/>
+                        <ComboBox Grid.Row="0" Grid.Column="1" x:Name="LogLevelBox" Width="160" HorizontalAlignment="Left" Margin="0,0,0,6">
+                            <ComboBoxItem Content="Verbose"/>
+                            <ComboBoxItem Content="Debug"/>
+                            <ComboBoxItem Content="Information"/>
+                            <ComboBoxItem Content="Warning"/>
+                            <ComboBoxItem Content="Error"/>
+                            <ComboBoxItem Content="Fatal"/>
+                        </ComboBox>
+
+                        <Label Grid.Row="1" Grid.Column="0" Content="Retain days" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="LogRetainBox" Padding="6,4" Margin="0,0,0,6" Width="100" HorizontalAlignment="Left"/>
+                    </Grid>
+                </StackPanel>
+            </TabItem>
+
+        </TabControl>
+
+        <!-- Status / errors -->
+        <TextBlock Grid.Row="2"
+                   x:Name="StatusText"
+                   Margin="0,8,0,0"
+                   Foreground="#555"
+                   TextWrapping="Wrap"/>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button Content="Save"
+                    Width="100" Height="28"
+                    Margin="0,0,8,0"
+                    x:Name="SaveButton"
+                    Click="SaveButton_Click"/>
+            <Button Content="Close"
+                    Width="80" Height="28"
+                    IsCancel="True"
+                    Click="CloseButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

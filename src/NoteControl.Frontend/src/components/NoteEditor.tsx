@@ -1,0 +1,623 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import Link from '@tiptap/extension-link';
+import Placeholder from '@tiptap/extension-placeholder';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
+
+import { ImageWithControls } from '../editor/ImageWithControls';
+import { VideoExtension } from '../editor/VideoExtension';
+import { CodeBlockWithTitle } from '../editor/CodeBlockWithTitle';
+import { CalloutExtension } from '../editor/CalloutExtension';
+import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
+import { MarkdownExtension } from '../markdown/markdownExtension';
+import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
+import { SlashMenuExtension } from '../editor/SlashMenuExtension';
+import { refreshTemplates } from '../editor/templateCache';
+import { ApiError, assetsApi, notesApi } from '../api/client';
+import type { NoteDto } from '../api/types';
+import type { SaveState } from './SaveStatusIndicator';
+import { TableToolbar } from './TableToolbar';
+import { BubbleMenu } from './BubbleMenu';
+
+const AUTOSAVE_DEBOUNCE_MS = 2000;
+
+/** Public shape for an in-flight upload, surfaced to the host page. */
+export interface EditorUpload {
+  id: number;
+  info: UploadInfo;
+  error?: string;
+}
+
+interface NoteEditorProps {
+  vaultId: string;
+  initialNote: NoteDto;
+  /**
+   * Optional listeners that let the host page render the save status
+   * and upload pills wherever it wants. We previously rendered both
+   * inside an in-editor toolbar; that's gone now (the breadcrumb row
+   * shows them instead). Callbacks are optional so the editor still
+   * works headlessly in tests / future embeddings.
+   */
+  onSaveStateChange?: (state: SaveState) => void;
+  onUploadsChange?: (uploads: EditorUpload[]) => void;
+}
+
+/**
+ * The editing surface for one note.
+ *
+ * Save lifecycle: TipTap onUpdate → debounce 2 s → PUT with current
+ * markdown + last-known etag. On 412 we surface a conflict the user
+ * has to resolve by reloading.
+ *
+ * Save state and active uploads used to be rendered in an in-editor
+ * toolbar at the top of this component. That toolbar is gone — both
+ * are now reported via the optional callbacks so the host page can
+ * render them next to the breadcrumb path. This keeps the editor
+ * itself as just "the page" with no chrome above it.
+ */
+export function NoteEditor({
+  vaultId,
+  initialNote,
+  onSaveStateChange,
+  onUploadsChange,
+}: NoteEditorProps) {
+  const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
+
+  /**
+   * Active uploads (paste/drop in flight). The host page renders the
+   * pills; we just keep the list and emit it on change.
+   */
+  const [uploads, setUploads] = useState<EditorUpload[]>([]);
+  const uploadIdRef = useRef(0);
+
+  // Bubble save state + uploads to the host page on change. We keep
+  // the callbacks in refs so the effect below doesn't re-fire when
+  // the parent re-renders with a new function identity (which would
+  // cause a render loop if the parent's render also changes when we
+  // tell it the save state changed).
+  const onSaveStateChangeRef = useRef(onSaveStateChange);
+  const onUploadsChangeRef = useRef(onUploadsChange);
+  useEffect(() => {
+    onSaveStateChangeRef.current = onSaveStateChange;
+  }, [onSaveStateChange]);
+  useEffect(() => {
+    onUploadsChangeRef.current = onUploadsChange;
+  }, [onUploadsChange]);
+
+  useEffect(() => {
+    onSaveStateChangeRef.current?.(saveState);
+  }, [saveState]);
+  useEffect(() => {
+    onUploadsChangeRef.current?.(uploads);
+  }, [uploads]);
+
+  const noteForUploadRef = useRef(initialNote.path);
+  useEffect(() => {
+    noteForUploadRef.current = initialNote.path;
+  }, [initialNote.path]);
+
+  // Keep the slash menu's template list current. Templates are
+  // fetched once per editor mount; the cache is shared across all
+  // editor instances of the same vault. After the user creates or
+  // edits a template via the manage-templates page, that page
+  // calls refreshTemplates() too — so the list stays fresh.
+  useEffect(() => {
+    void refreshTemplates(vaultId);
+  }, [vaultId]);
+
+  const lastSavedMarkdownRef = useRef<string>(initialNote.body);
+  const etagRef = useRef<string>(initialNote.etag);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef<boolean>(false);
+  const pendingMarkdownRef = useRef<string | null>(null);
+  const editorRef = useRef<Editor | null>(null);
+
+  const performSave = useCallback(async () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const markdown = editor.storage.markdown.getMarkdown() as string;
+    if (markdown === lastSavedMarkdownRef.current) {
+      setSaveState({ kind: 'saved' });
+      return;
+    }
+
+    if (inFlightRef.current) {
+      pendingMarkdownRef.current = markdown;
+      return;
+    }
+
+    inFlightRef.current = true;
+    setSaveState({ kind: 'saving' });
+
+    try {
+      const updated = await notesApi.update(vaultId, initialNote.path, {
+        body: markdown,
+        etag: etagRef.current,
+      });
+      etagRef.current = updated.etag;
+      lastSavedMarkdownRef.current = markdown;
+      setSaveState({ kind: 'saved' });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 412) {
+        setSaveState({
+          kind: 'conflict',
+          message:
+            'Another change was saved while you were editing. ' +
+            'Reload the note to see the latest version (your unsaved changes will be lost).',
+        });
+      } else {
+        const message = e instanceof Error ? e.message : 'Save failed.';
+        setSaveState({ kind: 'error', message });
+      }
+    } finally {
+      inFlightRef.current = false;
+
+      if (pendingMarkdownRef.current !== null) {
+        const next = pendingMarkdownRef.current;
+        pendingMarkdownRef.current = null;
+        if (next !== lastSavedMarkdownRef.current) {
+          scheduleSave();
+        }
+      }
+    }
+  }, [vaultId, initialNote.path]);
+
+  const scheduleSave = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null;
+      void performSave();
+    }, AUTOSAVE_DEBOUNCE_MS);
+  }, [performSave]);
+
+  const editor = useEditor(
+    {
+      extensions: [
+        // We disable StarterKit's codeBlock and use our custom
+        // CodeBlockWithTitle instead. The rest of StarterKit
+        // (paragraphs, headings, lists, code marks, etc.) stays
+        // as-is.
+        StarterKit.configure({
+          codeBlock: false,
+        }),
+        CodeBlockWithTitle,
+        // Tables — GFM-style. Resizable=false because resizable
+        // tables in TipTap need a separate column-resize handle
+        // that doesn't play well with our minimal styling. Users
+        // get a clean grid; column widths come from content.
+        Table.configure({
+          // Column resize is built into @tiptap/extension-table.
+          // Drag the right edge of any cell to resize that column.
+          // handleWidth: the px-width of the drag-zone on the cell
+          //   border. 5 is the upstream default; we leave it.
+          // cellMinWidth: minimum column width in pixels — keeps
+          //   users from accidentally collapsing a column to nothing.
+          resizable: true,
+          handleWidth: 5,
+          cellMinWidth: 40,
+        }),
+        TableRow,
+        TableHeader,
+        TableCell,
+        // Del/Backspace deletes the whole table when the user has
+        // drag-selected every cell. Replaces the toolbar's old ✕
+        // button with a more deliberate keyboard gesture.
+        TableDeleteShortcut,
+        // Callouts (admonitions) — five colour-coded variants. See
+        // CalloutExtension for the GitHub-style markdown round-trip.
+        CalloutExtension,
+        Link.configure({
+          openOnClick: false,
+          HTMLAttributes: {
+            target: '_blank',
+            rel: 'noopener noreferrer nofollow',
+          },
+        }),
+        Placeholder.configure({
+          placeholder: 'Start typing…',
+        }),
+        // Custom Image node with resize handles, border toggle, and
+        // controls toolbar. Replaces the upstream @tiptap/extension-image.
+        // Block-level only (matches Notion / Obsidian).
+        ImageWithControls.configure({
+          allowBase64: false,
+        }),
+        // Custom Video node — same shape as ImageWithControls but
+        // for inline video. Renders a real <video> element with
+        // browser-default controls (play/pause/scrub) plus our own
+        // resize handle + delete button when active.
+        VideoExtension,
+        // Custom paste/drop interceptor: turns clipboard files into
+        // uploaded assets + markdown references. See the extension
+        // for the dispatch (image / video / file).
+        AssetPasteExtension.configure({
+          vaultId,
+          getNotePath: () => noteForUploadRef.current,
+          onUploadStart: (info) => {
+            const id = ++uploadIdRef.current;
+            setUploads((prev) => [...prev, { id, info }]);
+          },
+          onUploadComplete: (info) => {
+            setUploads((prev) =>
+              prev.filter((u) => u.info.fileName !== info.fileName),
+            );
+          },
+          onUploadError: (info, error) => {
+            const message =
+              error instanceof Error ? error.message : 'Upload failed.';
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.info.fileName === info.fileName ? { ...u, error: message } : u,
+              ),
+            );
+          },
+        }),
+        // Slash menu (Notion-style insert popup). Triggered by
+        // typing "/" — shows a filterable list of insertable
+        // blocks (headings, lists, code, image, etc.).
+        SlashMenuExtension.configure({
+          context: {
+            vaultId,
+            getNotePath: () => noteForUploadRef.current,
+          },
+        }),
+        MarkdownExtension,
+      ],
+      content: initialNote.body,
+      // When a note is marked locked in its frontmatter, the editor
+      // becomes read-only. The user can still navigate to it, copy
+      // text out, and inspect its properties, but typing has no
+      // effect (TipTap discards keystrokes silently).
+      //
+      // Locked is a hint, not a security boundary — the API still
+      // accepts updates from a locked note. The UI honours the
+      // hint to avoid accidental edits. A future "unlock first"
+      // affordance could be wired into the toolbar.
+      editable: !initialNote.frontmatter.locked,
+      editorProps: {
+        attributes: {
+          class: initialNote.frontmatter.locked
+            ? 'nc-editor nc-editor-locked'
+            : 'nc-editor',
+          spellcheck: 'false',
+        },
+      },
+      onUpdate: ({ editor: ed }) => {
+        const md = ed.storage.markdown.getMarkdown() as string;
+        if (md !== lastSavedMarkdownRef.current) {
+          setSaveState({ kind: 'dirty' });
+          scheduleSave();
+        } else {
+          setSaveState({ kind: 'saved' });
+          if (debounceTimerRef.current !== null) {
+            clearTimeout(debounceTimerRef.current);
+            debounceTimerRef.current = null;
+          }
+        }
+      },
+    },
+    [initialNote.path],
+  );
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+
+  useEffect(() => {
+    lastSavedMarkdownRef.current = initialNote.body;
+    etagRef.current = initialNote.etag;
+    pendingMarkdownRef.current = null;
+    setSaveState({ kind: 'idle' });
+  }, [initialNote.path, initialNote.body, initialNote.etag]);
+
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (saveState.kind === 'dirty' || saveState.kind === 'saving') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [saveState.kind]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  /**
+   * Rewrite the `src` of <img>, <video>, and <source> elements so a
+   * relative markdown path resolves to the authenticated asset
+   * endpoint.
+   *
+   * The naive approach (listen on editor.on('update')) misses two
+   * cases that bit us in step 8a:
+   *
+   *   1. Initial render: the effect runs after React commits, but
+   *      the editor.view.dom may not contain images yet (TipTap
+   *      finishes rendering shortly after).
+   *   2. Programmatic setImage: TipTap fires `update` AFTER the DOM
+   *      is patched — but in some browser configurations the order
+   *      is racy, and our rewriter runs on stale DOM.
+   *
+   * MutationObserver fixes both: it sees ANY DOM change inside the
+   * editor and re-runs the rewrite. Cheap because it's idempotent
+   * (we skip elements whose src has already been resolved).
+   *
+   * Also: prevent images from being selected as ProseMirror node-
+   * selections by intercepting mousedown. A NodeSelection on a
+   * block image makes any subsequent keystroke replace the image
+   * (which is why the image was disappearing when clicked). The
+   * editor stays interactive — you can still place a cursor before
+   * or after the image to type.
+   */
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom as HTMLElement;
+
+    const idx = initialNote.path.lastIndexOf('/');
+    const noteParent = idx === -1 ? '' : initialNote.path.slice(0, idx);
+
+    function isAlreadyResolved(src: string): boolean {
+      return (
+        src.startsWith('http://') ||
+        src.startsWith('https://') ||
+        src.startsWith('/api/') ||
+        src.startsWith('data:') ||
+        src.startsWith('blob:')
+      );
+    }
+
+    function rewrite() {
+      const candidates = dom.querySelectorAll('img, video, source');
+      candidates.forEach((el) => {
+        const src = el.getAttribute('src');
+        if (!src || isAlreadyResolved(src)) return;
+        const cleaned = src.replace(/^\.\//, '');
+
+        // URL-decode each segment of the relative path. The server
+        // emits markdown paths with %20 etc. for safety in the
+        // markdown source; the actual filenames on disk and in the
+        // canonical path stored server-side use literal spaces. So
+        // before we hand off to assetsApi.serveUrl (which does its
+        // own encodeURIComponent), we need to decode first to
+        // avoid double-encoding.
+        const decodedRelative = cleaned
+          .split('/')
+          .map((segment) => {
+            try {
+              return decodeURIComponent(segment);
+            } catch {
+              // Malformed escape — leave as-is rather than crash.
+              return segment;
+            }
+          })
+          .join('/');
+
+        const canonical = noteParent
+          ? `${noteParent}/${decodedRelative}`
+          : decodedRelative;
+        const absoluteUrl = assetsApi.serveUrl(vaultId, canonical);
+        el.setAttribute('src', absoluteUrl);
+      });
+    }
+
+    rewrite();
+
+    // The ImageNodeView's NodeViewWrapper handles its own click
+    // semantics — selection, controls, etc. — so we no longer need
+    // a global mousedown defang on the editor DOM. Earlier versions
+    // of this file caught img mousedowns to prevent ProseMirror from
+    // creating a NodeSelection (which made images vanish on the
+    // next keystroke); the node view sidesteps that entirely by
+    // rendering its own React surface that intercepts clicks
+    // before they reach PM.
+
+    const observer = new MutationObserver(() => {
+      rewrite();
+    });
+    observer.observe(dom, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['src'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [editor, initialNote.path, vaultId]);
+
+  /**
+   * Per-note appearance: font / font-size / width.
+   *
+   * Values come from frontmatter at mount, then update live when the
+   * user changes them in the properties panel. The panel saves via
+   * the API and dispatches a window event ('nc:note-appearance-changed')
+   * so we don't need to remount the editor or re-fetch the whole
+   * note here.
+   *
+   * The values are applied as inline CSS on the editor's root DOM
+   * element (the .nc-editor div). Inline style beats the stylesheet
+   * default, so unset fields fall back to whatever the CSS picks.
+   */
+  const [appearance, setAppearance] = useState<{
+    font: string | null;
+    fontSize: number | null;
+    width: number | null;
+  }>(() => ({
+    font: initialNote.frontmatter.font,
+    fontSize: initialNote.frontmatter.fontSize,
+    width: initialNote.frontmatter.width,
+  }));
+
+  // Reset on note swap. Without this, opening a different note
+  // would briefly show the previous note's font until the new
+  // initialNote.frontmatter trickled in.
+  useEffect(() => {
+    setAppearance({
+      font: initialNote.frontmatter.font,
+      fontSize: initialNote.frontmatter.fontSize,
+      width: initialNote.frontmatter.width,
+    });
+  }, [
+    initialNote.path,
+    initialNote.frontmatter.font,
+    initialNote.frontmatter.fontSize,
+    initialNote.frontmatter.width,
+  ]);
+
+  // Listen for live updates from the properties panel.
+  useEffect(() => {
+    function onChange(e: Event) {
+      const ce = e as CustomEvent<{
+        path: string;
+        field: 'font' | 'fontSize' | 'width';
+        value: string | number;
+      }>;
+      // Ignore events for other notes — multi-tab safety, also lets
+      // future per-note panels not stomp on each other.
+      if (!ce.detail || ce.detail.path !== initialNote.path) return;
+
+      setAppearance((prev) => {
+        if (ce.detail.field === 'font') {
+          const v = ce.detail.value as string;
+          return { ...prev, font: v === '' ? null : v };
+        }
+        if (ce.detail.field === 'fontSize') {
+          const v = ce.detail.value as number;
+          return { ...prev, fontSize: v <= 0 ? null : v };
+        }
+        // width
+        const v = ce.detail.value as number;
+        return { ...prev, width: v <= 0 ? null : v };
+      });
+    }
+    window.addEventListener('nc:note-appearance-changed', onChange);
+    return () => {
+      window.removeEventListener('nc:note-appearance-changed', onChange);
+    };
+  }, [initialNote.path]);
+
+  // Apply the current appearance to the editor's root DOM element.
+  // Setting style props on .nc-editor cascades into paragraphs and
+  // headings: font-family inherits, font-size inherits (headings use
+  // em which scales relative), width sets the page itself.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom as HTMLElement;
+    // Empty string clears the inline value, falling back to CSS.
+    dom.style.fontFamily = appearance.font ?? '';
+    dom.style.fontSize = appearance.fontSize ? `${appearance.fontSize}px` : '';
+    dom.style.width = appearance.width ? `${appearance.width}px` : '';
+  }, [editor, appearance.font, appearance.fontSize, appearance.width]);
+
+  return (
+    <div className="nc-editor-shell">
+      {/*
+        Page area: holds the white "page" centered. The page itself
+        (.nc-editor) is fixed at 700px wide. Background here is the
+        normal app surface — the gradient lives outside the app
+        frame, on the body, not inside the editor.
+
+        The previous in-editor toolbar (save status + upload pills)
+        is gone. The host page renders both next to the breadcrumb
+        instead — see EditorPage.tsx.
+      */}
+      <div className="nc-editor-page-area">
+        {/*
+          Locked-mode link click handler.
+
+          TipTap's Link extension is configured with openOnClick:false
+          so that clicks in EDIT mode don't navigate away when the
+          user is just trying to position their cursor inside a link
+          to edit its text. That's the right call for editing.
+
+          But for locked notes — read-only mode — a click on a link
+          should open the URL like any normal `<a>`. The link's
+          `target="_blank"` is already set via Link's HTMLAttributes
+          (so middle-click and Ctrl-click work), but plain clicks are
+          still blocked by TipTap's internal preventDefault. We
+          override that here, but ONLY when the editor is locked.
+
+          We listen on the page-area wrapper (above EditorContent)
+          and scope the match to anchors INSIDE .ProseMirror so the
+          floating toolbars below (BubbleMenu, TableToolbar) are
+          unaffected. The handler runs in the React onClick phase,
+          which fires AFTER ProseMirror's mousedown/click handlers
+          but is still in time to call window.open ourselves.
+
+          Per the user's request, locked-mode link clicks always
+          open in a new tab regardless of modifier keys. The
+          inline comment on the click handler explains why we
+          can't usefully delegate to the browser's native
+          ctrl/middle-click behaviour here — TipTap has already
+          preventDefault'd by the time we run.
+        */}
+        <div
+          onClick={(e) => {
+            // Only intercept in locked mode. In edit mode, do
+            // nothing — TipTap's openOnClick:false stays in charge.
+            // editor.isEditable is true when the note is being
+            // edited; false when locked. The null guard lets the
+            // first render before the editor is ready short-circuit
+            // safely.
+            if (!editor) return;
+            if (editor.isEditable) return;
+
+            const target = e.target as HTMLElement | null;
+            const anchor = target?.closest('.ProseMirror a') as HTMLAnchorElement | null;
+            if (!anchor) return;
+            const href = anchor.getAttribute('href');
+            if (!href) return;
+
+            // Only handle plain left-click. Middle-click triggers
+            // a different event (`auxclick`, button === 1) which
+            // we don't get here. Right-click opens the context menu
+            // and we don't want to fight that.
+            if (e.button !== 0) return;
+
+            // We always open in a new tab in locked mode — that's
+            // the user's intent for read-only notes. Modifier keys
+            // would normally let the browser pick the destination,
+            // but TipTap's prosemirror-view click handler has
+            // already preventDefault'd the navigation by the time
+            // we run, so the modifiers wouldn't take effect anyway.
+            // window.open with noopener gives us the new tab
+            // unconditionally and matches the user's request:
+            // "always open in a new tab".
+            e.preventDefault();
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }}
+        >
+          <EditorContent editor={editor} />
+        </div>
+        {/*
+          Floating toolbar that appears above the active table when
+          the cursor is inside a cell. Hidden otherwise. Self-manages
+          its position via the editor's selection events.
+        */}
+        <TableToolbar editor={editor} />
+        {/*
+          Selection-driven formatting toolbar (bold / italic / inline
+          code / link). Appears whenever the user has selected at
+          least 2 characters outside a code block; hidden otherwise.
+          Independent of TableToolbar — both can be visible at once
+          when text is selected inside a table cell.
+        */}
+        <BubbleMenu editor={editor} />
+      </div>
+    </div>
+  );
+}

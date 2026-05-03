@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>NoteControl.Tray</RootNamespace>
+    <AssemblyName>NoteControl.Tray</AssemblyName>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      Step 38: ApplicationIcon stamps the icon onto the .exe itself,
+      so Windows Explorer shows it in file lists, on the taskbar
+      when the app is focused, and in Alt+Tab. This is independent
+      of the tray icon below — they happen to share the same .ico
+      file but use different mechanisms (PE resource vs WPF
+      pack URI).
+    -->
+    <ApplicationIcon>Resources\tray.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <!--
+    Release-only publish settings.
+
+    Why scoped to Release: leaving these in the unconditional
+    PropertyGroup would make every Debug build (i.e. every F5
+    in Visual Studio) self-contained, which:
+      - shifts the bin output to bin\Debug\net8.0-windows\win-x64\
+        (annoying for anything hard-coding paths)
+      - bloats the bin folder with the entire .NET runtime
+      - slows down incremental builds noticeably
+    Constraining to Release means dev builds stay framework
+    dependent and quick; only `dotnet publish -c Release` (which
+    is what publish.ps1 does) gets the self-contained treatment.
+
+    Why these properties at all: with WPF (UseWPF=true) on .NET 8
+    SDK 9.x, passing -self-contained true / -runtime win-x64 on
+    the command line was being silently overridden, producing
+    publish output that included WPF platform DLLs but NOT the
+    .NET runtime core (System.Private.CoreLib.dll, coreclr.dll,
+    hostpolicy.dll). The resulting tray.exe crashes at startup
+    with HRESULT 0x80070002 "Failed to create CoreCLR." Declaring
+    these in the .csproj is the authoritative way; the SDK
+    trusts project file values over command-line flags when they
+    conflict.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NoteControl.Shared\NoteControl.Shared.csproj" />
+  </ItemGroup>
+
+  <!--
+    Step 38: tray icon as a WPF Resource so it's addressable via
+    pack://application:,,,/Resources/tray.ico from runtime code.
+    A <Resource> entry compiles the file into the assembly itself
+    (no separate file shipped alongside the .exe). The same .ico
+    is referenced by ApplicationIcon above, so the file is needed
+    on disk at build time but not at runtime.
+  -->
+  <ItemGroup>
+    <Resource Include="Resources\tray.ico" />
+  </ItemGroup>
+
+</Project>

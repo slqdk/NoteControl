@@ -1,0 +1,115 @@
+<Window x:Class="NoteControl.Tray.Admin.Windows.BackupsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NoteControl — Backups"
+        Width="820" Height="560"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock DockPanel.Dock="Left"
+                       FontSize="16" FontWeight="SemiBold"
+                       Text="Backups"
+                       VerticalAlignment="Center"/>
+            <Button DockPanel.Dock="Right"
+                    Content="Reload"
+                    Width="80" Height="26"
+                    Click="ReloadButton_Click"/>
+        </DockPanel>
+
+        <!-- Status panel -->
+        <Border Grid.Row="1" Padding="12" Background="#F5F5F5"
+                BorderBrush="#DDD" BorderThickness="1" CornerRadius="3"
+                Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="160"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Target path:" FontWeight="SemiBold"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" x:Name="TargetPathText" TextWrapping="Wrap"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Last run:" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" x:Name="LastRunText" Margin="0,4,0,0"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Backups on disk:" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" x:Name="CountText" Margin="0,4,0,0"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Total size:" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" x:Name="TotalSizeText" Margin="0,4,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- Run / open buttons -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button x:Name="RunNowButton" Content="▶ Run backup now"
+                    Width="160" Height="28"
+                    Click="RunNowButton_Click"/>
+            <Button x:Name="OpenFolderButton" Content="📁 Open backup folder"
+                    Width="180" Height="28" Margin="8,0,0,0"
+                    Click="OpenFolderButton_Click"/>
+            <TextBlock x:Name="RunStatusText" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#555"/>
+        </StackPanel>
+
+        <!-- Backup list -->
+        <DataGrid Grid.Row="3"
+                  x:Name="BackupGrid"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="True"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal"
+                  SelectionMode="Single">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Created" Binding="{Binding CreatedAtDisplay}" Width="180"/>
+                <DataGridTextColumn Header="Id" Binding="{Binding Id}" Width="200"/>
+                <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="100"/>
+                <DataGridTextColumn Header="Vaults" Binding="{Binding VaultsDisplay}" Width="*"/>
+                <DataGridTemplateColumn Header="Actions" Width="220">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Restore vault…"
+                                        Width="100" Height="22"
+                                        Click="RestoreButton_Click"
+                                        Tag="{Binding}"/>
+                                <Button Content="Delete"
+                                        Width="70" Height="22" Margin="6,0,0,0"
+                                        Click="DeleteButton_Click"
+                                        Tag="{Binding}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Footer -->
+        <DockPanel Grid.Row="4" Margin="0,8,0,0">
+            <TextBlock DockPanel.Dock="Left"
+                       Foreground="#666" VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       Text="Restore moves the current vault aside as {vault}.pre-restore-{timestamp} before copying the backup over it."/>
+            <Button DockPanel.Dock="Right"
+                    Content="Close" Width="80" Height="28"
+                    IsCancel="True"
+                    Click="CloseButton_Click"/>
+        </DockPanel>
+    </Grid>
+</Window>

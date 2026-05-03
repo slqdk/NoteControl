@@ -1,0 +1,3028 @@
+/*
+ * NoteControl — app styles.
+ *
+ * Functional, desktop-first. Light/dark via prefers-color-scheme.
+ *
+ * Step 7a additions: 3-column shell (tree | main | properties), context
+ * menu, properties panel, two tree variants (compact/comfortable), and
+ * the rail toggle/variant picker in the top bar.
+ */
+
+:root {
+  --nc-fg: #0f172a;
+  --nc-fg-muted: #64748b;
+  --nc-bg: #ffffff;
+  --nc-bg-elev: #f8fafc;
+  --nc-bg-elev-2: #f1f5f9;     /* slightly stronger elevation for selected rows */
+  --nc-border: #e2e8f0;
+  --nc-border-strong: #cbd5e1;
+  --nc-accent: #2563eb;
+  --nc-accent-bg-soft: rgba(37, 99, 235, 0.10);
+  --nc-accent-fg: #ffffff;
+  --nc-error-fg: #b91c1c;
+  --nc-error-bg: #fef2f2;
+  --nc-radius: 6px;
+  --nc-radius-sm: 4px;
+  --nc-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --nc-shadow-popover: 0 4px 12px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.08);
+  --nc-topbar-h: 44px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --nc-fg: #e2e8f0;
+    --nc-fg-muted: #94a3b8;
+    --nc-bg: #0f172a;
+    --nc-bg-elev: #1e293b;
+    --nc-bg-elev-2: #273449;
+    --nc-border: #334155;
+    --nc-border-strong: #475569;
+    --nc-accent: #3b82f6;
+    --nc-accent-bg-soft: rgba(59, 130, 246, 0.18);
+    --nc-accent-fg: #ffffff;
+    --nc-error-fg: #fca5a5;
+    --nc-error-bg: #450a0a;
+    --nc-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --nc-shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.4);
+  }
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* The body shows the chosen gradient as a backdrop. The centered
+     app frame (.nc-app-frame) sits on top, painted with the normal
+     --nc-bg, so the gradient is visible only in the left/right
+     gutters when the viewport is wider than --nc-app-width. The
+     CSS variables are written by the appearance settings module;
+     fallbacks here mirror the 'slate' preset so the first paint
+     before the JS effect runs doesn't flash. */
+  background: var(
+    --nc-page-bg-light,
+    linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%)
+  );
+  color: var(--nc-fg);
+  min-height: 100%;
+}
+@media (prefers-color-scheme: dark) {
+  body {
+    background: var(
+      --nc-page-bg-dark,
+      linear-gradient(180deg, #1e293b 0%, #0f172a 100%)
+    );
+  }
+}
+
+/* The centered app frame. Caps width to the user's chosen
+   --nc-app-width (1000–2400 px, default 1600). Inside the frame
+   the app paints its own --nc-bg surface so layout and colours
+   stay exactly as before; outside, the body's gradient shows.
+   100vh + flex column so the inner shell can use its existing
+   `height: calc(100vh - topbar-h)` rule unchanged. */
+.nc-app-frame {
+  max-width: var(--nc-app-width, 1600px);
+  margin: 0 auto;
+  min-height: 100vh;
+  background: var(--nc-bg);
+  /* Subtle shadow + side borders so the frame reads as a distinct
+     "card" against the gradient gutters. On viewports narrower
+     than the frame width the shadow simply isn't visible (the
+     frame fills the screen). */
+  box-shadow: 0 0 0 1px var(--nc-border), 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+/* While dragging a rail handle, kill text selection & change cursor. */
+body.nc-dragging {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.nc-dragging * {
+  cursor: col-resize !important;
+}
+
+/* ---------- Top bar ------------------------------------------------ */
+
+.nc-topbar {
+  display: grid;
+  grid-template-columns: 1fr minmax(280px, 480px) 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg-elev);
+  height: var(--nc-topbar-h);
+  box-sizing: border-box;
+}
+
+.nc-topbar-left { display: flex; align-items: center; gap: 8px; }
+.nc-topbar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.nc-brand { font-weight: 600; color: var(--nc-fg); text-decoration: none; }
+.nc-vault-name { color: var(--nc-fg); text-decoration: none; }
+.nc-topbar-sep { color: var(--nc-fg-muted); }
+.nc-username { color: var(--nc-fg-muted); font-size: 13px; }
+
+/* ---------- Toggle buttons + variant picker ----------------------- */
+
+.nc-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nc-toggle {
+  font: inherit;
+  font-size: 14px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nc-fg-muted);
+}
+.nc-toggle:hover { background: var(--nc-bg-elev-2); }
+.nc-toggle-on {
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-fg);
+}
+
+.nc-variant-picker { position: relative; }
+.nc-variant-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+  min-width: 220px;
+  padding: 4px;
+  z-index: 200;
+}
+.nc-variant-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--nc-fg-muted);
+  padding: 6px 10px 4px;
+}
+.nc-variant-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-variant-option:hover { background: var(--nc-bg-elev-2); }
+.nc-variant-option-active { background: var(--nc-accent-bg-soft); font-weight: 500; }
+
+/* ---------- 3-column shell ---------------------------------------- */
+
+.nc-shell {
+  display: flex;
+  height: calc(100vh - var(--nc-topbar-h));
+  overflow: hidden;
+}
+
+.nc-shell-main {
+  flex: 1 1 auto;
+  min-width: 0;            /* prevent overflowing children from breaking flex */
+  overflow-y: auto;
+  background: var(--nc-bg);
+}
+
+/* ---------- Resizable rails --------------------------------------- */
+
+.nc-rail {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border-color: var(--nc-border);
+}
+.nc-rail-left { border-right: 1px solid var(--nc-border); }
+.nc-rail-right { border-left: 1px solid var(--nc-border); }
+
+.nc-rail-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nc-rail-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--nc-fg-muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--nc-border);
+  flex: 0 0 auto;
+}
+
+.nc-rail-header-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 6px;
+}
+
+.nc-rail-header-button {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nc-rail-header-button:hover {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+}
+
+/* Container for multiple action buttons in the rail header. */
+.nc-rail-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Inline rename row — same styling as the new-folder row. */
+.nc-tree-renaming {
+  cursor: default;
+  background: var(--nc-accent-bg-soft);
+}
+
+/* Inline new-folder input row in the tree. */
+.nc-tree-newfolder {
+  cursor: default;
+  background: var(--nc-accent-bg-soft);
+}
+.nc-tree-newfolder-input {
+  flex: 1 1 auto;
+  font: inherit;
+  font-size: inherit;
+  padding: 1px 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-accent);
+  border-radius: 2px;
+  color: var(--nc-fg);
+  outline: none;
+  min-width: 0;
+}
+.nc-tree-newfolder-error {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--nc-error-fg);
+  cursor: help;
+}
+
+.nc-rail-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.nc-rail-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 10;
+}
+.nc-rail-handle:hover {
+  background: var(--nc-accent);
+  opacity: 0.4;
+}
+.nc-rail-handle-right { right: -2px; }
+.nc-rail-handle-left { left: -2px; }
+
+/* ---------- Tree base --------------------------------------------- */
+
+.nc-tree { padding: 4px 0; }
+
+.nc-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  /* Step 36: default cursor on tree rows. Old style had
+     `cursor: pointer` everywhere, which made every row look
+     draggable / link-y — confusing because most clicks just select
+     or expand. Pointer is now reserved for the chevron
+     specifically. The drag-mode override
+     (.nc-tree-row-drag-enabled) paints `grab` on top when a row is
+     armed for moving via the Properties panel's Move button. */
+  cursor: default;
+  user-select: none;
+  color: var(--nc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nc-tree-row:hover { background: var(--nc-bg-elev-2); }
+.nc-tree-row-selected,
+.nc-tree-row-selected:hover {
+  background: var(--nc-accent-bg-soft);
+}
+
+/* Step 39: pinned Startpage row at the very top of the tree.
+   Visually distinguished from normal folder rows by:
+     - a soft separator below it (margin + border) so the eye reads
+       it as a "header pin" rather than just another row in the list
+     - cursor: pointer to signal it navigates (folders use cursor:
+       default per Ship 36's row-cursor change; Startpage actually
+       takes you somewhere new so the hand cursor is appropriate)
+     - slightly heavier font weight (500) so it reads as a primary
+       nav item, like a sidebar header would
+   The selected-state highlight reuses .nc-tree-row-selected so the
+   colour matches what the rest of the tree uses; we don't need a
+   bespoke selected style. */
+.nc-tree-row-startpage {
+  cursor: pointer;
+  font-weight: 500;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--nc-border);
+}
+
+.nc-tree-chevron {
+  flex: 0 0 auto;
+  /* Step 36: visual chevron is still small (font-size 9px) but the
+     click target is bigger so users can hit it without precision
+     aiming. Padding adds invisible hit area; negative margin keeps
+     the row layout unchanged so existing alignment/indent doesn't
+     shift. */
+  width: 12px;
+  padding: 4px 6px;
+  margin: -4px -2px;
+  text-align: center;
+  font-size: 9px;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+/* Empty (leaf) rows still render the chevron cell so the icon and
+   label line up with siblings, but the cell is invisible AND not
+   interactive. visibility:hidden was the old approach;
+   pointer-events:none in addition keeps the now-larger hit area
+   from eating clicks on the row body around it. */
+.nc-tree-chevron-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.nc-tree-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+}
+
+.nc-tree-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nc-tree-empty-row,
+.nc-tree-loading-row,
+.nc-tree-error {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  padding: 2px 8px;
+  font-style: italic;
+}
+.nc-tree-error { color: var(--nc-error-fg); font-style: normal; }
+
+/* ---------- Tree variant: compact (Win7-ish) ---------------------- */
+
+.nc-tree-compact .nc-tree-row {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  border-radius: 0;          /* sharp edges, no soft hover pill */
+}
+.nc-tree-compact .nc-tree-icon { font-size: 13px; }
+.nc-tree-compact .nc-tree-chevron { font-size: 8px; }
+
+/* Dotted indent guides — Win7-ish. We can't easily draw real guides
+   per indent level without measuring; instead, give the tree a faint
+   left-edge guide and the rows a subtle inner ruler effect.
+
+   This does NOT scale with depth, but visually clusters items at
+   nested depths the way Win7 Explorer felt. Good enough. */
+.nc-tree-compact {
+  background-image: linear-gradient(
+    to right,
+    transparent 14px,
+    rgba(100, 116, 139, 0.18) 14px,
+    rgba(100, 116, 139, 0.18) 15px,
+    transparent 15px
+  );
+  background-repeat: repeat-y;
+  background-size: 100% 100%;
+}
+
+/* ---------- Tree variant: comfortable (Win11-ish) ----------------- */
+
+.nc-tree-comfortable .nc-tree-row {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  margin: 1px 4px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.nc-tree-comfortable .nc-tree-row:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-tree-comfortable .nc-tree-row-selected,
+.nc-tree-comfortable .nc-tree-row-selected:hover {
+  background: var(--nc-accent-bg-soft);
+}
+.nc-tree-comfortable .nc-tree-icon { font-size: 16px; }
+.nc-tree-comfortable .nc-tree-chevron { font-size: 11px; }
+
+/* ---------- Context menu ------------------------------------------ */
+
+.nc-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+}
+
+.nc-context-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+  text-align: left;
+  gap: 16px;
+}
+.nc-context-item:hover:not(:disabled) { background: var(--nc-accent-bg-soft); }
+.nc-context-item:disabled {
+  color: var(--nc-fg-muted);
+  cursor: not-allowed;
+}
+
+.nc-context-label { flex: 1 1 auto; }
+.nc-context-accel {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-context-divider {
+  height: 1px;
+  background: var(--nc-border);
+  margin: 4px 6px;
+}
+
+/* ---------- Properties panel -------------------------------------- */
+
+.nc-props {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.nc-props-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--nc-border);
+  flex: 0 0 auto;
+}
+.nc-props-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--nc-fg-muted);
+}
+.nc-props-close {
+  font: inherit;
+  font-size: 16px;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  border-radius: var(--nc-radius-sm);
+  padding: 0;
+  line-height: 1;
+}
+.nc-props-close:hover {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+}
+
+.nc-props-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* Variant tweaks for properties — compact uses smaller text & tighter rows. */
+.nc-props-compact .nc-props-grid { font-size: 12px; row-gap: 6px; }
+.nc-props-comfortable .nc-props-grid { font-size: 13px; row-gap: 10px; }
+
+.nc-props-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  column-gap: 12px;
+  row-gap: 8px;
+  margin: 0;
+}
+.nc-props-grid dt {
+  color: var(--nc-fg-muted);
+  font-weight: 500;
+}
+.nc-props-grid dd {
+  margin: 0;
+  word-break: break-word;
+}
+.nc-props-mono {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.nc-props-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.nc-tag-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 11px;
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+  border-radius: 999px;
+  color: var(--nc-fg);
+}
+
+/* ----- Editable properties widgets (step 7b-2) ---------------------- */
+
+/* Wraps any editable field + its save-status badge so they sit on
+   one row and the badge can flow next to the input. */
+.nc-prop-editable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nc-prop-input {
+  font: inherit;
+  font-size: inherit;
+  padding: 3px 6px;
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.nc-prop-input:focus {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.nc-prop-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.nc-prop-checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Standalone checkbox for fields that don't need a "Yes/No" label
+   next to them — the surrounding row's <dt> already labels it. */
+.nc-prop-checkbox-only {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Editable tag area — chips wrap and the input follows them inline. */
+.nc-prop-tags {
+  align-items: flex-start;
+}
+.nc-tag-chips-editable {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  align-items: center;
+  padding: 3px 4px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  background: var(--nc-bg);
+  min-height: 26px;
+  box-sizing: border-box;
+}
+.nc-tag-chips-editable:focus-within {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.nc-tag-chip-removable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+}
+.nc-tag-chip-remove {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+.nc-tag-chip-remove:hover {
+  background: var(--nc-border-strong);
+  color: var(--nc-fg);
+}
+.nc-tag-chip-remove:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.nc-tag-input {
+  font: inherit;
+  font-size: inherit;
+  padding: 1px 2px;
+  background: transparent;
+  color: var(--nc-fg);
+  border: none;
+  outline: none;
+  flex: 1 1 60px;
+  min-width: 60px;
+}
+
+/* Save-status badge that sits next to a field. */
+.nc-field-status {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.nc-field-status-saving { color: var(--nc-fg-muted); font-style: italic; }
+.nc-field-status-saved {
+  color: var(--nc-accent);
+  transition: opacity 0.4s ease;
+}
+.nc-field-status-error {
+  color: var(--nc-error-fg);
+  cursor: help;
+}
+
+.nc-fg-muted { color: var(--nc-fg-muted); }
+
+/* ---------- Pages (mostly unchanged from step 6) ------------------ */
+
+.nc-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 24px 80px;
+}
+/*
+  Step 45: removed `max-width: 760px` from .nc-page-editor.
+  That cap silently prevented the per-note Width setting (in
+  Properties → Width, persisted as `width:` in the note's
+  frontmatter) from doing anything beyond ~760px. The cap was
+  on the OUTER wrapper, while the per-note width is applied as
+  inline style on the INNER .nc-editor element — so the inner
+  could grow wider than the wrapper but never become visible.
+
+  With the cap removed, .nc-page-editor now lets its child grow
+  up to whatever the surrounding shell allows (constrained by
+  the app frame width minus the two rails). The default 700px
+  centred white card is unchanged for notes without a configured
+  Width. Setting Width=1000 actually produces a 1000px-wide page
+  now, as long as the rails leave room — hide ℹ️ and 📁 to free
+  up more space if needed.
+*/
+
+.nc-page-title { font-size: 22px; font-weight: 600; margin: 0 0 20px; }
+
+.nc-section { margin: 24px 0; }
+.nc-section-heading {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--nc-fg-muted);
+  margin: 0 0 8px;
+}
+
+.nc-empty { color: var(--nc-fg-muted); font-style: italic; }
+
+.nc-list { list-style: none; margin: 0; padding: 0; }
+.nc-list li + li { border-top: 1px solid var(--nc-border); }
+
+.nc-vault-link, .nc-note-link, .nc-folder-link {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 4px;
+  color: var(--nc-fg);
+  text-decoration: none;
+}
+.nc-vault-link:hover, .nc-note-link:hover, .nc-folder-link:hover {
+  background: var(--nc-bg-elev);
+}
+.nc-vault-link-name, .nc-note-name { flex: 1; font-weight: 500; }
+.nc-vault-link-path, .nc-note-path-hint { color: var(--nc-fg-muted); font-size: 13px; }
+.nc-vault-link-role { font-size: 12px; color: var(--nc-fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.nc-note-time { color: var(--nc-fg-muted); font-size: 12px; white-space: nowrap; }
+
+.nc-breadcrumb {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--nc-fg-muted);
+  margin-bottom: 16px;
+}
+.nc-breadcrumb a { color: var(--nc-fg-muted); text-decoration: none; }
+.nc-breadcrumb a:hover { color: var(--nc-fg); }
+
+/* Forms / buttons */
+.nc-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.nc-field-label { font-size: 13px; font-weight: 500; }
+.nc-field input, .nc-new-note input {
+  font: inherit; padding: 8px 10px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  background: var(--nc-bg); color: var(--nc-fg);
+}
+.nc-field input:focus, .nc-new-note input:focus, .nc-search-input:focus {
+  outline: 2px solid var(--nc-accent); outline-offset: 1px;
+}
+.nc-button-primary {
+  font: inherit; padding: 8px 14px;
+  border: 1px solid var(--nc-accent); background: var(--nc-accent);
+  color: var(--nc-accent-fg); border-radius: var(--nc-radius); cursor: pointer;
+}
+.nc-button-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.nc-button-link {
+  font: inherit; background: none; border: none;
+  color: var(--nc-accent); cursor: pointer; padding: 0;
+}
+.nc-form-error, .nc-inline-error {
+  color: var(--nc-error-fg); background: var(--nc-error-bg);
+  padding: 8px 12px; border-radius: var(--nc-radius);
+  margin: 8px 0; font-size: 13px;
+}
+.nc-inline-error { display: inline-block; margin-left: 8px; }
+
+.nc-new-note { display: flex; gap: 8px; margin: 12px 0 24px; align-items: center; }
+.nc-new-note input { flex: 1; }
+
+/* ---------- Login -------------------------------------------------- */
+
+.nc-login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.nc-login-card {
+  width: 100%; max-width: 360px; padding: 28px;
+  background: var(--nc-bg-elev); border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius); box-shadow: var(--nc-shadow);
+}
+.nc-login-title { margin: 0; font-size: 22px; font-weight: 600; }
+.nc-login-subtitle { margin: 4px 0 18px; color: var(--nc-fg-muted); font-size: 14px; }
+
+/* ---------- Search ------------------------------------------------- */
+
+.nc-search { position: relative; width: 100%; }
+.nc-search-input {
+  width: 100%; padding: 6px 10px; font: inherit;
+  border: 1px solid var(--nc-border); border-radius: var(--nc-radius);
+  background: var(--nc-bg); color: var(--nc-fg); box-sizing: border-box;
+}
+
+.nc-search-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px;
+  background: var(--nc-bg); border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius); box-shadow: var(--nc-shadow);
+  max-height: 360px; overflow-y: auto; z-index: 50;
+}
+.nc-search-result {
+  display: block; padding: 8px 12px;
+  border-bottom: 1px solid var(--nc-border);
+  color: var(--nc-fg); text-decoration: none;
+}
+.nc-search-result:last-child { border-bottom: none; }
+.nc-search-result:hover { background: var(--nc-bg-elev); }
+.nc-search-result-title { font-weight: 500; margin-bottom: 2px; }
+.nc-search-result-snippet { font-size: 13px; color: var(--nc-fg-muted); }
+.nc-search-result-snippet strong {
+  color: var(--nc-fg);
+  background: rgba(37, 99, 235, 0.18);
+  padding: 0 2px; border-radius: 2px;
+}
+.nc-search-result-path { font-size: 11px; color: var(--nc-fg-muted); margin-top: 4px; }
+.nc-search-empty, .nc-search-error { padding: 12px; color: var(--nc-fg-muted); font-size: 13px; }
+.nc-search-error { color: var(--nc-error-fg); }
+
+/* ---------- Editor ------------------------------------------------- */
+
+/* Editor shell: outer container that holds the toolbar at the top
+   and the page-area below. The shell itself is a grey backdrop —
+   the page (white) floats inside it. This mirrors how Word and
+   similar document editors present a "paper" surface against a
+   slightly darker app background.
+
+   No min-height: the card hugs whatever the page-area below it
+   wants. Short notes → small card. Long notes → tall card. The
+   user sees an even gap around the page on all four sides. */
+.nc-editor-shell {
+  background: var(--nc-bg-elev);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--nc-radius);
+  border: 1px solid var(--nc-border);
+}
+.nc-editor-toolbar {
+  border-bottom: 1px solid var(--nc-border);
+  padding: 4px 8px;
+  background: var(--nc-bg-elev);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* In-progress upload pills shown next to the save status. Each
+   pill represents one paste/drop in flight. */
+.nc-editor-uploads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.nc-editor-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-fg);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nc-editor-upload-error {
+  background: var(--nc-error-bg);
+  color: var(--nc-error-fg);
+}
+
+/* Pasted assets rendered inside the editor. */
+
+/* Node-view wrapper around each image. Block-level so the image
+   sits on its own line; relative-positioned to anchor handles
+   and the floating toolbar. */
+.nc-img-wrap {
+  position: relative;
+  display: block;
+  margin: 0.6em 0;
+  max-width: 100%;
+  /* Inline-block-ish layout so the wrapper hugs the image's actual
+     width (not the full editor column). Without this, resize
+     handles would float far to the right of small images. */
+  width: fit-content;
+}
+
+.nc-img-wrap img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--nc-radius);
+  /* Subtle hover outline so the wrapper bounds are discoverable
+     but not visually loud. */
+  transition: outline-color 0.15s ease, box-shadow 0.15s ease;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+
+.nc-img-wrap:hover img {
+  outline-color: var(--nc-border-strong);
+}
+
+/* Active (clicked) state: light tint of the accent rather than a
+   thick saturated outline. The user knows it's selected without
+   the wrapper engulfing the image. */
+.nc-img-wrap[data-active="true"] img {
+  outline-color: var(--nc-accent);
+  box-shadow: 0 0 0 2px var(--nc-accent-bg-soft);
+}
+
+/* Border attribute — distinct from the hover outline. */
+.nc-img-bordered {
+  border: 1px solid var(--nc-border-strong);
+  padding: 4px;
+  background: var(--nc-bg);
+  box-sizing: border-box;
+}
+
+/* Resize handle, bottom-right corner. Visible only when active. */
+.nc-img-resize-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--nc-accent);
+  border: 2px solid var(--nc-bg);
+  border-radius: 50%;
+  cursor: nwse-resize;
+  z-index: 2;
+  /* User-select none so dragging doesn't accidentally select text. */
+  user-select: none;
+}
+.nc-img-resize-br {
+  right: -7px;
+  bottom: -7px;
+}
+
+/* Floating toolbar — anchored to the top-right corner of the image,
+   inset slightly so it doesn't overlap content on the line above
+   the image. (Earlier versions floated the toolbar above the image
+   which collided with whatever line preceded it.) */
+.nc-img-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  z-index: 3;
+  white-space: nowrap;
+}
+
+.nc-img-toolbar-btn {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-img-toolbar-btn:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-img-toolbar-btn-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+}
+.nc-img-toolbar-btn-danger:hover {
+  color: var(--nc-error-fg);
+  background: var(--nc-error-bg);
+}
+
+/* Videos (still using raw HTML, no node view yet). */
+.nc-editor video {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--nc-radius);
+  display: block;
+  margin: 0.6em 0;
+}
+/* The editor's content area — the "page". 700px wide matches
+   Word's "Narrow" margin preset on A4 (210 mm − 2 × 12.7 mm =
+   184.6 mm ≈ 698 px at 96 DPI). Centred horizontally inside its
+   parent (.nc-editor-page-area), with a subtle border + drop
+   shadow to read as a printed page floating on the app background.
+
+   Using an explicit width (not max-width) so the page is always
+   the same shape regardless of the window — what you see is what
+   you'll get when exporting to docx. On screens narrower than
+   ~720px the page might be wider than its container; in that
+   case it overflows horizontally rather than reflowing, which is
+   fine: this app is desktop-first.
+
+   The padding on top of width matches a typical page's text
+   inset — even though the column is "Narrow" margins, we still
+   want some breathing room inside the white page so text doesn't
+   sit on the edge. 28px ≈ 0.75 cm comfort padding. */
+.nc-editor {
+  width: 700px;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 28px 32px;
+  /* Small min-height keeps a clickable target on a brand-new note
+     so the user can click anywhere on the page to focus the editor.
+     Beyond 200px the page hugs its content — there's no forced
+     half-viewport pad of empty space below short notes. */
+  min-height: 200px;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.55;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.04);
+  box-sizing: border-box;
+}
+.nc-editor p { margin: 0 0 0.7em; }
+.nc-editor h1, .nc-editor h2, .nc-editor h3 { margin-top: 1.2em; margin-bottom: 0.4em; font-weight: 600; }
+.nc-editor h1 { font-size: 1.6em; }
+.nc-editor h2 { font-size: 1.3em; }
+.nc-editor h3 { font-size: 1.1em; }
+.nc-editor ul, .nc-editor ol { padding-left: 1.4em; }
+.nc-editor code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.9em; background: var(--nc-bg-elev); padding: 1px 5px; border-radius: 3px;
+}
+.nc-editor pre {
+  background: var(--nc-bg-elev); border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius); padding: 12px; overflow-x: auto;
+}
+.nc-editor pre code { background: none; padding: 0; }
+.nc-editor blockquote {
+  margin: 0.6em 0; padding-left: 12px;
+  border-left: 3px solid var(--nc-border); color: var(--nc-fg-muted);
+}
+.nc-editor a { color: var(--nc-accent); }
+
+.nc-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left; color: var(--nc-fg-muted);
+  pointer-events: none; height: 0;
+}
+
+/* Locked note: visually quiet the editor content area + show a
+   banner so the user knows why typing has no effect. The cursor
+   becomes default (not text), and we tint the page background
+   slightly to communicate "off". TipTap's editable: false already
+   programmatically blocks edits. */
+.nc-editor.nc-editor-locked {
+  background: var(--nc-bg-elev);
+  cursor: default;
+  caret-color: transparent;
+}
+.nc-editor.nc-editor-locked * {
+  cursor: default;
+}
+
+.nc-editor-locked-banner {
+  padding: 8px 14px;
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-fg);
+  border-bottom: 1px solid var(--nc-border);
+  font-size: 13px;
+}
+.nc-editor-locked-banner em {
+  font-style: normal;
+  font-weight: 600;
+}
+
+/* ---------- Narrow viewports ------------------------------------- */
+
+@media (max-width: 780px) {
+  .nc-topbar { grid-template-columns: 1fr auto; }
+  .nc-topbar-center { grid-column: 1 / -1; }
+}
+
+/* ----- Properties panel: action buttons (step 8a-fix8) ------------- */
+
+/* Container for action buttons sitting at the bottom of the props
+   body. Adds visual separation from the read-only fields above. */
+.nc-props-actions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--nc-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Generic button used in the props panel (and reusable elsewhere). */
+.nc-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.nc-btn:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
+}
+.nc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Danger variant for destructive actions like Delete. We don't go
+   loud-red on the resting state because that turns into visual
+   noise; instead the button is normal-looking until hover, when it
+   shifts into red to signal "this is destructive." */
+.nc-btn-danger:hover {
+  background: var(--nc-error-bg);
+  border-color: var(--nc-error-fg);
+  color: var(--nc-error-fg);
+}
+
+/* Step 36: pressed-in / armed variant for toggle buttons. The
+   Properties panel's Move button uses this when the user has armed
+   an item for moving — same accent colour as
+   .nc-tree-row-drag-enabled so the button + the armed row visually
+   tie together. Hover stays in the armed style (no jump on hover)
+   because clicking it is "cancel," not "intensify." */
+.nc-btn-active,
+.nc-btn-active:hover {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent-fg);
+  color: var(--nc-accent-fg);
+}
+
+/* ----- Slash menu popup (step 9) ----------------------------------- */
+
+/* Container — width is bounded by tippy's maxWidth, but we set a
+   sensible min-width so a 1-result filter doesn't squish the layout. */
+.nc-slash-menu {
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  /* Flex column so each row stretches across full width even though
+     the rows are <button> elements (which default inline-block). */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nc-slash-menu-empty {
+  min-width: 200px;
+}
+
+.nc-slash-empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+  text-align: center;
+}
+
+.nc-slash-row {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+  width: 100%;
+}
+.nc-slash-row:hover,
+.nc-slash-row-active {
+  background: var(--nc-accent-bg-soft);
+}
+
+.nc-slash-icon {
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+}
+
+.nc-slash-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nc-slash-title {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.nc-slash-subtitle {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Override tippy.js's default theme box so it doesn't double-up
+   borders / backgrounds with our menu. */
+.tippy-box[data-theme~='light-border'] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: inherit !important;
+}
+.tippy-box[data-theme~='light-border'] > .tippy-content {
+  padding: 0 !important;
+}
+
+/* ----- Code block with title (step 9-fix) -------------------------- */
+
+.nc-codeblock-wrap {
+  margin: 0.8em 0;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  overflow: hidden;
+  background: var(--nc-bg-elev);
+}
+
+.nc-codeblock-header {
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+}
+
+.nc-codeblock-title {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  padding: 2px 6px;
+  width: 100%;
+  outline: none;
+  /* Subtle hover/focus to communicate it's editable. */
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.nc-codeblock-title:hover {
+  background: var(--nc-bg);
+  border-color: var(--nc-border);
+}
+.nc-codeblock-title:focus {
+  background: var(--nc-bg);
+  border-color: var(--nc-accent);
+  color: var(--nc-fg);
+}
+
+.nc-codeblock-pre {
+  margin: 0;
+  padding: 10px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  overflow-x: auto;
+  white-space: pre;
+}
+.nc-codeblock-pre code {
+  font: inherit;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* ----- Code block syntax highlighting (TwinCAT 3 / VS Light theme) -- */
+
+/* Token colours match TwinCAT 3 / Visual Studio Light. The classes
+   below come from highlight.js — lowlight applies them based on the
+   language grammar (see editor/structuredText.ts for our ST defs).
+   We don't include a full hljs theme stylesheet to keep the bundle
+   lean; just the scopes our grammars actually emit. */
+
+.nc-codeblock-pre code .hljs-keyword,
+.nc-codeblock-pre code .hljs-keyword * {
+  color: #0000ff;            /* IF / VAR / END_IF — bright blue */
+  font-weight: 500;
+}
+
+.nc-codeblock-pre code .hljs-type,
+.nc-codeblock-pre code .hljs-type * {
+  color: #2b91af;            /* BOOL / BYTE — teal */
+}
+
+.nc-codeblock-pre code .hljs-built_in,
+.nc-codeblock-pre code .hljs-built_in * {
+  color: #2b91af;            /* R_TRIG / TON — same as types */
+}
+
+.nc-codeblock-pre code .hljs-comment,
+.nc-codeblock-pre code .hljs-comment * {
+  color: #008000;            /* (* ... *) and // — green */
+  font-style: italic;
+}
+
+.nc-codeblock-pre code .hljs-string,
+.nc-codeblock-pre code .hljs-string * {
+  color: #a31515;            /* 'literal' — dark red */
+}
+
+.nc-codeblock-pre code .hljs-number,
+.nc-codeblock-pre code .hljs-number * {
+  color: #098658;            /* 16#FF, 3.14 — dark green */
+}
+
+.nc-codeblock-pre code .hljs-literal,
+.nc-codeblock-pre code .hljs-literal * {
+  color: #0000ff;            /* TRUE / FALSE / NULL — same as keywords */
+}
+
+.nc-codeblock-pre code .hljs-meta,
+.nc-codeblock-pre code .hljs-meta * {
+  color: #af00db;            /* T#1s, D#2024-01-01 — purple */
+}
+
+/* Dark-theme variants. These activate when the parent has the
+   "dark" data attribute (we don't ship a dark switch yet but
+   styling now is cheap and avoids a future migration). */
+@media (prefers-color-scheme: dark) {
+  .nc-codeblock-pre code .hljs-keyword,
+  .nc-codeblock-pre code .hljs-keyword *,
+  .nc-codeblock-pre code .hljs-literal,
+  .nc-codeblock-pre code .hljs-literal * {
+    color: #569cd6;
+  }
+  .nc-codeblock-pre code .hljs-type,
+  .nc-codeblock-pre code .hljs-type *,
+  .nc-codeblock-pre code .hljs-built_in,
+  .nc-codeblock-pre code .hljs-built_in * {
+    color: #4ec9b0;
+  }
+  .nc-codeblock-pre code .hljs-comment,
+  .nc-codeblock-pre code .hljs-comment * {
+    color: #6a9955;
+  }
+  .nc-codeblock-pre code .hljs-string,
+  .nc-codeblock-pre code .hljs-string * {
+    color: #ce9178;
+  }
+  .nc-codeblock-pre code .hljs-number,
+  .nc-codeblock-pre code .hljs-number * {
+    color: #b5cea8;
+  }
+  .nc-codeblock-pre code .hljs-meta,
+  .nc-codeblock-pre code .hljs-meta * {
+    color: #c586c0;
+  }
+}
+
+/* ----- Templates page (step 10) ----------------------------------- */
+
+.nc-templates-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - 60px);    /* full height minus topbar */
+  box-sizing: border-box;
+}
+
+.nc-templates-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.nc-templates-help {
+  margin: 0;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+}
+.nc-templates-help code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  background: var(--nc-bg-elev-2);
+  border-radius: var(--nc-radius-sm);
+}
+
+.nc-templates-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.nc-templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 12px;
+  background: var(--nc-bg);
+  overflow-y: auto;
+}
+.nc-templates-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nc-templates-new {
+  margin-bottom: 4px;
+}
+
+.nc-templates-row {
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  color: var(--nc-fg);
+}
+.nc-templates-row:hover {
+  background: var(--nc-bg-elev);
+}
+.nc-templates-row-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+}
+.nc-templates-row-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+.nc-templates-row-time {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-templates-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 16px;
+  background: var(--nc-bg);
+  min-height: 0;
+}
+
+.nc-templates-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-templates-field-grow {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.nc-templates-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+}
+.nc-templates-name {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+}
+.nc-templates-name:focus {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.nc-templates-body-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 12px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  resize: none;
+  flex: 1 1 auto;
+  min-height: 200px;
+}
+.nc-templates-body-input:focus {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.nc-templates-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Primary button variant — used on Save / Create / + New template. */
+.nc-btn-primary {
+  background: var(--nc-accent);
+  color: white;
+  border-color: var(--nc-accent);
+}
+.nc-btn-primary:hover {
+  background: var(--nc-accent);
+  filter: brightness(1.05);
+}
+.nc-btn-primary:disabled {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg-muted);
+  border-color: var(--nc-border);
+  filter: none;
+}
+
+/* Top bar Templates link — quiet text styling. */
+.nc-topbar-link {
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: var(--nc-radius-sm);
+}
+.nc-topbar-link:hover {
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev-2);
+}
+
+/* ======================================================================
+   Step 11a: Tables, Callouts, Rich template editor
+   ====================================================================== */
+
+/* ----- Tables ------------------------------------------------------ */
+
+/* Base table — clean, bordered, full-width within its container.
+   We don't ship resize handles (resizable: false on the extension)
+   because their default styling is busy and column widths from
+   content are usually fine. */
+.ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: auto;
+  table-layout: fixed;
+  overflow: hidden;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  min-width: 80px;
+  padding: 6px 10px;
+  border: 1px solid var(--nc-border);
+  vertical-align: top;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.ProseMirror table th {
+  background: var(--nc-bg-elev-2);
+  font-weight: 600;
+  text-align: left;
+}
+
+/* Highlight the cell currently selected — makes it obvious which
+   cell will receive a paste/edit. Subtle accent colour, no hard
+   border. */
+.ProseMirror table .selectedCell {
+  background: var(--nc-accent-bg-soft);
+}
+
+/* Cell paragraphs shouldn't carry the default block margin —
+   tables should look tight. */
+.ProseMirror table p {
+  margin: 0;
+}
+
+/* ----- Callouts ----------------------------------------------------- */
+
+/*
+  Callouts are visually striking but still feel native to the doc.
+  Each variant gets:
+    - A coloured left border (4px) for primary variant signal
+    - A soft tinted background for body emphasis
+    - A small header strip with the variant icon + label
+
+  Colours come from CSS variables so dark mode picks them up.
+*/
+
+.nc-callout {
+  margin: 0.8em 0;
+  border-radius: var(--nc-radius);
+  border: 1px solid transparent;
+  border-left-width: 4px;
+  /* position relative is required for the absolute-positioned
+     variant chip in the top-right to anchor against this box. */
+  position: relative;
+  /* Generous padding so the body doesn't crowd the chip. */
+  padding: 12px 14px 10px 14px;
+}
+
+/* Variant chip — small floating badge in the top-right corner.
+   It sits ABOVE the body content (z-index) but doesn't take up
+   layout space, so the body can fill the entire callout. */
+.nc-callout-chip {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+  z-index: 2;
+}
+
+.nc-callout-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.nc-callout-variant-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.nc-callout-variant-btn:hover {
+  border-color: currentColor;
+}
+
+.nc-callout-caret {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* Variant picker popup. Anchored to the chip; right-aligns so
+   the dropdown extends down-and-left from the chip without
+   overflowing the right edge of small callouts. */
+.nc-callout-picker {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 2px;
+  z-index: 10;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 140px;
+}
+
+.nc-callout-picker-row {
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  color: var(--nc-fg);
+  text-align: left;
+}
+.nc-callout-picker-row:hover,
+.nc-callout-picker-row-active {
+  background: var(--nc-accent-bg-soft);
+}
+.nc-callout-picker-icon {
+  font-size: 14px;
+}
+
+/* Body fills the callout. NodeViewContent's default layout adds
+   no extra wrapping, so the editor's child blocks (paragraphs,
+   lists, etc.) flow naturally inside. We give it a min-height
+   so an empty body still presents a real click target.
+
+   Right-padding gives space for the absolute chip overlay. */
+.nc-callout-body {
+  min-height: 24px;
+  padding-right: 90px;        /* room for the chip in the corner */
+}
+.nc-callout-body > *:first-child { margin-top: 0; }
+.nc-callout-body > *:last-child { margin-bottom: 0; }
+
+/* When the body's only child is an empty paragraph, give it a
+   real click target. ProseMirror renders empty paragraphs with
+   a <br> placeholder; the paragraph itself collapses to ~1.5em
+   without this. By giving it a min-height we ensure clicks
+   anywhere in the visible callout body region resolve to a
+   position inside the paragraph rather than fall through to
+   surrounding nodes. */
+.nc-callout-body > p:only-child {
+  min-height: 1.5em;
+}
+
+/* Per-variant colours. Light defaults, dark-mode variants below. */
+
+.nc-callout-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.nc-callout-error .nc-callout-header { color: #b91c1c; }
+
+.nc-callout-warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.nc-callout-warning .nc-callout-header { color: #b45309; }
+
+.nc-callout-info {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.nc-callout-info .nc-callout-header { color: #1d4ed8; }
+
+.nc-callout-tip {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+.nc-callout-tip .nc-callout-header { color: #047857; }
+
+.nc-callout-note {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+}
+.nc-callout-note .nc-callout-header { color: #4b5563; }
+
+@media (prefers-color-scheme: dark) {
+  .nc-callout-error {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.35);
+  }
+  .nc-callout-error .nc-callout-header { color: #fca5a5; }
+
+  .nc-callout-warning {
+    background: rgba(251, 191, 36, 0.12);
+    border-color: rgba(251, 191, 36, 0.35);
+  }
+  .nc-callout-warning .nc-callout-header { color: #fcd34d; }
+
+  .nc-callout-info {
+    background: rgba(96, 165, 250, 0.12);
+    border-color: rgba(96, 165, 250, 0.35);
+  }
+  .nc-callout-info .nc-callout-header { color: #93c5fd; }
+
+  .nc-callout-tip {
+    background: rgba(52, 211, 153, 0.12);
+    border-color: rgba(52, 211, 153, 0.35);
+  }
+  .nc-callout-tip .nc-callout-header { color: #6ee7b7; }
+
+  .nc-callout-note {
+    background: rgba(156, 163, 175, 0.10);
+    border-color: rgba(156, 163, 175, 0.30);
+  }
+  .nc-callout-note .nc-callout-header { color: #d1d5db; }
+}
+
+/* ----- Rich template editor wrapper -------------------------------- */
+
+/* The template body editor sits inside a bordered box that mimics
+   the textarea it replaces. ProseMirror gets the body styling
+   (font, line-height) inherited from .nc-template-editor. */
+.nc-template-editor {
+  flex: 1 1 auto;
+  min-height: 200px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  background: var(--nc-bg);
+  padding: 12px;
+  overflow-y: auto;
+}
+.nc-template-editor:focus-within {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.nc-template-editor .ProseMirror {
+  outline: none;
+  min-height: 180px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--nc-fg);
+}
+.nc-template-editor .ProseMirror p {
+  margin: 0.4em 0;
+}
+.nc-template-editor .ProseMirror h1 { font-size: 1.5em; }
+.nc-template-editor .ProseMirror h2 { font-size: 1.3em; }
+.nc-template-editor .ProseMirror h3 { font-size: 1.15em; }
+
+/* Keep the wrap that holds the editor stretchy in the parent
+   layout. The label uses flex column so the label text sits on top
+   and the editor fills the remaining vertical space. */
+.nc-templates-rich-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ----- Slash menu submenu chevron + back row (step 11b) -------- */
+
+/* Chevron on rows that have a submenu, indicating "click to drill in". */
+.nc-slash-chevron {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--nc-fg-muted);
+  flex-shrink: 0;
+}
+
+/* Back row at the top of submenus. Quieter than action rows so it
+   reads as navigation rather than as another action. */
+.nc-slash-row-back {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-slash-row-back .nc-slash-icon {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* ----- Top bar Today button (step 12) ------------------------------ */
+
+/* Compact button that sits in the topbar's right cluster. Slightly
+   more visual weight than the Templates link because it's a
+   primary daily action. */
+.nc-topbar-today {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.nc-topbar-today:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
+}
+
+/* ----- Video node view (step 13) ----------------------------------- */
+
+/* Outer wrapper: position relative so the resize handle and toolbar
+   can absolute-position to its corners. Block-level so videos sit on
+   their own line. */
+.nc-video-wrap {
+  position: relative;
+  display: block;
+  margin: 0.8em 0;
+  /* When active we draw a soft outline so the user knows which
+     video they're acting on. Subtle — not full-bleed colour. */
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+  border-radius: var(--nc-radius);
+  transition: outline-color 0.1s ease;
+}
+.nc-video-wrap[data-active='true'] {
+  outline-color: var(--nc-accent);
+  box-shadow: 0 0 0 2px var(--nc-accent-bg-soft);
+}
+
+.nc-video-wrap > video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--nc-radius);
+  background: #000;          /* black behind the video while loading */
+}
+
+/* Resize handle: top-right corner. Different from images (which use
+   bottom-right) because the browser's native video playback chrome
+   lives at the bottom of the video — putting our handle there would
+   conflict with the play/scrub buttons. */
+.nc-video-resize-handle {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 14px;
+  height: 14px;
+  background: var(--nc-accent);
+  border: 2px solid var(--nc-bg);
+  border-radius: 50%;
+  cursor: nesw-resize;
+  z-index: 4;
+}
+
+/* Floating toolbar: sits just above the video, top-right area.
+   Visible only when the video is active. */
+.nc-video-toolbar {
+  position: absolute;
+  top: -32px;
+  right: 0;
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 3;
+}
+
+.nc-video-toolbar-btn {
+  font: inherit;
+  font-size: 13px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  color: var(--nc-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-video-toolbar-btn:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border);
+}
+.nc-video-toolbar-btn-danger:hover {
+  background: var(--nc-error-bg);
+  border-color: var(--nc-error-fg);
+  color: var(--nc-error-fg);
+}
+
+/* ----- Tree drag-and-drop (step 5; refined step 36) --------------- */
+
+/* Source row during drag — dimmed so the user sees what's being
+   moved. We avoid hiding it because that would shift layout and
+   produce visual jank as siblings reflow. */
+.nc-tree-row-drag-source {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+/* Step 36: only the row in "move mode" — the one armed via the
+   Properties panel's Move button — shows the grab cursor and a
+   dashed outline to signal "this is the thing being moved; pick a
+   destination." Without this class, rows stay default-cursor and
+   non-draggable. The dashed outline doubles as a visual confirmation
+   that move mode is active so users don't lose track when scrolling.
+
+   The accent colour matches .nc-btn-active for the cancel button,
+   so users can see the connection between "the button is on" and
+   "this row is armed." */
+.nc-tree-row-drag-enabled {
+  cursor: grab;
+  outline: 1px dashed var(--nc-accent-fg);
+  outline-offset: -2px;
+}
+.nc-tree-row-drag-enabled:active {
+  cursor: grabbing;
+}
+
+/* Valid drop target. Subtle green outline + accent background. */
+.nc-tree-row-drop-valid {
+  outline: 2px dashed var(--nc-success-fg, #2e7d32);
+  outline-offset: -2px;
+  background: var(--nc-success-bg, rgba(46, 125, 50, 0.08));
+}
+
+/* Invalid drop target (cycle case for folders). Red outline,
+   slight background. The browser's cursor will also default to
+   "no entry" since we don't preventDefault on dragover. */
+.nc-tree-row-drop-invalid {
+  outline: 2px dashed var(--nc-error-fg, #c62828);
+  outline-offset: -2px;
+  background: var(--nc-error-bg, rgba(198, 40, 40, 0.08));
+}
+
+/* Root drop zone — sentinel area at the bottom of the tree,
+   visible only during a drag. */
+.nc-tree-root-drop {
+  margin: 8px 4px;
+  padding: 12px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  border: 2px dashed var(--nc-border);
+  border-radius: var(--nc-radius);
+  background: var(--nc-bg-elev);
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.nc-tree-root-drop-valid {
+  border-color: var(--nc-success-fg, #2e7d32);
+  background: var(--nc-success-bg, rgba(46, 125, 50, 0.12));
+  color: var(--nc-fg);
+}
+.nc-tree-root-drop-invalid {
+  border-color: var(--nc-error-fg, #c62828);
+  background: var(--nc-error-bg, rgba(198, 40, 40, 0.12));
+  color: var(--nc-fg);
+}
+
+/* ----- Table toolbar (step 10) ------------------------------------- */
+
+/* Floating toolbar above the active table. Position is set
+   inline (top/left) by the React component; this rule provides
+   visual style. */
+.nc-table-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  user-select: none;
+}
+
+.nc-table-toolbar-btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  color: var(--nc-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-table-toolbar-btn:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border);
+}
+.nc-table-toolbar-btn-danger:hover {
+  background: var(--nc-error-bg, rgba(198, 40, 40, 0.08));
+  border-color: var(--nc-error-fg, #c62828);
+  color: var(--nc-error-fg, #c62828);
+}
+
+.nc-table-toolbar-sep {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--nc-border);
+  margin: 0 2px;
+}
+
+/* ----- Bubble menu (selection-driven formatting toolbar) ----- */
+
+/* Mirrors the table-toolbar visual style for consistency, but
+   slightly more compact (smaller buttons, tighter padding) since
+   the bubble menu hovers right next to the user's selection where
+   visual weight matters. Position is set inline by the React
+   component; this rule provides visual style only. */
+.nc-bubble-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  user-select: none;
+  /* Don't show a text cursor over the menu; it isn't editable. */
+  cursor: default;
+}
+
+.nc-bubble-button {
+  font: inherit;
+  font-size: 13px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  color: var(--nc-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Inner B / I / <> elements should not break the click target —
+     the parent button owns the click. */
+}
+.nc-bubble-button:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border);
+}
+/* Active = the mark is currently applied to the selection. We
+   nudge background and border so the user sees "this button
+   would TURN OFF the formatting" without having to read tooltips. */
+.nc-bubble-button-active {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+.nc-bubble-button-active:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-accent);
+}
+/* The inline <code> child of the Code button has its own font
+   styling from the editor's prose CSS — strip it inside the
+   button so it doesn't push the button taller. */
+.nc-bubble-button code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ----- Table column resize handles (step 10 fix2) ------------------ */
+
+/* Wrapper that prosemirror-tables adds when resizable: true. The
+   wrapper has overflow-x: auto so wide tables scroll horizontally
+   instead of bursting out of the editor's content column. */
+.tableWrapper {
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+
+/* The table itself: keep the layout fixed so column widths set by
+   the resize handles actually take effect. (Default `auto` layout
+   reflows on every keystroke, ignoring our explicit widths.) */
+.tableWrapper > table,
+.ProseMirror table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+/* Column resize handle — a thin vertical bar on the right edge of
+   each cell. Only visible on hover/active to avoid visual noise.
+   The element is added by prosemirror-tables. */
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background-color: var(--nc-accent);
+  cursor: col-resize;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+/* Make the resize handle only visible when the table is being
+   resized OR when the user hovers near a column boundary. The
+   `resize-cursor` class is set on the editor by prosemirror-tables
+   while a resize is in progress. */
+.ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* When a CellSelection is active (drag-selected cells), tint them
+   so the user sees what they've selected. prosemirror-tables sets
+   the .selectedCell class on each cell in the selection. */
+.ProseMirror .selectedCell {
+  background: var(--nc-accent-bg-soft);
+  position: relative;
+}
+.ProseMirror .selectedCell::after {
+  /* Subtle outline overlay so the selection reads as a unit even
+     across cell borders. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--nc-accent);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+/* ----- Editor page area (page-width step) -------------------------- */
+
+/* The grey backdrop that holds the centered "page" (.nc-editor).
+   This div wraps the EditorContent in NoteEditor.tsx.
+
+   Padding is symmetric (24px on all sides) so the gap around the
+   page reads as an even margin — the page sits on the grey card
+   with the same breathing room top, right, bottom, and left.
+   Combined with the no-min-height shell, the card hugs the page
+   so there's never extra empty space below the text.
+
+   No overflow rule here — the outer page (.nc-shell-main) is
+   responsible for scrolling the editor when content gets long.
+   Putting overflow on this div would create nested scroll areas. */
+.nc-editor-page-area {
+  flex: 1;
+  padding: 24px;
+}
+
+/* ----- Breadcrumb row (editor) ------------------------------------ */
+
+/* Container that holds the breadcrumb path on the left and the
+   save status + upload pills on the right. Replaces the old in-
+   editor toolbar. We keep this row tight: it should read as a
+   "where am I + how's saving going" status strip, not as chrome. */
+.nc-breadcrumb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+/* When the breadcrumb itself sits in the row, drop its own
+   bottom margin so the row's margin is the only gap. */
+.nc-breadcrumb-row .nc-breadcrumb {
+  margin-bottom: 0;
+}
+.nc-breadcrumb-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ----- Settings popover (cog dropdown) ---------------------------- */
+
+/* Wider than the old variant popover (which only had two rows of
+   tree-style options). Now hosts tree style + width slider +
+   gradient grid. Keeps the same visual language as the old
+   popover so the cog feels familiar. */
+.nc-settings-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+  width: 300px;
+  padding: 4px;
+  z-index: 200;
+}
+.nc-settings-section {
+  padding: 4px 4px 8px;
+}
+.nc-settings-divider {
+  height: 1px;
+  background: var(--nc-border);
+  margin: 4px -4px;
+}
+/* The heading reuses .nc-variant-heading typography (defined
+   above) but extends it with flex layout + a right-aligned
+   value badge for the slider section. We don't re-declare the
+   font/padding/colour — the existing .nc-variant-heading rule
+   already handled that and our additions cascade on top. */
+.nc-variant-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nc-settings-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--nc-fg);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* Width slider. Native range input with light styling — we don't
+   try to fully restyle thumb/track across browsers (huge effort
+   for a cross-browser pixel-perfect look), just nudge spacing
+   and accent colour. */
+.nc-settings-slider {
+  width: 100%;
+  margin: 4px 0 2px;
+  accent-color: var(--nc-accent);
+}
+.nc-settings-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--nc-fg-muted);
+  padding: 0 2px;
+}
+
+/* Gradient swatches: 3-column grid of preview tiles. Each tile
+   shows the gradient as a thin band with a label below. Active
+   tile gets a coloured outline so the user can see "this one is
+   applied". */
+.nc-settings-gradient-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 4px 2px 2px;
+}
+.nc-settings-gradient-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+  padding: 4px;
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  font: inherit;
+  color: var(--nc-fg);
+  transition: border-color 0.1s ease;
+}
+.nc-settings-gradient-swatch:hover {
+  border-color: var(--nc-border-strong);
+}
+.nc-settings-gradient-swatch-active {
+  border-color: var(--nc-accent);
+  box-shadow: 0 0 0 1px var(--nc-accent);
+}
+.nc-settings-gradient-swatch-fill {
+  display: block;
+  height: 30px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.nc-settings-gradient-swatch-label {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  text-align: center;
+}
+
+/* ----- Per-note appearance fields (properties panel) ------------- */
+
+/* Unit suffix shown next to a number input ("px"). Same muted tone
+   as the rest of the secondary panel chrome. */
+.nc-prop-unit {
+  color: var(--nc-fg-muted);
+  font-size: inherit;
+}
+
+/* Number input: keep the spinners (browser default) but constrain
+   width so the field doesn't stretch to fill the dd column. */
+.nc-prop-input-number {
+  width: 90px;
+  flex: 0 0 auto;
+}
+
+/* ============================================================
+   Startpage / RSS reader (step 40)
+
+   Layout model: free-floating absolutely-positioned blocks inside
+   a relative-positioned canvas. The canvas grows tall as needed
+   (its inline style isn't set; the parent .nc-startpage scrolls
+   when blocks extend past the viewport).
+   ============================================================ */
+
+.nc-startpage {
+  /* Override the default .nc-page max-width so blocks can use the
+     full content area. The page already lives inside .nc-app-frame
+     (configurable width 1000–2400px), so we don't need a second
+     constraint here. */
+  max-width: none;
+}
+
+.nc-startpage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.nc-startpage-empty {
+  text-align: center;
+  padding: 48px 24px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.nc-startpage-save-error {
+  /* Less prominent than a load error — the user keeps editing
+     while we retry, so this is a status message not a wall. */
+  margin-bottom: 8px;
+}
+
+/* The canvas is what the absolutely-positioned blocks anchor to.
+   Min-height keeps it tall enough to host the default (24,24) +
+   320x320-ish blocks without immediate clipping. We deliberately
+   don't set a max — the parent page scrolls. */
+.nc-startpage-canvas {
+  position: relative;
+  min-height: 600px;
+  width: 100%;
+}
+
+/* ----- One RSS block ----- */
+.nc-rss-block {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden; /* clip body scrollbar to rounded corners */
+  /* The min-* are also enforced JS-side on resize, but keeping
+     them in CSS prevents weird layouts during the brief window
+     where state hasn't synced. */
+  min-width: 200px;
+  min-height: 150px;
+}
+
+.nc-rss-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  /* Drag affordance. The header is the drag handle; cursor signals
+     it. During an active drag we can't easily swap to grabbing
+     because the cursor is captured by pointer-capture; the
+     visual move + grab cursor is enough. */
+  cursor: grab;
+  user-select: none;
+  /* Tiny touch-action hint so mobile-ish scenarios don't conflict
+     with browser pan gestures. NoteControl is desktop-first but
+     this costs nothing. */
+  touch-action: none;
+}
+.nc-rss-block-header:active { cursor: grabbing; }
+
+.nc-rss-block-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+
+.nc-rss-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+
+.nc-rss-block-iconbtn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--nc-fg-muted);
+}
+.nc-rss-block-iconbtn:hover {
+  background: var(--nc-bg-elev);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+.nc-rss-block-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+.nc-rss-block-error {
+  margin: 0;
+}
+
+.nc-rss-block-resize {
+  /* Bottom-right resize handle. ~14px square at the corner.
+     We draw a small diagonal-stripe via two linear-gradients so
+     it's visible without an extra DOM node. */
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  /* Diagonal stripe pattern (south-east corner indicator) */
+  background:
+    linear-gradient(135deg,
+      transparent 0%, transparent 40%,
+      var(--nc-fg-muted) 40%, var(--nc-fg-muted) 50%,
+      transparent 50%, transparent 70%,
+      var(--nc-fg-muted) 70%, var(--nc-fg-muted) 80%,
+      transparent 80%);
+  opacity: 0.5;
+  touch-action: none;
+}
+.nc-rss-block-resize:hover { opacity: 1; }
+
+/* ----- Item list ----- */
+.nc-rss-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nc-rss-item {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--nc-border);
+}
+.nc-rss-item:last-child { border-bottom: none; }
+
+.nc-rss-item-title {
+  display: block;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--nc-fg);
+  text-decoration: none;
+  /* Inline font-size set per item via inline style (so the user
+     can tune it per block). Default here as fallback. */
+}
+a.nc-rss-item-title:hover {
+  color: var(--nc-accent-fg);
+  text-decoration: underline;
+}
+
+.nc-rss-item-date {
+  display: block;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  margin-top: 2px;
+}
+
+.nc-rss-item-summary {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  line-height: 1.4;
+}
+
+/* ----- Settings popup ----- */
+.nc-rss-settings-popup {
+  position: absolute;
+  top: 32px; /* below header */
+  right: 6px;
+  width: 280px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+.nc-rss-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg-elev-2);
+}
+.nc-rss-settings-title {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--nc-fg);
+}
+.nc-rss-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+.nc-rss-settings-row {
+  display: flex;
+  gap: 8px;
+}
+.nc-rss-settings-row > .nc-rss-settings-field {
+  flex: 1 1 0;
+}
+.nc-rss-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-rss-settings-field input[type="text"],
+.nc-rss-settings-field input[type="url"],
+.nc-rss-settings-field input[type="number"] {
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--nc-fg);
+  font-family: inherit;
+}
+.nc-rss-settings-field input[type="range"] {
+  width: 100%;
+}
+.nc-rss-settings-footer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--nc-border);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--nc-bg-elev-2);
+}
+
+/* ============================================================
+   Task areas + sticky notes (step 42)
+
+   A task area is structurally similar to an RSS block: an
+   absolutely-positioned card on the startpage canvas, with a
+   header (drag handle), body (scrollable), and bottom-right
+   resize handle. Reuses .nc-rss-block-resize for the corner.
+   ============================================================ */
+
+/* Two add-buttons in the header sit on a small inline row. */
+.nc-startpage-add-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.nc-task-area {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 220px;
+  min-height: 180px;
+}
+
+.nc-task-area-header {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.nc-task-area-header:active { cursor: grabbing; }
+
+.nc-task-area-title-input {
+  flex: 1 1 auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--nc-fg);
+  font-family: inherit;
+  /* Cursor: text inside the input itself, even though the header
+     uses grab. The cursor changes when the pointer is over an
+     <input>. */
+}
+.nc-task-area-title-input:hover {
+  border-color: var(--nc-border);
+}
+.nc-task-area-title-input:focus {
+  background: var(--nc-bg);
+  border-color: var(--nc-accent-fg);
+  outline: none;
+}
+
+.nc-task-area-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+
+/* Tiny gear-popup for area-level actions (delete). Mirrors the
+   RSS settings popup positioning style. */
+.nc-task-area-menu {
+  position: absolute;
+  top: 30px;
+  right: 6px;
+  min-width: 140px;
+  padding: 6px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+}
+
+.nc-task-area-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nc-task-area-add-note {
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+
+.nc-task-area-empty {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.nc-task-area-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nc-task-area-note-row {
+  /* The row is the HTML5 DnD draggable. Cursor signals it. */
+  cursor: grab;
+}
+.nc-task-area-note-row:active {
+  cursor: grabbing;
+}
+
+/* During a drag, source row is dimmed. Drop-target row gets a
+   line above it so the user can see where the dropped note will
+   land. */
+.nc-task-area-note-row-dragging {
+  opacity: 0.4;
+}
+.nc-task-area-note-row-dropover {
+  /* Visual: a 2px accent strip on top of the target row. We use
+     box-shadow rather than border so layout doesn't shift. */
+  box-shadow: 0 -2px 0 0 var(--nc-accent-fg);
+}
+
+/* ----- One sticky note ----- */
+.nc-sticky-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: var(--nc-radius);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  /* Each colour class below sets background + border-color. */
+}
+
+.nc-sticky-note-done {
+  /* Done = strikethrough on TEXT children + reduced opacity on
+     the whole note. Strikethrough is applied to specific text
+     elements (headline, content) so the gear/checkbox stay
+     visible without strikethrough. */
+  opacity: 0.55;
+}
+.nc-sticky-note-done .nc-sticky-note-headline,
+.nc-sticky-note-done .nc-sticky-note-content {
+  text-decoration: line-through;
+}
+
+.nc-sticky-note-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.nc-sticky-note-spacer {
+  flex: 1 1 auto;
+}
+.nc-sticky-note-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  /* Larger hit area than the bare checkbox. */
+  padding: 2px 4px;
+}
+.nc-sticky-note-check input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.nc-sticky-note-headline {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  font-family: inherit;
+}
+.nc-sticky-note-headline:hover { border-color: rgba(0, 0, 0, 0.15); }
+.nc-sticky-note-headline:focus {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(0, 0, 0, 0.3);
+  outline: none;
+}
+
+.nc-sticky-note-content {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--nc-fg);
+  font-family: inherit;
+  resize: vertical;
+  min-height: 36px;
+  /* Cap the textarea so a giant note doesn't push the area scroll
+     into oblivion. The user can manually drag-resize within
+     [min, max]. */
+  max-height: 240px;
+}
+.nc-sticky-note-content:hover { border-color: rgba(0, 0, 0, 0.15); }
+.nc-sticky-note-content:focus {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(0, 0, 0, 0.3);
+  outline: none;
+}
+
+/* ----- Sticky-note colour palette -----
+   Each entry sets background + a slightly-darker border. Colours
+   chosen for legible black text. The "swatch" version (used in
+   the colour picker grid) reuses the same backgrounds. */
+
+.nc-sticky-note-color-yellow { background: #fff3a3; border-color: #e6d97a; }
+.nc-sticky-note-color-pink   { background: #ffd1dc; border-color: #e6b4c2; }
+.nc-sticky-note-color-green  { background: #c5e8b7; border-color: #9bcc8a; }
+.nc-sticky-note-color-blue   { background: #c8e0ff; border-color: #95b8e0; }
+.nc-sticky-note-color-orange { background: #ffd9a8; border-color: #e6b87a; }
+.nc-sticky-note-color-purple { background: #e0c8ff; border-color: #b89ae0; }
+.nc-sticky-note-color-gray   { background: #d8d8d8; border-color: #b0b0b0; }
+
+/* Sticky note text always renders against the colour background,
+   not the app theme — force black-ish text inside notes for
+   legibility on the pastel palette regardless of light/dark mode. */
+.nc-sticky-note .nc-sticky-note-headline,
+.nc-sticky-note .nc-sticky-note-content {
+  color: #1a1a1a;
+}
+
+/* ----- Sticky-note menu / colour picker ----- */
+.nc-sticky-note-menu {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  min-width: 180px;
+  padding: 8px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nc-sticky-note-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nc-sticky-note-menu-label {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.nc-sticky-note-color-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.nc-sticky-note-color-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.nc-sticky-note-color-swatch:hover {
+  outline: 1px solid var(--nc-accent-fg);
+  outline-offset: 1px;
+}
+.nc-sticky-note-color-swatch-active {
+  /* Currently-selected colour: accent ring around the swatch. */
+  outline: 2px solid var(--nc-accent-fg);
+  outline-offset: 1px;
+}
+.nc-sticky-note-menu-delete {
+  /* Take the full popup width. */
+  align-self: stretch;
+}

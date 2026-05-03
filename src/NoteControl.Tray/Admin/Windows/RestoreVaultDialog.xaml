@@ -1,0 +1,111 @@
+<Window x:Class="NoteControl.Tray.Admin.Windows.RestoreVaultDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NoteControl — Restore vault from backup"
+        Width="640" Height="540"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock Grid.Row="0" FontSize="16" FontWeight="SemiBold"
+                   Text="Restore vault from backup" Margin="0,0,0,12"/>
+
+        <!-- Backup info -->
+        <Border Grid.Row="1" Padding="10" Background="#F5F5F5"
+                BorderBrush="#DDD" BorderThickness="1" CornerRadius="3"
+                Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock>
+                    <Run Text="Backup id: " FontWeight="SemiBold"/>
+                    <Run x:Name="BackupIdText"/>
+                </TextBlock>
+                <TextBlock Margin="0,4,0,0">
+                    <Run Text="Created: " FontWeight="SemiBold"/>
+                    <Run x:Name="CreatedAtText"/>
+                </TextBlock>
+            </StackPanel>
+        </Border>
+
+        <!-- Source / target pickers -->
+        <Grid Grid.Row="2" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Label Grid.Row="0" Grid.Column="0" Content="Vault folder in backup:" VerticalAlignment="Center"/>
+            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SourceVaultBox"
+                      Margin="0,0,0,6"
+                      SelectionChanged="SourceVaultBox_SelectionChanged"/>
+
+            <Label Grid.Row="1" Grid.Column="0" Content="Restore to live vault:" VerticalAlignment="Center"/>
+            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="TargetVaultBox"
+                      DisplayMemberPath="DisplayName"/>
+        </Grid>
+
+        <!-- Big warning -->
+        <Border Grid.Row="3" Padding="12"
+                Background="#FEF3C7" BorderBrush="#CA8A04" BorderThickness="1" CornerRadius="3"
+                Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock FontWeight="SemiBold" Text="⚠ This is a destructive operation" Margin="0,0,0,4"/>
+                <TextBlock TextWrapping="Wrap">
+                    The current vault data will be moved aside as <Bold>{vault}.pre-restore-{timestamp}/</Bold>
+                    next to the live vault, then the backup will be copied over the live path.
+                    The vault is locked for writes during the operation; any save attempts in open editor
+                    tabs will get a "vault temporarily locked" error and can be retried after restore completes.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" Margin="0,8,0,0">
+                    The pre-restore folder stays on disk after the restore — review it before deleting.
+                </TextBlock>
+            </StackPanel>
+        </Border>
+
+        <!-- Double-confirm checkboxes -->
+        <StackPanel Grid.Row="4" Margin="0,0,0,12">
+            <CheckBox x:Name="Confirm1Box"
+                      Content="I understand the current vault data will be moved aside."
+                      Click="ConfirmCheckbox_Click"/>
+            <CheckBox x:Name="Confirm2Box" Margin="0,4,0,0"
+                      Content="I have closed any browser tabs editing this vault, or accept that pending saves will fail with 'vault locked' until restore completes."
+                      Click="ConfirmCheckbox_Click"/>
+        </StackPanel>
+
+        <!-- Result panel -->
+        <Border Grid.Row="5" x:Name="ResultPanel" Visibility="Collapsed"
+                Padding="10" Background="#ECFDF5" BorderBrush="#16A34A" BorderThickness="1" CornerRadius="3">
+            <TextBlock x:Name="ResultText" TextWrapping="Wrap"/>
+        </Border>
+
+        <!-- Buttons -->
+        <DockPanel Grid.Row="6" Margin="0,12,0,0">
+            <TextBlock x:Name="StatusText" DockPanel.Dock="Left"
+                       Foreground="#555" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="RestoreButton"
+                        Content="Restore"
+                        Width="100" Height="28"
+                        Margin="0,0,8,0"
+                        IsEnabled="False"
+                        Click="RestoreButton_Click"/>
+                <Button Content="Close" Width="80" Height="28"
+                        IsCancel="True"
+                        Click="CloseButton_Click"/>
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>

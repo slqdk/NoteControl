@@ -1,0 +1,86 @@
+# ---------------------------------------------------
+# Visual Studio / .NET
+# ---------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.VC.VC.opendb
+project.lock.json
+project.fragment.lock.json
+artifacts/
+**/Properties/launchSettings.json
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ---------------------------------------------------
+# Node / Frontend
+# ---------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vite/
+
+# ---------------------------------------------------
+# OS
+# ---------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ---------------------------------------------------
+# Application data (local dev only)
+# ---------------------------------------------------
+# Local dev data — actual NoteControl vaults and server data
+# should NEVER be committed
+/data/
+/NotesData/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# ---------------------------------------------------
+# Secrets
+# ---------------------------------------------------
+*.pfx
+*.key
+secrets.json
+appsettings.Development.json
+appsettings.Local.json
+
+# Server dev data — test vaults with real notes/screenshots
+src/NoteControl.Server/dev-data/

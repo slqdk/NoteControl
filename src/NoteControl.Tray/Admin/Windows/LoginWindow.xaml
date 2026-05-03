@@ -1,0 +1,56 @@
+<Window x:Class="NoteControl.Tray.Admin.Windows.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NoteControl — Admin Login"
+        Width="380" Height="240"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="100"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Row="0" Grid.ColumnSpan="2"
+                   Margin="0,0,0,12"
+                   Text="Sign in to perform administrative actions."
+                   TextWrapping="Wrap"/>
+
+        <Label Grid.Row="1" Grid.Column="0" Content="Username:" VerticalAlignment="Center"/>
+        <TextBox Grid.Row="1" Grid.Column="1" x:Name="UsernameBox"
+                 Margin="0,4" Padding="6,4"/>
+
+        <Label Grid.Row="2" Grid.Column="0" Content="Password:" VerticalAlignment="Center"/>
+        <PasswordBox Grid.Row="2" Grid.Column="1" x:Name="PasswordBox"
+                     Margin="0,4" Padding="6,4"
+                     KeyDown="PasswordBox_KeyDown"/>
+
+        <TextBlock Grid.Row="3" Grid.ColumnSpan="2"
+                   x:Name="ErrorText"
+                   Margin="0,8,0,0"
+                   Foreground="Crimson"
+                   TextWrapping="Wrap"
+                   Visibility="Collapsed"/>
+
+        <StackPanel Grid.Row="5" Grid.ColumnSpan="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button x:Name="CancelButton" Content="Cancel"
+                    Width="90" Height="28" Margin="0,0,8,0"
+                    IsCancel="True" Click="CancelButton_Click"/>
+            <Button x:Name="LoginButton" Content="Sign in"
+                    Width="90" Height="28"
+                    IsDefault="True" Click="LoginButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
