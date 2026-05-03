@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { StickyNoteDto, TaskAreaDto } from '../api/types';
+import { newId } from '../util/id';
 import { StickyNote } from './StickyNote';
 
 /**
@@ -191,7 +192,11 @@ export function TaskArea({ area, onChange, onDelete }: TaskAreaProps) {
 
   const addNote = useCallback(() => {
     const newNote: StickyNoteDto = {
-      id: crypto.randomUUID(),
+      // Ship 51: newId() instead of crypto.randomUUID() directly.
+      // Same reason as the StartpagePage call sites — randomUUID
+      // is gated on secure contexts so plain-HTTP LAN access
+      // would crash the page.
+      id: newId(),
       headline: '',
       content: '',
       color: 'yellow',

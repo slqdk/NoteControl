@@ -7,6 +7,7 @@ import { RssBlock } from '../components/RssBlock';
 import { TaskArea } from '../components/TaskArea';
 import type { VaultLayoutContext } from '../components/VaultLayout';
 import { useDebouncedSave } from '../hooks/useDebouncedSave';
+import { newId } from '../util/id';
 
 /**
  * Per-vault startpage with free-floating RSS blocks.
@@ -137,11 +138,11 @@ export function StartpagePage() {
     setConfig((prev) => {
       if (!prev) return prev;
       const newBlock: RssBlockDto = {
-        // crypto.randomUUID() works in all modern browsers
-        // (Edge 79+ / Chrome 92+ / Firefox 95+ / Safari 15.4+).
-        // NoteControl is desktop-first and we ship via Caddy /
-        // localhost, both secure contexts where it's available.
-        id: crypto.randomUUID(),
+        // Ship 51: was crypto.randomUUID() directly. That throws on
+        // plain-HTTP LAN access (browsers gate randomUUID on secure
+        // contexts only). newId() falls back to crypto.getRandomValues
+        // when randomUUID isn't available — works on any protocol.
+        id: newId(),
         title: '',
         feedUrl: '',
         // Cascade new blocks down-and-right so they don't all
@@ -190,7 +191,7 @@ export function StartpagePage() {
     setConfig((prev) => {
       if (!prev) return prev;
       const newArea: TaskAreaDto = {
-        id: crypto.randomUUID(),
+        id: newId(),
         title: '',
         // Same cascade pattern as RSS blocks, but offset 200px
         // to the right so freshly-added areas don't pile onto
