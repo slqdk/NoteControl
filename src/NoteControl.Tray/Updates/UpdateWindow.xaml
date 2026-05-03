@@ -61,13 +61,13 @@
                           HorizontalScrollBarVisibility="Disabled"
                           Padding="8">
                 <!--
-                    Plain TextBlock with TextWrapping. Markdown
-                    renders as raw text -- the GitHub release body
-                    is markdown but a tray-side markdown renderer
-                    would be a separate dependency. The release page
-                    button at the bottom takes the user to the
-                    properly-rendered version on github.com.
-                -->
+    Plain TextBlock with TextWrapping. Markdown
+    renders as raw text. The GitHub release body
+    is markdown but a tray-side markdown renderer
+    would be a separate dependency. The release
+    page button at the bottom takes the user to
+    the properly-rendered version on github.com.
+-->
                 <TextBlock x:Name="NotesText"
                            TextWrapping="Wrap"
                            FontFamily="Segoe UI"

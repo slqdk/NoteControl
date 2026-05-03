@@ -1,238 +1,259 @@
-# Ship 48 — PowerShell installer + uninstaller
+# NoteControl
 
-## What this ships
+A self-hosted, multi-user notes app for Windows. Notes are plain
+markdown files on disk, one folder per vault — open them in any
+editor, sync them with any tool, back them up by copying a folder.
+The app is just a friendly UI on top.
 
-A two-script installer (`installer\install.ps1` + `installer\uninstall.ps1`)
-plus an updated `publish.ps1` that bundles the installer into the
-dist folder. The dist folder produced by `publish.ps1 -Zip` is now
-self-installable: extract the zip on a Windows machine, run
-`installer\install.ps1` as Administrator, done.
+---
 
-This is the foundation for Ship 49 (in-app "Check for updates")
-and Ship 50 (GitHub Actions release pipeline). Neither of those
-needs to land before this is useful.
+## What it looks like
 
-## What the installer does (in order)
+<!--
+    Drop screenshots into docs/screenshots/ and reference them here.
+    Suggested shots:
+      - The editor with a daily note open
+      - The Startpage with RSS blocks + task areas
+      - The tray menu
+      - The Server Settings window
+-->
+*(Screenshots coming soon — drop them in `docs/screenshots/` and edit
+this section.)*
 
-1. Verifies it's running as Administrator. Exits with guidance otherwise.
-2. Verifies it's running from a published dist folder (looks for
-   `..\server\NoteControl.Server.exe` and `..\tray\NoteControl.Tray.exe`).
-3. Detects whether this is a fresh install or an upgrade.
-4. Stops the `NoteControlServer` service if it's running.
-5. Kills the tray process if running (so we can replace its `.exe`).
-6. Copies `server\` and `tray\` from the dist folder into
-   `C:\Program Files\NoteControl\`.
-7. Copies `VERSION.txt` and `uninstall.ps1` into the install dir
-   so the uninstall path is self-contained.
-8. Creates `C:\ProgramData\NoteControl\NotesData\` and
-   `C:\ProgramData\NoteControl\logs\` if they don't exist. Never
-   touches existing contents.
-9. Registers (or updates) the `NoteControlServer` service:
-   - `binPath=` points at the new server exe
-   - `start=auto` so it comes up at boot
-   - Description set; failure recovery configured to restart 3 times
-     after 60s (the 4th failure is silent to avoid crash-loop spam)
-   - Runs as LocalSystem (default).
-10. Starts the service and probes `http://127.0.0.1:8080/health`
-    for up to 30 seconds.
-11. Adds an HKLM Run entry so the tray launches at login for any
-    user on the machine.
-12. Writes an Add/Remove Programs entry under
-    `HKLM\...\Uninstall\NoteControl` pointing at the bundled
-    uninstaller.
-13. Launches the tray for the current user (so you don't have to
-    log out/in to get it running right after install).
-14. Writes `install.log` next to the binaries for diagnostics.
+---
 
-## What the uninstaller does
+## Why
 
-1. Verifies Admin.
-2. Stops + deletes the service.
-3. Stops the tray.
-4. Removes the HKLM Run entry.
-5. Removes the Add/Remove Programs entry.
-6. Deletes the install dir contents.
-   - **Caveat:** PowerShell holds the executing script file open,
-     so when you run uninstall.ps1 from inside the install dir
-     (the Add/Remove Programs flow does this), the script file
-     itself can't be deleted while running. The folder is left
-     in place; the script tells you exactly how to clean it up
-     after exit. Annoying but correct.
-7. **Vault data is preserved by default.** Pass `-RemoveData`
-   to also delete `C:\ProgramData\NoteControl\`. With that switch,
-   the script asks for explicit "DELETE" confirmation unless
-   `-Force` is also set.
+Most notes apps lock your data inside their database, sync service,
+or proprietary file format. Move on, lose access. The cost of "I'll
+just try this app" is high.
 
-## Layout produced
+NoteControl tries the opposite trade: every note is a `.md` file
+in a folder you own, attachments are stored next to their note in a
+`{name}.assets/` sibling folder, and backups are folder copies. If
+this project disappears tomorrow, your notes are still there in
+plain text, indexed by Windows Search like any other folder.
+
+The app adds: a TipTap-based WYSIWYG editor with live markdown
+round-trip, multi-user access over HTTPS, full-text search via
+SQLite FTS5, daily-notes templates, RSS feed widgets, and a
+Windows tray for admin/server-control without a browser.
+
+---
+
+## Architecture at a glance
 
 ```
-C:\Program Files\NoteControl\
-├── server\
-│   ├── NoteControl.Server.exe
-│   ├── appsettings.json
-│   ├── wwwroot\...
-│   └── ... (DLLs)
-├── tray\
-│   └── NoteControl.Tray.exe
-├── VERSION.txt
-├── install.log              ← written each run
-└── uninstall.ps1            ← copy of the installer's uninstaller
-
-C:\ProgramData\NoteControl\
-├── NotesData\               ← vaults (untouched on install/upgrade)
-│   └── ...
-├── logs\
-│   └── notecontrol-{date}.log
-└── ... (.server\, etc., as before)
+┌──────────────────────────────────────────────────────┐
+│ Windows host                                         │
+│                                                      │
+│  ┌────────────────┐       ┌──────────────────────┐   │
+│  │ Tray           │       │ Server               │   │
+│  │ (WPF +         │       │ (ASP.NET Core 8 +    │   │
+│  │  H.NotifyIcon) │──────►│  EF Core + SQLite +  │   │
+│  │ Admin windows  │ HTTP  │  Serilog)            │   │
+│  └────────────────┘       │ runs as Windows Svc  │   │
+│                           └──────────┬───────────┘   │
+│                                      ▼               │
+│                     C:\ProgramData\NoteControl\      │
+│                       NotesData\                     │
+│                         users\<name>\<vault>\        │
+│                         shared\<vault>\              │
+│                       logs\                          │
+│                       .server\  (db, csrf key, etc.) │
+└──────────────────────────────────────────────────────┘
+            ▲
+            │ HTTPS via Caddy (optional)
+   ┌────────┴────────┐
+   │ Browser (any device on the LAN) │
+   └─────────────────────────────────┘
 ```
 
-## Files in this ship
+The frontend is React + Vite + TipTap, built into a static bundle
+and served from the same Kestrel process that runs the API. One
+URL, one port, no separate dev servers in production.
 
-- `installer/install.ps1` — the installer (~470 lines, dense
-  comments).
-- `installer/uninstall.ps1` — the uninstaller (~265 lines).
-- `publish.ps1` — full replacement; adds an `installer\` copy
-  step and updates the post-build summary text.
+---
 
-## Apply order
+## Tech stack
 
-1. Extract over repo root. The `installer\` folder is new at
-   repo root; `publish.ps1` is a replacement.
-2. **No code rebuild needed for this ship.** This is tooling
-   only — no C# or TypeScript changed. You can run the new
-   `publish.ps1` immediately to produce a dist folder that
-   includes the installer.
+| Layer | Technology |
+|-------|------------|
+| Server | ASP.NET Core 8, EF Core, SQLite, Serilog |
+| Tray | WPF (.NET 8), H.NotifyIcon.Wpf |
+| Frontend | React + Vite + TipTap + DOMPurify, TypeScript strict |
+| Search | SQLite FTS5 |
+| Reverse proxy (optional) | Caddy (for HTTPS / Let's Encrypt) |
+| Storage | Plain markdown files on disk + per-vault SQLite index |
 
-## How to test
+---
 
-This is the kind of thing where you really want to test on a
-machine you don't mind cleaning up. Two paths:
+## Install (binary)
 
-### A. Hot install on the dev machine (fast feedback)
+The fastest way to try NoteControl on a Windows machine.
+
+1. Go to [Releases](../../releases/latest) and download
+   `NoteControl-<version>.zip`.
+2. Extract anywhere (e.g. your Downloads folder).
+3. Open an **elevated PowerShell** (right-click PowerShell →
+   *Run as administrator*) and run:
+   ```powershell
+   cd path\to\extracted\NoteControl-<version>
+   .\installer\install.ps1
+   ```
+4. The installer:
+   - Copies binaries to `C:\Program Files\NoteControl\`
+   - Registers `NoteControlServer` as a Windows service (auto-start)
+   - Adds the tray to HKLM Run (launches at login for any user)
+   - Creates an Add/Remove Programs entry
+   - Probes `http://127.0.0.1:8080/health` to verify the service is up
+5. Open http://localhost:8080 in your browser. Default login is
+   created from the tray (right-click tray icon → Users…).
+
+### Updating
+
+Once installed, the tray polls GitHub Releases once per day. When
+a newer version is published, you'll see *"Update available: X.Y.Z"*
+in the tray menu. Click it → release notes + Install button →
+elevated PowerShell runs the new installer → service restarts →
+new tray launches. About 30 seconds end-to-end, no reboot needed.
+
+You can also re-run a fresh `installer\install.ps1` from a newer
+release zip; the installer detects the existing install and
+performs an in-place upgrade. Vault data under
+`C:\ProgramData\NoteControl\` is never touched by the installer.
+
+### Uninstall
+
+- Add/Remove Programs → NoteControl → Uninstall, **OR**
+- Elevated PowerShell: `& "C:\Program Files\NoteControl\uninstall.ps1"`
+
+By default, vault data is preserved. Pass `-RemoveData` to also
+delete `C:\ProgramData\NoteControl\` (you'll be asked to type
+"DELETE" to confirm).
+
+---
+
+## Build from source
+
+You'll need:
+
+- Windows 10/11
+- Visual Studio 2022 with the *.NET desktop development* and
+  *ASP.NET and web development* workloads
+- .NET 8 SDK (comes with VS2022)
+- Node.js 20+ and npm
+
+Then:
 
 ```powershell
-# From the repo root, in a normal PowerShell:
+git clone https://github.com/<your-fork>/NoteControl.git
+cd NoteControl
+git submodule update --init --recursive  # if any (currently none)
+```
+
+Open `NoteControl.sln` in Visual Studio. The four projects are:
+
+| Project | What it does |
+|---------|--------------|
+| `NoteControl.Server` | The ASP.NET Core 8 server. F5 to run. |
+| `NoteControl.Tray`   | The WPF tray. Set as startup project alongside the server for full local testing. |
+| `NoteControl.Shared` | DTOs shared between server and tray. |
+| `NoteControl.Tests`  | xUnit tests (server-side). |
+
+The frontend is a separate npm project; see
+[`src/NoteControl.Frontend/README.md`](src/NoteControl.Frontend/README.md)
+for its dev workflow.
+
+### Producing a release zip
+
+From the repo root, in PowerShell:
+
+```powershell
 .\publish.ps1 -Version 0.1.0 -Zip
 ```
 
-Then in an **elevated** PowerShell:
+This builds the frontend, publishes the server (self-contained
+win-x64) with the frontend inlined into `wwwroot/`, publishes the
+tray, copies the installer scripts, and produces
+`dist\NoteControl-0.1.0.zip`. Upload that as a release asset on
+GitHub and the in-app updater will pick it up.
 
-```powershell
-cd .\dist\NoteControl-0.1.0\
-.\installer\install.ps1
+See [`docs/NoteControl-Spec.md`](docs/NoteControl-Spec.md) for the
+full design document, and [`CHANGELOG.md`](CHANGELOG.md) for
+feature history.
+
+---
+
+## Where things live on disk
+
+| Path | What's there |
+|------|--------------|
+| `C:\Program Files\NoteControl\` | Binaries (server, tray, installer scripts) |
+| `C:\ProgramData\NoteControl\NotesData\` | Vault folders. **This is your data — back this up.** |
+| `C:\ProgramData\NoteControl\NotesData\users\<name>\<vault>\` | A user's personal vault. |
+| `C:\ProgramData\NoteControl\NotesData\shared\<vault>\` | Shared vaults across users. |
+| `C:\ProgramData\NoteControl\NotesData\.server\` | Server state: db, CSRF key, tray.token, server.url |
+| `C:\ProgramData\NoteControl\logs\` | Daily Serilog files |
+
+Inside each vault:
+
+```
+MyVault/
+├── note-at-root.md
+├── note-at-root.assets/
+│   └── pasted-image.png
+├── Subfolder/
+│   └── another-note.md
+└── .notesapp/
+    ├── index.db                 (per-vault search index, regenerable)
+    ├── templates/
+    ├── trash/                   (deleted notes, kept for recovery)
+    ├── startpage.json           (RSS blocks + task areas)
+    └── config.json              (optional per-vault config)
 ```
 
-After it finishes:
-- `services.msc` shows `NoteControlServer` as Running.
-- `Get-Process NoteControl.Tray` shows the tray running.
-- Tray icon visible by the clock.
-- `Add/Remove Programs` lists "NoteControl 0.1.0".
-- Browser at `http://localhost:8080` shows the app.
+A backup is `xcopy MyVault MyBackup /e`. Restore is the reverse.
+The `.notesapp/index.db` is rebuildable from the markdown files —
+deleting it triggers a full re-index on next vault open.
 
-To uninstall:
+---
 
-```powershell
-# Either:
-& "C:\Program Files\NoteControl\uninstall.ps1"
-# Or via the GUI (Add/Remove Programs → NoteControl → Uninstall).
-```
+## Caveats and known limitations
 
-### B. Test in-place upgrade
+- **Project maturity.** Actively developed, tested by one person.
+  Solid for personal use, but not battle-tested across many
+  machines. Bug reports are welcome via GitHub Issues.
+- **Windows-only.** Server, tray, and installer all assume Windows.
+  No plans for cross-platform.
+- **Desktop-first UI.** The frontend works on phones but isn't
+  tuned for touch. Keyboard + mouse is the design target.
+- **Single-machine deployment.** No cluster mode, no shared storage,
+  no replication. One Windows host runs the server; clients are
+  browsers on the LAN.
+- **HTTPS via Caddy.** The server itself only speaks HTTP. For
+  HTTPS / Let's Encrypt, drop a Caddy reverse proxy in front (see
+  [`deploy/`](deploy/)).
+- **Self-signed code.** The installer scripts and exes aren't code-
+  signed. Windows SmartScreen will warn on first run. Expected for
+  a free, self-hosted app — you wrote (or read) the scripts, so
+  trust them on that basis.
 
-After step A succeeded, change something trivial, bump version,
-and re-run install:
+---
 
-```powershell
-.\publish.ps1 -Version 0.1.1 -Zip
-cd .\dist\NoteControl-0.1.1\
-.\installer\install.ps1
-```
+## License
 
-The installer should print "Detected existing install -- will
-perform in-place upgrade.", stop the service + tray, replace
-files, restart. Notes data in ProgramData stays untouched.
+<!--
+    If you picked MIT (the default for "I have no preference"):
+      keep this section. Add a LICENSE file with the MIT text.
+    If you picked something else, replace this paragraph and the
+    LICENSE file accordingly.
+-->
+MIT — see [`LICENSE`](LICENSE).
 
-### C. Test data preservation on uninstall
+---
 
-```powershell
-& "C:\Program Files\NoteControl\uninstall.ps1"
-# (No -RemoveData)
-```
+## Project history
 
-Verify `C:\ProgramData\NoteControl\NotesData\` still exists with
-your vaults intact. Re-installing should pick them right back up.
-
-## Honest caveats
-
-- **Couldn't run-test the PowerShell from this container.** Manual
-  review only. Test on a snapshot/VM first if you can — installers
-  on real Windows always have surprises. Most likely failure points:
-  the `sc.exe` invocations (PowerShell + native exe + paths with
-  spaces is a notorious combo) and the `Start-Process` of the tray
-  inheriting an elevated token. I used the args-array form for sc.exe
-  precisely because it's the most reliable; if there's still an issue
-  it'll be a quoting one and probably easy to fix.
-
-- **Assumes default port 8080 for the post-install health probe.**
-  If you've already set a custom port in `Storage:DataRoot/.server/config.json`
-  before the upgrade, the probe will fail (server is responding on
-  the right port, just not 8080). Service is still installed correctly;
-  just the probe message is misleading. Fixable later by reading
-  `{DataRoot}\.server\server.url` after Kestrel binds — but for a
-  fresh install the default is the right answer.
-
-- **No code signing.** Windows Defender SmartScreen will probably
-  warn on the first run ("This script is from an untrusted source").
-  For a self-hosted single-user install this is fine — you wrote
-  it. Code signing is a real cost (~$200/yr for a cert) and only
-  matters if you redistribute publicly. Mention if/when you decide
-  to sign and I'll add the signing step to publish.ps1.
-
-- **Service runs as LocalSystem.** Per your decision in the
-  prep convo. This is the same identity Ship 38 assumed. Maximum
-  privileges; in exchange, no permission headaches around
-  `C:\ProgramData\NoteControl\`. If you ever want to lock this
-  down to NetworkService or a dedicated account, add `obj=` and
-  `password=` to the sc.exe args and grant the account write on
-  the data root.
-
-- **HKLM Run launches tray for every user that logs in.** If you
-  have multiple Windows users on the box, each one gets a tray
-  on login. If only one ever logs in, this is invisible.
-  Per-user: change `HKLM` to `HKCU` in install.ps1, but then the
-  installer can only set up the tray for the user running the
-  install. HKLM is the cleaner default.
-
-- **Self-deleting uninstaller leaves its own .ps1 file.**
-  Documented in the uninstall section above. The folder
-  `C:\Program Files\NoteControl\` is left in place containing
-  just `uninstall.ps1` and `install.log`. User can manually
-  delete after the script exits, or wait until next install.
-
-- **No rollback if install fails midway.** If the service registers
-  but the health probe fails, you have a working binary install
-  but a misconfigured server. The error message points at the
-  log directory. Rolling back would require snapshotting the
-  pre-install state, which is significantly more code. The
-  probability of partial failure is low for a script with this
-  shape.
-
-## What didn't change
-
-- C# code (server, tray).
-- Frontend.
-- DataRoot location, config layering, anything about the running
-  app's behaviour.
-
-## Next from the queue
-
-- **Ship 49:** Tray "Check for updates" feature. Polls GitHub
-  Releases API, shows "Update available" notification, downloads
-  the new `NoteControl-{version}.zip`, extracts, runs
-  `installer\install.ps1` with elevation. Closes the loop with
-  this ship.
-- **Ship 50:** GitHub Actions workflow for tag-triggered releases
-  (auto build + auto upload to a Release on `git push --tags`).
-  Optional polish; you can do releases manually until then.
-- And the older queue: tray status reflects real server state,
-  RSS polish, ℹ️ disable on Startpage.
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-feature ship history.
+The full design document is in [`docs/NoteControl-Spec.md`](docs/NoteControl-Spec.md).

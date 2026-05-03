@@ -29,10 +29,10 @@ internal static class UpdateConfig
     /// the tray). So shipping with the placeholder is safe — the
     /// updater is just a no-op until you fix it.
     /// </summary>
-    public const string Owner = "REPLACE_ME_GITHUB_OWNER";
+    public const string Owner = "slqdk";
 
     /// <summary>Repository name. See note on Owner about the placeholder.</summary>
-    public const string Repo = "REPLACE_ME_GITHUB_REPO";
+    public const string Repo = "NoteControl";
 
     /// <summary>
     /// User-Agent string sent to api.github.com. GitHub rejects
