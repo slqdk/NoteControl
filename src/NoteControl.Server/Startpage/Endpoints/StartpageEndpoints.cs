@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using NoteControl.Server.Startpage.Services;
 using NoteControl.Server.Vaults;
 using NoteControl.Shared.Startpage;
@@ -62,23 +64,101 @@ public static class StartpageEndpoints
         }
     }
 
+    /// <summary>
+    /// Ship 77: instrumented version. Reads the body as a raw stream,
+    /// logs it to the server log, then deserializes manually with a
+    /// try/catch so any binding exception ends up in the log too.
+    /// Pre-Ship-77 the framework's automatic body-binding was failing
+    /// with a 400 + empty body and there was no logged exception
+    /// because the failure was happening before our endpoint code ran.
+    ///
+    /// Once we identify the cause from the streaming log, this can
+    /// be reverted to the simpler `StartpageConfigDto config` body
+    /// parameter — the manual binding has the same end result, just
+    /// noisier on the wire.
+    /// </summary>
     private static async Task<IResult> SaveConfigAsync(
         Guid vaultId,
-        StartpageConfigDto config,
+        HttpContext http,
         IStartpageConfigService configs,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var log = loggerFactory.CreateLogger("StartpageSaveDiag");
+
+        // Read the body manually so we can log it. The default minimal-API
+        // body binding turns failures into 400+empty-body responses BEFORE
+        // our handler runs, so we never see why.
+        string raw;
+        using (var reader = new StreamReader(http.Request.Body))
+        {
+            raw = await reader.ReadToEndAsync(ct);
+        }
+        log.LogInformation(
+            "[Ship77 diag] Received PUT /startpage/config body ({Bytes} bytes) for vault {VaultId}: {Body}",
+            raw.Length,
+            vaultId,
+            raw);
+
+        StartpageConfigDto? config;
+        try
+        {
+            // Match the casing/policy ASP.NET Core minimal APIs use
+            // by default (Web defaults — camelCase, case-insensitive).
+            var jsonOpts = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            config = JsonSerializer.Deserialize<StartpageConfigDto>(raw, jsonOpts);
+        }
+        catch (JsonException ex)
+        {
+            log.LogError(ex,
+                "[Ship77 diag] JsonException deserializing PUT /startpage/config body for vault {VaultId}. Body was: {Body}",
+                vaultId, raw);
+            return Results.Problem(
+                statusCode: 400,
+                title: "Could not parse startpage config body.",
+                detail: ex.Message);
+        }
+        catch (NotSupportedException ex)
+        {
+            log.LogError(ex,
+                "[Ship77 diag] NotSupportedException deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
+                vaultId, raw);
+            return Results.Problem(
+                statusCode: 400,
+                title: "Unsupported type while deserializing.",
+                detail: ex.Message);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex,
+                "[Ship77 diag] Unexpected exception deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
+                vaultId, raw);
+            return Results.Problem(
+                statusCode: 500,
+                title: "Unexpected error while deserializing.",
+                detail: ex.Message);
+        }
+
         if (config is null)
         {
+            log.LogWarning(
+                "[Ship77 diag] Body deserialized to null for vault {VaultId}. Raw body: {Body}",
+                vaultId, raw);
             return Results.Problem(statusCode: 400, title: "Body required.");
         }
         try
         {
             await configs.SaveAsync(vaultId, config, ct);
+            log.LogInformation(
+                "[Ship77 diag] Save succeeded for vault {VaultId} (blocks={Blocks}, taskAreas={TaskAreas}, links={Links})",
+                vaultId, config.Blocks?.Count, config.TaskAreas?.Count, config.Links?.Count);
             return Results.NoContent();
         }
         catch (StartpageException ex)
         {
+            log.LogError(ex,
+                "[Ship77 diag] StartpageException during save for vault {VaultId}",
+                vaultId);
             return Results.Problem(
                 title: "Could not save startpage config",
                 detail: ex.Message,
