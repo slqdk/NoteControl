@@ -84,3 +84,6 @@ appsettings.Local.json
 
 # Server dev data — test vaults with real notes/screenshots
 src/NoteControl.Server/dev-data/
+src/NoteControl.Frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
+*.tsbuildinfo
