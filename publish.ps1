@@ -22,6 +22,9 @@
       tray\                         Self-contained tray
         NoteControl.Tray.exe
         ...
+      installer\                    Install / uninstall PowerShell scripts
+        install.ps1
+        uninstall.ps1
       VERSION.txt                   Just the version string + git SHA
 
   Optionally produces dist\NoteControl-<Version>.zip alongside
@@ -350,6 +353,24 @@ if (-not $SkipTray) {
     Write-Host "Skipping tray publish (-SkipTray)" -ForegroundColor Yellow
     Write-Host ""
 }
+
+# ---------------------------------------------------------------
+# Installer scripts.
+# Copy installer\install.ps1 and installer\uninstall.ps1 from the
+# repo into dist\NoteControl-<Version>\installer\ so the user can
+# run them directly from the extracted zip. Without this copy the
+# zip would have no entry point -- README + tray's update flow both
+# expect installer\install.ps1 inside the zip.
+# ---------------------------------------------------------------
+$InstallerSrc = Join-Path $RepoRoot "installer"
+$InstallerOut = Join-Path $DistDir "installer"
+if (-not (Test-Path $InstallerSrc)) {
+    throw "installer\ folder missing at repo root: $InstallerSrc"
+}
+Write-Host "Copying installer scripts..." -ForegroundColor White
+New-Item -ItemType Directory -Path $InstallerOut | Out-Null
+Copy-Item -Path (Join-Path $InstallerSrc "*") -Destination $InstallerOut -Recurse -Force
+Write-Host ""
 
 # ---------------------------------------------------------------
 # VERSION.txt -- useful both for the installer and for "which
