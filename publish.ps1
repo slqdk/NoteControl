@@ -413,18 +413,33 @@ if ($Release) {
         Pop-Location
     }
 
-    # Build the gh release create command. --target HEAD makes
-    # gh use the current commit even if there's a slight race
-    # (someone pushed to master between our push and now).
-    # --notes "" intentionally creates a release with an empty
-    # body -- per the ship 57 design choice, you edit on
-    # github.com afterwards if you want to add notes.
+    # Resolve HEAD to an explicit commit SHA. `gh release create
+    # --target` accepts a branch name or a commit SHA, but NOT
+    # the literal "HEAD" -- it shells out to git which doesn't
+    # know what HEAD means in gh's context. Pinning to the SHA
+    # also protects against the (rare) race where someone else
+    # pushes to master between our tag push and the release
+    # create.
+    Push-Location $RepoRoot
+    try {
+        $headSha = (& git rev-parse HEAD).Trim()
+    } finally {
+        Pop-Location
+    }
+    if ([string]::IsNullOrWhiteSpace($headSha)) {
+        throw "Could not resolve HEAD to a commit SHA."
+    }
+
+    # Build the gh release create command. --notes "" intentionally
+    # creates a release with an empty body -- per the ship 57
+    # design choice, you edit on github.com afterwards if you want
+    # to add notes.
     $ghArgs = @(
         "release", "create", "v$Version",
         $ZipPath,
         "--title", "Release $Version",
         "--notes", "",
-        "--target", "HEAD"
+        "--target", $headSha
     )
     if ($Prerelease) { $ghArgs += "--prerelease" }
 
