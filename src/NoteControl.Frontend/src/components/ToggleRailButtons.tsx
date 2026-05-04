@@ -40,13 +40,26 @@ export interface ToggleRailButtonsProps {
    * via useTreeAppearance(); we just read + dispatch.
    */
   treeAppearance: TreeAppearance;
+  /**
+   * Ship 70: which subset of buttons this instance renders.
+   *   - "toggles" → 📁 ℹ️ pair only (default; lives next to search)
+   *   - "settings" → ⚙️ button + popover (lives at the right edge,
+   *      next to the account menu, after Ship 70)
+   *
+   * Both slots accept the same props because the cog popover wants
+   * variant + treeAppearance, and the toggle pair conceptually
+   * belongs to the same "view controls" group. Splitting the props
+   * into two interfaces would just mean passing the same data
+   * twice from VaultLayout. Default is "toggles" for backwards
+   * compatibility with any caller that doesn't pass slot.
+   */
+  slot?: 'toggles' | 'settings';
 }
 
 /**
- * Three little buttons that live in the TopBar:
- *   - 📁 toggle tree rail
- *   - ℹ️ toggle properties rail
- *   - ⚙️ open settings popover
+ * View-control buttons that live in the TopBar:
+ *   - slot="toggles":  📁 toggle tree rail, ℹ️ toggle properties rail
+ *   - slot="settings": ⚙️ open settings popover
  *
  * The settings popover hosts:
  *   - tree style picker (compact / comfortable)
@@ -77,6 +90,7 @@ export function ToggleRailButtons({
   variant,
   onVariantChange,
   treeAppearance,
+  slot = 'toggles',
 }: ToggleRailButtonsProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -212,26 +226,15 @@ export function ToggleRailButtons({
     }
   }
 
-  return (
-    <div className="nc-toggles">
-      <button
-        type="button"
-        className={`nc-toggle ${treeVisible ? 'nc-toggle-on' : ''}`}
-        onClick={onToggleTree}
-        title={treeVisible ? 'Hide folder tree' : 'Show folder tree'}
-        aria-pressed={treeVisible}
-      >
-        📁
-      </button>
-      <button
-        type="button"
-        className={`nc-toggle ${propsVisible ? 'nc-toggle-on' : ''}`}
-        onClick={onToggleProps}
-        title={propsVisible ? 'Hide properties panel' : 'Show properties panel'}
-        aria-pressed={propsVisible}
-      >
-        ℹ️
-      </button>
+  // Ship 70: render only the slice the caller asked for. Both
+  // slots share the state above (cheap; the only state that
+  // matters for "settings" is unused when slot="toggles" but
+  // doesn't hurt). Keeping the component unified means the
+  // popover content stays in one place — splitting it across
+  // two files would mean migrating ~300 lines of useState +
+  // commit handlers along with it.
+  if (slot === 'settings') {
+    return (
       <div ref={pickerRef} className="nc-variant-picker">
         <button
           type="button"
@@ -548,6 +551,32 @@ export function ToggleRailButtons({
           </div>
         )}
       </div>
+    );
+  }
+
+  // Default slot: 📁 + ℹ️ pair. Sits next to the search box in
+  // the topbar, separate from the settings cog (which now lives
+  // next to the account menu on the right edge).
+  return (
+    <div className="nc-toggles">
+      <button
+        type="button"
+        className={`nc-toggle ${treeVisible ? 'nc-toggle-on' : ''}`}
+        onClick={onToggleTree}
+        title={treeVisible ? 'Hide folder tree' : 'Show folder tree'}
+        aria-pressed={treeVisible}
+      >
+        📁
+      </button>
+      <button
+        type="button"
+        className={`nc-toggle ${propsVisible ? 'nc-toggle-on' : ''}`}
+        onClick={onToggleProps}
+        title={propsVisible ? 'Hide properties panel' : 'Show properties panel'}
+        aria-pressed={propsVisible}
+      >
+        ℹ️
+      </button>
     </div>
   );
 }

@@ -677,6 +677,25 @@ export function VaultLayout() {
         vault={vault ?? undefined}
         rightExtras={
           <ToggleRailButtons
+            slot="toggles"
+            treeVisible={layout.treeVisible}
+            propsVisible={layout.propsVisible}
+            onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
+            onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
+            variant={variant}
+            onVariantChange={setVariant}
+            treeAppearance={treeAppearance}
+          />
+        }
+        rightSettings={
+          // Ship 70: settings cog moved to the right of the account
+          // menu. Same component instance, just rendering its
+          // "settings" slot. The duplicated prop list is intentional
+          // (variant + treeAppearance are owned by VaultLayout, so
+          // both slot instances need them) — it's the cost of
+          // keeping the popover state consolidated.
+          <ToggleRailButtons
+            slot="settings"
             treeVisible={layout.treeVisible}
             propsVisible={layout.propsVisible}
             onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}

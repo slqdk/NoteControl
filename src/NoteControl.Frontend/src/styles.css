@@ -2370,6 +2370,60 @@ body.nc-dragging * {
   padding: 4px;
   z-index: 200;
 }
+
+/* Ship 70: account dropdown. Smaller than the settings popover
+   because it currently only holds username + sign-out, but uses
+   the same visual language (background, border, shadow) so the
+   topbar feels coherent. Will grow as more menu items get added.
+   Right-anchored like the settings popover so it stays inside
+   the viewport even on narrow windows. */
+.nc-account-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+  min-width: 180px;
+  padding: 4px;
+  z-index: 200;
+}
+.nc-account-username {
+  /* Username header at the top of the dropdown. Muted, small,
+     non-interactive — visually distinct from the click targets
+     below it. text-overflow ellipsis handles freakishly long
+     usernames without busting the popover width. */
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  border-bottom: 1px solid var(--nc-border);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nc-account-item {
+  /* Generic menu row. Same visual language as Notion / VS Code
+     menus: full-width clickable area, hover background, no
+     visible button chrome. Future menu items (preferences,
+     theme, etc.) reuse this class. */
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: transparent;
+  border: 0;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-account-item:hover {
+  background: var(--nc-bg-elev-2);
+}
+
 .nc-settings-section {
   padding: 4px 4px 8px;
 }
