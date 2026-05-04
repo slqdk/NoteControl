@@ -505,19 +505,17 @@ public sealed class NoteExportService : INoteExportService
             // font/size.
             ApplyDocumentDefaults(mainPart, fontFamily, halfPoints);
 
-            // A4 page + 1-inch margins.
-            ApplyPageSetup(mainPart);
+            // Ship 69: build a real Word page header (HeaderPart)
+            // that Word repeats on every page. The relationship id
+            // is fed into the section properties below as a
+            // HeaderReference so this single header applies to the
+            // whole document. Pre-Ship-69 the title/version table
+            // lived inline in the body, so it only appeared on
+            // page 1.
+            var headerRelId = BuildHeaderPart(mainPart, title, fm.Version, fontFamily);
 
-            // Ship 68: header line — title left, version right, on a
-            // single line. Built as a 2-cell borderless table because
-            // a paragraph with a right-aligned tab stop is fragile
-            // across Word/LibreOffice/Pages, while a table renders
-            // identically. The header is appended BEFORE ParseBody
-            // so it ends up as the first body child, ahead of any
-            // user content. Style is intentionally subdued (10pt,
-            // not bold, default font) — it's a reference header,
-            // not a title page.
-            AppendHeaderRow(mainPart, title, fm.Version, fontFamily);
+            // A4 page + 1-inch margins + header reference.
+            ApplyPageSetup(mainPart, headerRelId);
 
             // Body conversion. We wrap in try/catch so a single
             // unparseable element doesn't sink the export — log
@@ -604,18 +602,37 @@ public sealed class NoteExportService : INoteExportService
         stylesPart.Styles.Save();
     }
 
-    private static void ApplyPageSetup(MainDocumentPart mainPart)
+    /// <summary>
+    /// Append a SectionProperties block at the end of the body so it
+    /// applies to the whole document. Sets A4 page + 1-inch margins
+    /// + (Ship 69) a HeaderReference pointing at the previously-built
+    /// HeaderPart, which is what makes Word repeat the title/version
+    /// header on every page.
+    ///
+    /// Order inside SectionProperties matters: HeaderReference is
+    /// part of the EG_HdrFtrReferences group, which the schema
+    /// places before pgSz / pgMar / etc. Constructing the ctor with
+    /// HeaderReference first satisfies that.
+    /// </summary>
+    private static void ApplyPageSetup(MainDocumentPart mainPart, string headerRelId)
     {
-        // Append a SectionProperties at the end of the body. Word's
-        // schema requires this to live as the last child of <body>
-        // for it to apply to the whole doc.
-        //
         // Defensive null handling: nullable analysis can't see that
         // BuildDocxAsync just assigned mainPart.Document above, so
         // we re-establish the invariant here. Same for Body.
         var doc = mainPart.Document ??= new DocumentFormat.OpenXml.Wordprocessing.Document();
         var body = doc.Body ??= new Body();
         var sectPr = new SectionProperties(
+            // Ship 69: HeaderReference must come before pgSz/pgMar
+            // per the wordprocessingML schema. Type=Default means
+            // "use this header on every page" — which is what we
+            // want, since we don't define separate Title-page or
+            // Even/Odd headers. Word interprets a single Default
+            // header reference as "same on every page".
+            new HeaderReference
+            {
+                Type = HeaderFooterValues.Default,
+                Id = headerRelId,
+            },
             new PageSize
             {
                 Width = (uint)A4WidthTwips,
@@ -628,7 +645,7 @@ public sealed class NoteExportService : INoteExportService
                 Right = (uint)OneInchTwips,
                 Bottom = OneInchTwips,
                 Left = (uint)OneInchTwips,
-                Header = 720,  // 0.5 inch
+                Header = 720,  // 0.5 inch from page top to header
                 Footer = 720,
                 Gutter = 0,
             });
@@ -672,10 +689,17 @@ public sealed class NoteExportService : INoteExportService
     }
 
     /// <summary>
-    /// Ship 68: build a borderless 2-cell table that puts the title
-    /// on the left and the version on the right, on a single line.
-    /// Appended as the first child of the document body so it sits
-    /// at the top of page 1 ahead of any markdown content.
+    /// Ship 69: build a real Word page header (HeaderPart) containing
+    /// a borderless 2-cell table — title left, version right — and
+    /// return its relationship id so the caller can reference it
+    /// from the section properties.
+    ///
+    /// In OOXML, a header lives in its own part (a separate XML
+    /// document, related to the main document by a relationship).
+    /// The main document's <c>sectPr</c> references the header by
+    /// rId, and Word renders the referenced header on every page
+    /// of the section (when only Default is referenced; First and
+    /// Even-page headers are separate slots we don't use).
     ///
     /// Why a table and not a tab-stop paragraph: tab-stop alignment
     /// with a right-aligned tab to the page edge is fragile across
@@ -685,25 +709,22 @@ public sealed class NoteExportService : INoteExportService
     /// with width=50%pct + jc=right renders identically everywhere.
     ///
     /// Style intent: small (10 pt half-points = 20), not bold,
-    /// default font family. Just a reference header; the body
-    /// content is the document.
+    /// default font family. Reference metadata, not a title page.
     /// </summary>
-    private static void AppendHeaderRow(
+    private static string BuildHeaderPart(
         MainDocumentPart mainPart,
         string title,
         string version,
         string fontFamily)
     {
-        // Word half-point sizes; 20 = 10 pt. Smaller than the body
-        // default (22 = 11 pt) so the header reads as metadata, not
-        // content. Bold deliberately omitted as per user's spec.
+        // 10pt in half-points. Smaller than body's 11pt default so
+        // the header reads as metadata.
         const string HeaderHalfPoints = "20";
 
-        // Run properties shared by both cells. RunFonts pinned to
-        // the same family as the document defaults so the header
-        // doesn't visually drift if the user picked an unusual
-        // body font (Cambria default; per-note Font override
-        // possible). FontSize forces the smaller header size.
+        // Local helper builds one borderless cell with a single
+        // paragraph + run of styled text and the requested
+        // justification. RunFonts pinned to the same family as the
+        // doc default so a per-note Font override carries through.
         static OpenXmlElement BuildCell(string text, string fontFamily, JustificationValues justify)
         {
             var runProps = new RunProperties(
@@ -716,15 +737,14 @@ public sealed class NoteExportService : INoteExportService
                 new FontSize { Val = HeaderHalfPoints },
                 new FontSizeComplexScript { Val = HeaderHalfPoints });
 
-            // Title and version come from already-trimmed sources, so
-            // we don't need xml:space="preserve" handling on the run.
+            // Title and version come from already-trimmed sources
+            // so we don't need xml:space="preserve" handling.
             var run = new Run(runProps, new Text(text));
 
             var paraProps = new ParagraphProperties(
                 new Justification { Val = justify },
-                // Match the line-height with the rest of the
-                // document so the header doesn't get an oversized
-                // line gap from the table-cell default.
+                // Tight line-height — header is metadata; no extra
+                // breathing room.
                 new SpacingBetweenLines
                 {
                     After = "0",
@@ -732,7 +752,7 @@ public sealed class NoteExportService : INoteExportService
                     LineRule = LineSpacingRuleValues.Auto,
                 });
 
-            // No cell borders; cell width is set in the parent.
+            // Borderless cell.
             var cellProps = new TableCellProperties(
                 new TableCellBorders(
                     new TopBorder    { Val = BorderValues.Nil },
@@ -746,8 +766,9 @@ public sealed class NoteExportService : INoteExportService
         var leftCell  = BuildCell(title,   fontFamily, JustificationValues.Left);
         var rightCell = BuildCell(version, fontFamily, JustificationValues.Right);
 
-        // Two-column grid, equal width (50% each via pct=2500 of
-        // 5000 = 100%). Borderless table-level too.
+        // 2-column grid, equal width (50% each = 5000 pct units
+        // total = 100%; each column = 4500 twips, which is purely
+        // a hint — pct width on the table itself is what governs).
         var tblProps = new TableProperties(
             new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
             new TableBorders(
@@ -775,10 +796,14 @@ public sealed class NoteExportService : INoteExportService
         var row = new TableRow(leftCell, rightCell);
         var table = new Table(tblProps, grid, row);
 
-        // A blank paragraph after the header gives a small gap
-        // before body content starts. Without this the next
-        // paragraph hugs the table top edge.
-        var spacer = new Paragraph(
+        // OOXML quirk: a Header (or any block container) shouldn't
+        // end with a Table — Word is lenient but some viewers
+        // (LibreOffice especially) render the trailing area
+        // strangely. Append an empty paragraph after the table so
+        // the header part ends on a paragraph, which is the
+        // canonical block. The empty paragraph occupies negligible
+        // space in the header zone.
+        var trailingPara = new Paragraph(
             new ParagraphProperties(
                 new SpacingBetweenLines
                 {
@@ -787,14 +812,13 @@ public sealed class NoteExportService : INoteExportService
                     LineRule = LineSpacingRuleValues.Auto,
                 }));
 
-        // BuildDocxAsync assigns mainPart.Document + body before
-        // calling us. Use the same defensive ??= idiom that
-        // ApplyPageSetup uses so the compiler's nullability flow
-        // is happy without needing `!` on a reference chain.
-        var doc = mainPart.Document ??= new DocumentFormat.OpenXml.Wordprocessing.Document();
-        var body = doc.Body ??= new Body();
-        body.AppendChild(table);
-        body.AppendChild(spacer);
+        // Add the part, populate it, return its relationship id.
+        // AddNewPart creates the part and the relationship in one
+        // call; GetIdOfPart looks up the rId we need to feed into
+        // the HeaderReference back in the section properties.
+        var headerPart = mainPart.AddNewPart<HeaderPart>();
+        headerPart.Header = new Header(table, trailingPara);
+        return mainPart.GetIdOfPart(headerPart);
     }
 
     /// <summary>
