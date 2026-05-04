@@ -41,11 +41,11 @@ The `/divider` command inserts a horizontal line:
 
 ## Tables
 
-| Component | Type | Notes |
+| Service | Type | Notes |
 |---|---|---|
-| AX5000 | Servo drive | Beckhoff EtherCAT |
-| EL7211 | Servo terminal | Up to 2.8A |
-| EL2008 | DO terminal | 8 × 24V digital |
+| auth-api | ASP.NET Core | Issues session cookies + CSRF tokens |
+| notes-api | ASP.NET Core | Reads/writes markdown via the file system |
+| ui-spa   | React + Vite | Talks to both APIs over `/api/*` |
 
 ## Callouts (5 variants)
 
@@ -85,7 +85,7 @@ You can have **bold**, *italic*, `inline code`, [links to other notes](Start%20h
 
 ## Code blocks
 
-See **Examples → Code blocks** for full examples in TypeScript, Python, and Structured Text.
+See **Examples → Code blocks** for full examples in C#, TypeScript, Python, and Structured Text.
 
 ## Images
 

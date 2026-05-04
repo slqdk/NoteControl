@@ -12,18 +12,18 @@ locked: false
 
 | Project | Status | Owner | Due |
 |---|---|---|---|
-| Migrate AX5000 axes | In progress | Søren | 2026-Q2 |
-| Test EL7211 ramp | Blocked | — | — |
-| Document gear assemblies | Done | Sara | 2026-04-15 |
+| Refactor authentication module | In progress | Søren | 2026-Q2 |
+| Migrate to .NET 9 | Blocked | — | — |
+| Document deployment pipeline | Done | Sara | 2026-04-15 |
 
 A wider table with numeric columns:
 
-| Drive | Voltage | Continuous current | Peak current |
+| Build target | RAM (MB) | Cold start (ms) | Binary (KB) |
 |---|---:|---:|---:|
-| AX5101 | 24 V | 1.5 A | 4.5 A |
-| AX5103 | 24 V | 4.5 A | 9 A |
-| AX5106 | 24 V | 6 A | 12 A |
-| AX5118 | 230 V | 18 A | 36 A |
+| Debug         |  142 | 1820 |  87,400 |
+| Release       |   78 |  610 |  41,200 |
+| Release-AOT   |   42 |   95 |  18,900 |
+| Self-contained|   95 |  720 | 102,800 |
 
 The right-aligned numeric columns are achieved with the standard markdown `|---:|` syntax.
 
@@ -66,10 +66,10 @@ You can mix bullet and numbered lists at different levels:
 
 This isn't a bullet list — it's a separate "task list" item type. The slash menu doesn't currently have a direct entry; type `[ ]` at the start of a line to convert.
 
-- [ ] Order replacement EtherCAT cable
-- [x] Update TwinCAT 3 to 4026
+- [ ] Open PR for the search-pagination fix
+- [x] Update CodeSys runtime to 3.5 SP21
 - [ ] Schedule downtime window with prod
-- [ ] Test failover behaviour
+- [ ] Test failover behaviour after deployment
 
 <div class="nc-callout nc-callout-note" data-variant="note">
 

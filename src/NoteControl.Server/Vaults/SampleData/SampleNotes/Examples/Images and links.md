@@ -57,7 +57,8 @@ Spaces in folder/file names need to be URL-encoded as `%20`.
 External URLs work like regular markdown:
 
 - [Official spec — IEC 61131-3](https://en.wikipedia.org/wiki/IEC_61131-3)
-- [TwinCAT 3 documentation](https://infosys.beckhoff.com/)
+- [CodeSys documentation](https://content.helpme-codesys.com/)
+- [.NET API reference](https://learn.microsoft.com/dotnet/api/)
 
 External links open in a new browser tab.
 
@@ -65,4 +66,4 @@ External links open in a new browser tab.
 
 The `/video` slash command pastes a video tag for `.mp4`, `.webm`, or `.mov` files — same `.assets/` storage as images.
 
-For other binary attachments (PDFs, Excel sheets, ST source `.tsproj`), drop them into the `.assets/` folder manually and link to them with regular markdown link syntax. The browser will offer to download them when clicked.
+For other binary attachments (PDFs, Excel sheets, ST source archives), drop them into the `.assets/` folder manually and link to them with regular markdown link syntax. The browser will offer to download them when clicked.
