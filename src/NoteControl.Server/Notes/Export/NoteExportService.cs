@@ -787,9 +787,12 @@ public sealed class NoteExportService : INoteExportService
                     LineRule = LineSpacingRuleValues.Auto,
                 }));
 
-        // mainPart.Document.Body is non-null because BuildDocxAsync
-        // assigned it before calling us.
-        var body = mainPart.Document.Body!;
+        // BuildDocxAsync assigns mainPart.Document + body before
+        // calling us. Use the same defensive ??= idiom that
+        // ApplyPageSetup uses so the compiler's nullability flow
+        // is happy without needing `!` on a reference chain.
+        var doc = mainPart.Document ??= new DocumentFormat.OpenXml.Wordprocessing.Document();
+        var body = doc.Body ??= new Body();
         body.AppendChild(table);
         body.AppendChild(spacer);
     }

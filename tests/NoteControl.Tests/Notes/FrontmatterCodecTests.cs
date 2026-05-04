@@ -158,4 +158,149 @@ public sealed class FrontmatterCodecTests
         var combined = FrontmatterCodec.Combine(fm, body);
         combined.Should().NotContain("\r");
     }
+
+    // -------------------------------------------------------------
+    // Ship 68: version field
+    // -------------------------------------------------------------
+
+    [Fact]
+    public void Split_backfills_default_version_when_yaml_has_no_version_key()
+    {
+        // Pre-Ship-68 frontmatter: no `version` line. Split should
+        // surface DefaultVersion in fm.Version so the wire DTO and
+        // the Properties panel always see a value.
+        const string input = """
+            ---
+            tags: []
+            locked: false
+            ---
+
+            Body.
+            """;
+        var (fm, _) = FrontmatterCodec.Split(input);
+        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+    }
+
+    [Fact]
+    public void Split_preserves_explicit_version()
+    {
+        // When the YAML has version, we keep it verbatim (after trim).
+        const string input = """
+            ---
+            tags: []
+            locked: false
+            version: 1.2.3-rc1
+            ---
+
+            Body.
+            """;
+        var (fm, _) = FrontmatterCodec.Split(input);
+        fm.Version.Should().Be("1.2.3-rc1");
+    }
+
+    [Fact]
+    public void Split_treats_blank_version_as_default()
+    {
+        // YAML with `version:` (no value) shouldn't end up as empty
+        // string in fm.Version — the post-parse backfill heals it.
+        const string input = """
+            ---
+            tags: []
+            locked: false
+            version:
+            ---
+
+            Body.
+            """;
+        var (fm, _) = FrontmatterCodec.Split(input);
+        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+    }
+
+    [Fact]
+    public void Combine_always_emits_version_key()
+    {
+        // Ship 68 contract: every saved note has `version:` on disk.
+        var fm = new ParsedFrontmatter
+        {
+            Tags = new List<string>(),
+            Locked = false,
+            Version = "v9.1",
+        };
+        var output = FrontmatterCodec.Combine(fm, "Body.");
+        output.Should().Contain("version: v9.1");
+    }
+
+    [Fact]
+    public void Combine_falls_back_to_default_when_version_is_empty()
+    {
+        // Defensive: if a caller hand-builds ParsedFrontmatter with an
+        // empty Version (skipping ApplyUpdate's safety net), the
+        // emitter still writes a sensible value. Avoids `version:`
+        // bare-key in the file.
+        var fm = new ParsedFrontmatter
+        {
+            Tags = new List<string>(),
+            Locked = false,
+            Version = "",
+        };
+        var output = FrontmatterCodec.Combine(fm, "Body.");
+        output.Should().Contain("version: " + FrontmatterCodec.DefaultVersion);
+    }
+
+    [Fact]
+    public void ApplyUpdate_sets_version_when_provided()
+    {
+        var fm = new ParsedFrontmatter();
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "v2.0");
+        fm.Version.Should().Be("v2.0");
+    }
+
+    [Fact]
+    public void ApplyUpdate_resets_to_default_on_empty_version()
+    {
+        // Empty string isn't "delete" for version (unlike Font / FontSize /
+        // Width). It means "reset to v0.0".
+        var fm = new ParsedFrontmatter { Version = "v3.5" };
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "");
+        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+    }
+
+    [Fact]
+    public void ApplyUpdate_leaves_version_alone_when_null()
+    {
+        var fm = new ParsedFrontmatter { Version = "v3.5" };
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: null);
+        fm.Version.Should().Be("v3.5");
+    }
+
+    [Fact]
+    public void ApplyUpdate_backfills_default_when_existing_version_is_empty()
+    {
+        // The "added on first save" backfill: even if the caller didn't
+        // pass newVersion, ApplyUpdate ensures fm.Version is non-empty
+        // by the time it returns. So saving any pre-Ship-68 note
+        // (where fm.Version somehow ended up blank) lands DefaultVersion.
+        var fm = new ParsedFrontmatter { Version = "" };
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null);
+        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+    }
+
+    [Fact]
+    public void ApplyUpdate_trims_version_whitespace()
+    {
+        // Defensive trim — pasted values often have trailing spaces.
+        var fm = new ParsedFrontmatter();
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "  v1.0  ");
+        fm.Version.Should().Be("v1.0");
+    }
 }
