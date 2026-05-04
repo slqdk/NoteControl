@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useOutletContext, useParams } from 'react-router-dom';
 
 import { ApiError, startpageApi } from '../api/client';
@@ -18,25 +18,24 @@ import { newId } from '../util/id';
 /**
  * Per-vault startpage with free-floating blocks.
  *
- * Ship 74 redesign:
- *   - Page-level header ("Startpage — VaultName" h1) removed. The
- *     canvas IS the content. No decoration, no chrome.
- *   - The two old "+ Add RSS" / "+ Add task area" buttons are
- *     replaced with a single "+" button anchored to the top-right
- *     of the canvas. Clicking it opens an inline add panel showing
- *     the three block types: RSS feed, Task area, Links.
- *   - New "Links" block type. Same drag/resize semantics as task
- *     areas; holds up to 10 link entries (title + optional
- *     description + URL), rendered as two-line stacked rows with a
- *     subtle hover background.
+ * Ship 78 update:
+ *   - The in-canvas "+" button + add panel from Ship 74 is GONE.
+ *     The user kept hitting it accidentally because it sat over
+ *     content. The "Widgets+" dropdown lives in the topbar now.
+ *   - StartpagePage listens for `nc:add-startpage-block` window
+ *     events; when one fires, the right add-handler runs. Decouples
+ *     topbar UI from this page's state — no shared context, no
+ *     prop drilling, just a one-way event.
  *
- * Layout / save model unchanged from the previous shape:
+ * Ship 74 baseline (still applies):
+ *   - Page-level header is gone. The canvas IS the content.
+ *   - Three block types: RSS feed, Task area, Links (Ship 74).
  *   - Each block has absolute pixel x/y/width/height stored in
  *     {vault}/.notesapp/startpage.json. No grid.
  *   - useDebouncedSave fires 500ms after the user stops changing
  *     things; per-block edits flow through onChange callbacks.
  *
- * Failure model (unchanged):
+ * Failure model:
  *   - Initial load failure → page-level error banner; user can't
  *     edit (we don't want to overwrite a config we didn't load).
  *   - Save failure → toast/banner; in-memory state still reflects
@@ -46,16 +45,13 @@ import { newId } from '../util/id';
  */
 export function StartpagePage() {
   const { vaultId } = useParams<{ vaultId: string }>();
-  // _vault is no longer used in render (no header to show its name)
-  // but we still pull it from the outlet context so the type check
-  // doesn't drift if the layout shape changes.
+  // Pull the outlet context so the type check doesn't drift if the
+  // layout shape changes; the value isn't used in render directly.
   useOutletContext<VaultLayoutContext>();
 
   const [config, setConfig] = useState<StartpageConfigDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [addPanelOpen, setAddPanelOpen] = useState(false);
-  const addRef = useRef<HTMLDivElement>(null);
 
   // ------------------------------------------------- initial load
   useEffect(() => {
@@ -110,27 +106,6 @@ export function StartpagePage() {
     doSave,
   );
 
-  // ------------------------------------------------- add-panel open/close
-  // Click-outside / Escape close. Same pattern AccountMenu and the
-  // RSS block menus use.
-  useEffect(() => {
-    if (!addPanelOpen) return;
-    function onDocDown(e: MouseEvent) {
-      if (addRef.current && !addRef.current.contains(e.target as Node)) {
-        setAddPanelOpen(false);
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setAddPanelOpen(false);
-    }
-    document.addEventListener('mousedown', onDocDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [addPanelOpen]);
-
   // ------------------------------------------------- mutations
 
   // ----- RSS blocks -----
@@ -171,7 +146,6 @@ export function StartpagePage() {
       };
       return { ...prev, blocks: [...prev.blocks, newBlock] };
     });
-    setAddPanelOpen(false);
   }, []);
 
   // ----- Task areas -----
@@ -211,14 +185,9 @@ export function StartpagePage() {
       };
       return { ...prev, taskAreas: [...prev.taskAreas, newArea] };
     });
-    setAddPanelOpen(false);
   }, []);
 
-  // ----- Link blocks (Ship 74) -----
-  // Same shape as the task-area handlers; acts on the separate
-  // `links` array. Cascade offset is 424px right of RSS blocks so
-  // freshly-added links don't overlap freshly-added blocks of
-  // other types.
+  // ----- Link blocks -----
 
   const updateLinkBlock = useCallback(
     (id: string, patch: Partial<LinkBlockDto>) => {
@@ -253,12 +222,39 @@ export function StartpagePage() {
       };
       return { ...prev, links: [...prev.links, newBlock] };
     });
-    setAddPanelOpen(false);
   }, []);
+
+  // ------------------------------------------------- topbar event bridge
+  // Ship 78: TopBar's Widgets+ dropdown dispatches this event. We
+  // listen and route to the right add-handler. Window event keeps
+  // TopBar/StartpagePage decoupled (no shared context, no prop
+  // drilling). Only one event name, three kinds.
+  useEffect(() => {
+    function onAdd(e: Event) {
+      const detail = (e as CustomEvent<{ kind: string }>).detail;
+      switch (detail?.kind) {
+        case 'rss':
+          addBlock();
+          break;
+        case 'task':
+          addTaskArea();
+          break;
+        case 'links':
+          addLinkBlock();
+          break;
+        default:
+          // Unknown kind — ignore. Defensive in case a future
+          // topbar version emits something we don't recognise.
+          break;
+      }
+    }
+    window.addEventListener('nc:add-startpage-block', onAdd);
+    return () => window.removeEventListener('nc:add-startpage-block', onAdd);
+  }, [addBlock, addTaskArea, addLinkBlock]);
 
   if (!vaultId) return null;
 
-  // Empty state detection: nothing of any type exists yet.
+  // Empty-state detection: nothing of any type exists yet.
   const isEmpty =
     config !== null &&
     config.blocks.length === 0 &&
@@ -276,70 +272,16 @@ export function StartpagePage() {
       ) : config === null ? (
         <p className="nc-empty">Loading…</p>
       ) : (
-        /*
-          Canvas hosts everything. Even when empty, we render the
-          canvas so the floating + button has somewhere to anchor.
-          The empty-state hint is overlaid; the canvas isn't
-          padded around it because that would shift the + button.
-        */
         <div className="nc-startpage-canvas">
           {isEmpty && (
             <div className="nc-empty nc-startpage-empty">
               <p>Nothing here yet.</p>
               <p>
-                Click the <strong>+</strong> in the top-right corner to add a
-                feed reader, task area, or link list.
+                Click <strong>Widgets+</strong> in the topbar to add a feed
+                reader, task area, or link list.
               </p>
             </div>
           )}
-
-          {/*
-            Floating + button. Position: absolute top-right of the
-            canvas. When clicked, expands an inline add panel with
-            one button per block type. Single + is the user's
-            chosen design; the panel is the simplest "menu"
-            possible (three labelled buttons, no nesting).
-          */}
-          <div ref={addRef} className="nc-startpage-add-floating">
-            <button
-              type="button"
-              className="nc-startpage-add-btn"
-              onClick={() => setAddPanelOpen((v) => !v)}
-              title="Add a block"
-              aria-haspopup="menu"
-              aria-expanded={addPanelOpen}
-            >
-              +
-            </button>
-            {addPanelOpen && (
-              <div className="nc-startpage-add-panel" role="menu">
-                <button
-                  type="button"
-                  className="nc-startpage-add-item"
-                  role="menuitem"
-                  onClick={addBlock}
-                >
-                  📡 RSS feed
-                </button>
-                <button
-                  type="button"
-                  className="nc-startpage-add-item"
-                  role="menuitem"
-                  onClick={addTaskArea}
-                >
-                  📌 Task area
-                </button>
-                <button
-                  type="button"
-                  className="nc-startpage-add-item"
-                  role="menuitem"
-                  onClick={addLinkBlock}
-                >
-                  🔗 Links
-                </button>
-              </div>
-            )}
-          </div>
 
           {config.blocks.map((block) => (
             <RssBlock

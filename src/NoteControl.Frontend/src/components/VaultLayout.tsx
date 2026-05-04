@@ -722,7 +722,10 @@ export function VaultLayout() {
                   opens) today's daily note. Idempotent server-side,
                   so spamming this is harmless. Title shows the local
                   date so the user can verify they're about to land
-                  on today's, not yesterday's.
+                  on today's, not yesterday's. Ship 78: text "Daily+"
+                  to match the sibling 📄+ / 📁+ pattern (icon-or-
+                  word + plus glyph) — pre-Ship-78 the lone 📅 emoji
+                  read inconsistent with the other two buttons.
                 */}
                 <button
                   type="button"
@@ -730,7 +733,7 @@ export function VaultLayout() {
                   title={`Today's daily note (${formatLocalDate(new Date())})`}
                   onClick={() => void onOpenDailyNote()}
                 >
-                  📅
+                  Daily+
                 </button>
                 <button
                   type="button"
