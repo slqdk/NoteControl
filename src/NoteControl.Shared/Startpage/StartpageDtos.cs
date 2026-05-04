@@ -12,13 +12,14 @@ namespace NoteControl.Shared.Startpage;
 /// to sane bounds before sending; the server stores them verbatim.
 ///
 /// Backward compatibility note: <see cref="TaskAreas"/> was added
-/// in step 42. Existing files written before step 42 only contain
-/// the <see cref="Blocks"/> field. System.Text.Json fills missing
-/// reference-typed positional record parameters with null, so the
-/// server's StartpageConfigService normalises null → empty list
-/// after deserialising. The TYPE here is non-nullable to keep
-/// downstream code simple; the deserialisation seam is the only
-/// place the temporary-null actually exists.
+/// in step 42, <see cref="Links"/> in Ship 74. Existing files
+/// written before each addition simply lack that field.
+/// System.Text.Json fills missing reference-typed positional record
+/// parameters with null, so the server's StartpageConfigService
+/// normalises null → empty list after deserialising. The TYPE here
+/// is non-nullable to keep downstream code simple; the
+/// deserialisation seam is the only place the temporary-null
+/// actually exists.
 /// </summary>
 public sealed record StartpageConfigDto(
     /// <summary>
@@ -33,7 +34,14 @@ public sealed record StartpageConfigDto(
     /// containers, each holding its own ordered list of sticky
     /// notes. Same identity / sort-on-write semantics as Blocks.
     /// </summary>
-    IReadOnlyList<TaskAreaDto> TaskAreas);
+    IReadOnlyList<TaskAreaDto> TaskAreas,
+    /// <summary>
+    /// All link blocks on the page (Ship 74). Free-floating
+    /// containers, each holding up to 10 link entries (title +
+    /// description + URL). Same identity / sort-on-write semantics
+    /// as Blocks and TaskAreas.
+    /// </summary>
+    IReadOnlyList<LinkBlockDto> Links);
 
 /// <summary>
 /// One RSS block on the startpage. Identity is the (random,
@@ -188,3 +196,76 @@ public sealed record StickyNoteDto(
     /// reduced opacity. Toggle-able from the note's checkbox.
     /// </summary>
     bool Done);
+
+/// <summary>
+/// One free-floating links block on the startpage (Ship 74). Acts
+/// as a labelled container for an ordered list of links — typically
+/// grouped thematically (e.g. "News", "Automation", "Reference"),
+/// with up to 10 entries each. Mirrors <see cref="TaskAreaDto"/>'s
+/// shape: same drag/resize semantics, same id stability rules. The
+/// only differences are the children type (LinkItemDto, not
+/// StickyNoteDto) and the entry cap.
+///
+/// The 10-item cap is enforced client-side (the "+ Add link" button
+/// hides at 10). The server doesn't enforce it — that would be a
+/// hostile breaking change to a valid hand-edit. We round-trip
+/// whatever's in the file.
+/// </summary>
+public sealed record LinkBlockDto(
+    /// <summary>Stable id, generated client-side via crypto.randomUUID().</summary>
+    string Id,
+
+    /// <summary>
+    /// User-given title shown in the block header (e.g. "News",
+    /// "Automation"). May be empty; the client renders a
+    /// placeholder when so.
+    /// </summary>
+    string Title,
+
+    /// <summary>Position from the left edge of the startpage area, in pixels.</summary>
+    int X,
+    /// <summary>Position from the top edge of the startpage area, in pixels.</summary>
+    int Y,
+    /// <summary>Block width in pixels. Clamped client-side to [220, 800].</summary>
+    int Width,
+    /// <summary>Block height in pixels. Clamped client-side to [180, 1200].</summary>
+    int Height,
+
+    /// <summary>
+    /// Links inside this block, in display order. Reordered by drag
+    /// in the UI. Persisted in this exact order. Cap of 10 is
+    /// enforced client-side only (see record summary).
+    /// </summary>
+    IReadOnlyList<LinkItemDto> Items);
+
+/// <summary>
+/// One link entry inside a LinkBlock (Ship 74). Two-line visual:
+/// title (bold), description (smaller, muted) below it. Clicking
+/// anywhere on the entry navigates to <see cref="Url"/> in a new
+/// tab.
+/// </summary>
+public sealed record LinkItemDto(
+    /// <summary>Stable id, generated client-side.</summary>
+    string Id,
+
+    /// <summary>
+    /// Single-line link title (e.g. "DR Nyheder"). Falls back to
+    /// the URL itself when empty, but the field is stored as the
+    /// user typed — empty is a valid stored value.
+    /// </summary>
+    string Title,
+
+    /// <summary>
+    /// Optional one-liner description shown under the title (e.g.
+    /// "Danish public-service news"). Empty is fine — the
+    /// description row simply doesn't render in that case.
+    /// </summary>
+    string Description,
+
+    /// <summary>
+    /// The URL to open. The client validates loosely (must look
+    /// like a URL with a scheme); server treats it as opaque text.
+    /// Empty is allowed for newly-added entries before the user
+    /// types a value.
+    /// </summary>
+    string Url);

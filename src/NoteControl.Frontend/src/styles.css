@@ -2370,60 +2370,6 @@ body.nc-dragging * {
   padding: 4px;
   z-index: 200;
 }
-
-/* Ship 70: account dropdown. Smaller than the settings popover
-   because it currently only holds username + sign-out, but uses
-   the same visual language (background, border, shadow) so the
-   topbar feels coherent. Will grow as more menu items get added.
-   Right-anchored like the settings popover so it stays inside
-   the viewport even on narrow windows. */
-.nc-account-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  background: var(--nc-bg);
-  border: 1px solid var(--nc-border);
-  border-radius: var(--nc-radius);
-  box-shadow: var(--nc-shadow-popover);
-  min-width: 180px;
-  padding: 4px;
-  z-index: 200;
-}
-.nc-account-username {
-  /* Username header at the top of the dropdown. Muted, small,
-     non-interactive — visually distinct from the click targets
-     below it. text-overflow ellipsis handles freakishly long
-     usernames without busting the popover width. */
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--nc-fg-muted);
-  border-bottom: 1px solid var(--nc-border);
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.nc-account-item {
-  /* Generic menu row. Same visual language as Notion / VS Code
-     menus: full-width clickable area, hover background, no
-     visible button chrome. Future menu items (preferences,
-     theme, etc.) reuse this class. */
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--nc-fg);
-  background: transparent;
-  border: 0;
-  border-radius: var(--nc-radius-sm);
-  cursor: pointer;
-}
-.nc-account-item:hover {
-  background: var(--nc-bg-elev-2);
-}
-
 .nc-settings-section {
   padding: 4px 4px 8px;
 }
@@ -3109,4 +3055,307 @@ a.nc-rss-item-title:hover {
 .nc-sticky-note-menu-delete {
   /* Take the full popup width. */
   align-self: stretch;
+}
+
+/* ============================================================
+   Ship 74: floating + button + add panel + links block
+   ============================================================ */
+
+/* Floating + button: top-right of the canvas, anchored absolutely.
+   We do NOT make it position: sticky because the canvas itself
+   already scrolls inside the page; sticky would pin it relative to
+   the page viewport, but the spec says "upper-right corner of the
+   content area". Absolute keeps it tied to the canvas. The button
+   floats above other blocks via z-index. */
+.nc-startpage-add-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 50;
+}
+.nc-startpage-add-btn {
+  /* 32x32 circular button, large + glyph centred. Reuses the
+     general "neutral square button" feel of .nc-toggle but with
+     a more distinct call-to-action shape so it reads as the
+     primary action on the page. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  color: var(--nc-fg);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.nc-startpage-add-btn:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong, var(--nc-border));
+}
+.nc-startpage-add-btn:focus-visible {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 2px;
+}
+
+/* Inline add panel: drops below the + button, list of three
+   block-type buttons. Right-aligned because the + is right-
+   anchored — the panel growing to the left keeps it inside the
+   canvas. */
+.nc-startpage-add-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+  padding: 4px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+}
+.nc-startpage-add-item {
+  /* Same row pattern AccountMenu uses — reusing the visual
+     language so all dropdowns feel like one menu system. */
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: transparent;
+  border: 0;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-startpage-add-item:hover {
+  background: var(--nc-bg-elev-2);
+}
+
+/* ----- Links block ----- */
+/* Visual language matches .nc-task-area: same elevation, border,
+   radius, header band. Where we differ: the body's row entries
+   use a subtle hover background instead of the sticky-note
+   coloured panels. */
+
+.nc-links-block {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 220px;
+  min-height: 180px;
+}
+
+.nc-links-block-header {
+  /* Same header band as RSS / task-area for visual consistency. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  cursor: grab;
+  flex: 0 0 auto;
+}
+.nc-links-block-header:active { cursor: grabbing; }
+
+.nc-links-block-title-input {
+  /* Borderless until hover/focus, like the task-area title. */
+  flex: 1 1 auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  padding: 4px 6px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nc-fg);
+  min-width: 0;
+}
+.nc-links-block-title-input::placeholder {
+  color: var(--nc-fg-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+.nc-links-block-title-input:hover {
+  border-color: var(--nc-border);
+}
+.nc-links-block-title-input:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+  background: var(--nc-bg);
+}
+
+.nc-links-block-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.nc-links-block-menu-popup {
+  /* Same shape AccountMenu uses. */
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+  min-width: 140px;
+  padding: 4px;
+  z-index: 200;
+}
+
+.nc-links-block-body {
+  /* Scrollable when content exceeds the block. The "+ Add link"
+     button is part of the body so it scrolls with the rows; if
+     it lived outside, the user could lose access on a tiny block. */
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px;
+}
+
+.nc-links-block-empty {
+  padding: 12px 8px;
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-links-block-add {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  margin-top: 2px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px dashed var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-links-block-add:hover {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+  border-style: solid;
+}
+
+/* ----- One link row ----- */
+/* Display mode: two-line stacked entry, no per-row border, subtle
+   hover background. Notion / Linear style. */
+.nc-links-row {
+  display: block;
+  padding: 6px 8px;
+  margin: 2px 0;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  transition: background-color 80ms ease;
+}
+.nc-links-row:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-links-row:focus {
+  outline: none;
+  background: var(--nc-bg-elev-2);
+  box-shadow: inset 0 0 0 1px var(--nc-accent);
+}
+
+.nc-links-row-title {
+  /* Bold first line. Click bubbles up to row (edit) BUT we
+     stopPropagation in the title's onClick to navigate instead.
+     Cursor stays pointer so it reads as clickable. */
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  line-height: 1.3;
+  /* Truncate long titles to keep the row a predictable height —
+     full title is in the tooltip via title=. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-links-row-desc {
+  /* Smaller, muted, second line. Optional — the row collapses
+     to one line when description is empty. */
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  line-height: 1.35;
+  margin-top: 1px;
+  /* Same truncation policy as title. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Edit mode: three stacked inputs (title, desc) + url-with-delete
+   on the bottom row. We deliberately keep them tightly packed so
+   the row doesn't visually grow much — the user picks edits from
+   keyboard navigation. */
+.nc-links-row-editing {
+  background: var(--nc-bg-elev-2);
+  cursor: default;
+  /* Override the display-mode hover so we don't get a colour
+     bump when the cursor moves over an editing row. */
+}
+.nc-links-row-editing:hover {
+  background: var(--nc-bg-elev-2);
+}
+
+.nc-links-row-input {
+  display: block;
+  width: 100%;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  padding: 4px 6px;
+  font: inherit;
+  color: var(--nc-fg);
+  margin-bottom: 4px;
+}
+.nc-links-row-input:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+}
+.nc-links-row-input-title  { font-size: 13px; font-weight: 600; }
+.nc-links-row-input-desc   { font-size: 12px; }
+.nc-links-row-input-url    { font-size: 12px; flex: 1 1 auto; margin-bottom: 0; }
+
+.nc-links-row-edit-foot {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+}
+.nc-links-row-delete {
+  /* Small, unobtrusive delete-X next to the URL field. Hover
+     turns red so the destructive action reads as such. */
+  flex: 0 0 auto;
+  width: 28px;
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nc-links-row-delete:hover {
+  background: var(--nc-danger-bg, #ffe5e5);
+  color: var(--nc-danger, #c53030);
+  border-color: var(--nc-danger, #c53030);
 }

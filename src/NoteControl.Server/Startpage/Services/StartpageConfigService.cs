@@ -64,7 +64,8 @@ public sealed class StartpageConfigService : IStartpageConfigService
             // here; the first user save creates the file.
             return new StartpageConfigDto(
                 Array.Empty<RssBlockDto>(),
-                Array.Empty<TaskAreaDto>());
+                Array.Empty<TaskAreaDto>(),
+                Array.Empty<LinkBlockDto>());
         }
 
         try
@@ -79,9 +80,11 @@ public sealed class StartpageConfigService : IStartpageConfigService
             {
                 return new StartpageConfigDto(
                     Array.Empty<RssBlockDto>(),
-                    Array.Empty<TaskAreaDto>());
+                    Array.Empty<TaskAreaDto>(),
+                    Array.Empty<LinkBlockDto>());
             }
-            // Step 42 back-compat: a step-40 file has no "taskAreas"
+            // Step 42 + Ship 74 back-compat: a step-40 file has no
+            // "taskAreas" field; a pre-Ship-74 file has no "links"
             // field. System.Text.Json fills missing reference-typed
             // record positional params with null, even though the
             // type annotation is non-nullable. Normalise null → empty
@@ -92,6 +95,7 @@ public sealed class StartpageConfigService : IStartpageConfigService
             {
                 Blocks = dto.Blocks ?? Array.Empty<RssBlockDto>(),
                 TaskAreas = dto.TaskAreas ?? Array.Empty<TaskAreaDto>(),
+                Links = dto.Links ?? Array.Empty<LinkBlockDto>(),
             };
         }
         catch (JsonException ex)
@@ -116,16 +120,20 @@ public sealed class StartpageConfigService : IStartpageConfigService
         // Sort blocks by id for stable on-disk output. The client
         // doesn't care about order (each block has its own absolute
         // x,y) but stable JSON makes git diffs / hand-edits sane.
-        // TaskAreas are also sorted by id for the same reason; the
-        // notes WITHIN each area are NOT sorted because their order
-        // is user-meaningful (drag-to-reorder semantics).
+        // TaskAreas + Links are also sorted by id for the same
+        // reason; the items WITHIN each area/block are NOT sorted
+        // because their order is user-meaningful (drag-to-reorder
+        // semantics).
         var sortedBlocks = (config.Blocks ?? Array.Empty<RssBlockDto>())
             .OrderBy(b => b.Id, StringComparer.Ordinal)
             .ToArray();
         var sortedAreas = (config.TaskAreas ?? Array.Empty<TaskAreaDto>())
             .OrderBy(a => a.Id, StringComparer.Ordinal)
             .ToArray();
-        var stable = new StartpageConfigDto(sortedBlocks, sortedAreas);
+        var sortedLinks = (config.Links ?? Array.Empty<LinkBlockDto>())
+            .OrderBy(l => l.Id, StringComparer.Ordinal)
+            .ToArray();
+        var stable = new StartpageConfigDto(sortedBlocks, sortedAreas, sortedLinks);
 
         // Atomic write: serialize to a temp file in the same
         // directory, then File.Move with overwrite. Same-volume

@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOutletContext, useParams } from 'react-router-dom';
 
 import { ApiError, startpageApi } from '../api/client';
-import type { RssBlockDto, StartpageConfigDto, TaskAreaDto } from '../api/types';
+import type {
+  LinkBlockDto,
+  RssBlockDto,
+  StartpageConfigDto,
+  TaskAreaDto,
+} from '../api/types';
+import { LinksBlock } from '../components/LinksBlock';
 import { RssBlock } from '../components/RssBlock';
 import { TaskArea } from '../components/TaskArea';
 import type { VaultLayoutContext } from '../components/VaultLayout';
@@ -10,30 +16,27 @@ import { useDebouncedSave } from '../hooks/useDebouncedSave';
 import { newId } from '../util/id';
 
 /**
- * Per-vault startpage with free-floating RSS blocks.
+ * Per-vault startpage with free-floating blocks.
  *
- * Layout model:
+ * Ship 74 redesign:
+ *   - Page-level header ("Startpage — VaultName" h1) removed. The
+ *     canvas IS the content. No decoration, no chrome.
+ *   - The two old "+ Add RSS" / "+ Add task area" buttons are
+ *     replaced with a single "+" button anchored to the top-right
+ *     of the canvas. Clicking it opens an inline add panel showing
+ *     the three block types: RSS feed, Task area, Links.
+ *   - New "Links" block type. Same drag/resize semantics as task
+ *     areas; holds up to 10 link entries (title + optional
+ *     description + URL), rendered as two-line stacked rows with a
+ *     subtle hover background.
+ *
+ * Layout / save model unchanged from the previous shape:
  *   - Each block has absolute pixel x/y/width/height stored in
  *     {vault}/.notesapp/startpage.json. No grid.
- *   - The page area is `position: relative`; blocks are
- *     `position: absolute`. Blocks live inside an inner
- *     "canvas" div sized large enough to contain them — we let
- *     the canvas grow as you drag blocks beyond the current
- *     viewport, so dragging right or down expands the scrollable
- *     area rather than clipping.
- *   - The properties panel is auto-suppressed by VaultLayout
- *     while we're here (Ship 39 plumbing).
+ *   - useDebouncedSave fires 500ms after the user stops changing
+ *     things; per-block edits flow through onChange callbacks.
  *
- * Save model:
- *   - Initial config loaded once on mount. Empty-config new
- *     vaults render the empty state.
- *   - Every block edit (drag, resize, popup) updates a single
- *     `config` state object. useDebouncedSave PUTs to the server
- *     500ms after the user stops changing things.
- *   - There is intentionally no "Save" button. Live updates with
- *     debounced persistence give the smoothest feel.
- *
- * Failure model:
+ * Failure model (unchanged):
  *   - Initial load failure → page-level error banner; user can't
  *     edit (we don't want to overwrite a config we didn't load).
  *   - Save failure → toast/banner; in-memory state still reflects
@@ -43,11 +46,16 @@ import { newId } from '../util/id';
  */
 export function StartpagePage() {
   const { vaultId } = useParams<{ vaultId: string }>();
-  const { vault } = useOutletContext<VaultLayoutContext>();
+  // _vault is no longer used in render (no header to show its name)
+  // but we still pull it from the outlet context so the type check
+  // doesn't drift if the layout shape changes.
+  useOutletContext<VaultLayoutContext>();
 
   const [config, setConfig] = useState<StartpageConfigDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const addRef = useRef<HTMLDivElement>(null);
 
   // ------------------------------------------------- initial load
   useEffect(() => {
@@ -75,12 +83,6 @@ export function StartpagePage() {
   }, [vaultId]);
 
   // ------------------------------------------------- debounced save
-  //
-  // useDebouncedSave fires only when `config` actually changes
-  // (it tracks JSON-stringified equality), and waits 500ms after
-  // the last change. Save errors don't block further editing —
-  // the user keeps working in memory and the next change will
-  // retry. We surface the error inline so it doesn't go silent.
   const doSave = useCallback(
     (cfg: StartpageConfigDto) => {
       if (!vaultId) return;
@@ -99,22 +101,40 @@ export function StartpagePage() {
     },
     [vaultId],
   );
-  // The hook handles "skip save on initial load" via its first-render
-  // guard, so we can pass `config ?? <empty>` without spurious POSTs.
+  // Defaults shape includes the new `links` array, matching the
+  // wire DTO. Server normalises null→[] so older config files load
+  // cleanly and pick up the new field after the first save.
   useDebouncedSave(
-    config ?? { blocks: [], taskAreas: [] },
+    config ?? { blocks: [], taskAreas: [], links: [] },
     500,
     doSave,
   );
 
+  // ------------------------------------------------- add-panel open/close
+  // Click-outside / Escape close. Same pattern AccountMenu and the
+  // RSS block menus use.
+  useEffect(() => {
+    if (!addPanelOpen) return;
+    function onDocDown(e: MouseEvent) {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) {
+        setAddPanelOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setAddPanelOpen(false);
+    }
+    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [addPanelOpen]);
+
   // ------------------------------------------------- mutations
 
-  /**
-   * Update a single block in the config by id. Returns a new
-   * config object so React re-renders. No-op if the id isn't
-   * found (defensive — shouldn't happen given how RssBlock
-   * receives its own id).
-   */
+  // ----- RSS blocks -----
+
   const updateBlock = useCallback(
     (id: string, patch: Partial<RssBlockDto>) => {
       setConfig((prev) => {
@@ -138,16 +158,9 @@ export function StartpagePage() {
     setConfig((prev) => {
       if (!prev) return prev;
       const newBlock: RssBlockDto = {
-        // Ship 51: was crypto.randomUUID() directly. That throws on
-        // plain-HTTP LAN access (browsers gate randomUUID on secure
-        // contexts only). newId() falls back to crypto.getRandomValues
-        // when randomUUID isn't available — works on any protocol.
         id: newId(),
         title: '',
         feedUrl: '',
-        // Cascade new blocks down-and-right so they don't all
-        // pile on top of each other. Arithmetic by block count
-        // is fine for small N (we expect <= 16 typically).
         x: 24 + (prev.blocks.length % 5) * 32,
         y: 24 + (prev.blocks.length % 5) * 32,
         width: 360,
@@ -158,13 +171,10 @@ export function StartpagePage() {
       };
       return { ...prev, blocks: [...prev.blocks, newBlock] };
     });
+    setAddPanelOpen(false);
   }, []);
 
-  // ----- Task areas (step 42) -----
-  // Same shape as the block handlers above but acting on the
-  // separate `taskAreas` array. Per the design lock, RSS blocks
-  // and task areas are siblings on the page, persisted side by
-  // side in startpage.json, but with no cross-references.
+  // ----- Task areas -----
 
   const updateTaskArea = useCallback(
     (id: string, patch: Partial<TaskAreaDto>) => {
@@ -193,10 +203,6 @@ export function StartpagePage() {
       const newArea: TaskAreaDto = {
         id: newId(),
         title: '',
-        // Same cascade pattern as RSS blocks, but offset 200px
-        // to the right so freshly-added areas don't pile onto
-        // freshly-added blocks at the same coords. The user can
-        // drag from there.
         x: 224 + (prev.taskAreas.length % 5) * 32,
         y: 24 + (prev.taskAreas.length % 5) * 32,
         width: 320,
@@ -205,68 +211,136 @@ export function StartpagePage() {
       };
       return { ...prev, taskAreas: [...prev.taskAreas, newArea] };
     });
+    setAddPanelOpen(false);
+  }, []);
+
+  // ----- Link blocks (Ship 74) -----
+  // Same shape as the task-area handlers; acts on the separate
+  // `links` array. Cascade offset is 424px right of RSS blocks so
+  // freshly-added links don't overlap freshly-added blocks of
+  // other types.
+
+  const updateLinkBlock = useCallback(
+    (id: string, patch: Partial<LinkBlockDto>) => {
+      setConfig((prev) => {
+        if (!prev) return prev;
+        const links = prev.links.map((l) =>
+          l.id === id ? { ...l, ...patch } : l,
+        );
+        return { ...prev, links };
+      });
+    },
+    [],
+  );
+
+  const deleteLinkBlock = useCallback((id: string) => {
+    setConfig((prev) =>
+      prev ? { ...prev, links: prev.links.filter((l) => l.id !== id) } : prev,
+    );
+  }, []);
+
+  const addLinkBlock = useCallback(() => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const newBlock: LinkBlockDto = {
+        id: newId(),
+        title: '',
+        x: 424 + (prev.links.length % 5) * 32,
+        y: 24 + (prev.links.length % 5) * 32,
+        width: 300,
+        height: 320,
+        items: [],
+      };
+      return { ...prev, links: [...prev.links, newBlock] };
+    });
+    setAddPanelOpen(false);
   }, []);
 
   if (!vaultId) return null;
 
+  // Empty state detection: nothing of any type exists yet.
+  const isEmpty =
+    config !== null &&
+    config.blocks.length === 0 &&
+    config.taskAreas.length === 0 &&
+    config.links.length === 0;
+
   return (
     <div className="nc-page nc-startpage">
-      <div className="nc-startpage-header">
-        <h1 className="nc-page-title">
-          🏠 Startpage — {vault?.name ?? '…'}
-        </h1>
-        {config && (
-          <span className="nc-startpage-add-actions">
-            <button
-              type="button"
-              className="nc-btn"
-              onClick={addBlock}
-              title="Add a new RSS block"
-            >
-              + Add RSS block
-            </button>
-            <button
-              type="button"
-              className="nc-btn"
-              onClick={addTaskArea}
-              title="Add a new task area"
-            >
-              + Add task area
-            </button>
-          </span>
-        )}
-      </div>
-
       {saveError && (
-        <div className="nc-form-error nc-startpage-save-error">
-          {saveError}
-        </div>
+        <div className="nc-form-error nc-startpage-save-error">{saveError}</div>
       )}
 
       {loadError ? (
         <div className="nc-form-error">{loadError}</div>
       ) : config === null ? (
         <p className="nc-empty">Loading…</p>
-      ) : config.blocks.length === 0 && config.taskAreas.length === 0 ? (
-        <div className="nc-empty nc-startpage-empty">
-          <p>Nothing here yet.</p>
-          <p>
-            Click <strong>+ Add RSS block</strong> for a feed reader, or{' '}
-            <strong>+ Add task area</strong> for a sticky-note board. Each
-            item is positionable and resizable.
-          </p>
-        </div>
       ) : (
         /*
-          Both arrays render inside the same canvas. Render order
-          (and therefore z-order) is: RSS blocks first, then task
-          areas. The two use disjoint id namespaces (UUIDs) so the
-          React keys never collide. If we ever care about a unified
-          z-order across the two, we'd merge into a single sorted
-          array — for now the design choice is "rss reads, tasks
-          act," which suggests tasks on top reads sensibly.
+          Canvas hosts everything. Even when empty, we render the
+          canvas so the floating + button has somewhere to anchor.
+          The empty-state hint is overlaid; the canvas isn't
+          padded around it because that would shift the + button.
         */
         <div className="nc-startpage-canvas">
+          {isEmpty && (
+            <div className="nc-empty nc-startpage-empty">
+              <p>Nothing here yet.</p>
+              <p>
+                Click the <strong>+</strong> in the top-right corner to add a
+                feed reader, task area, or link list.
+              </p>
+            </div>
+          )}
+
+          {/*
+            Floating + button. Position: absolute top-right of the
+            canvas. When clicked, expands an inline add panel with
+            one button per block type. Single + is the user's
+            chosen design; the panel is the simplest "menu"
+            possible (three labelled buttons, no nesting).
+          */}
+          <div ref={addRef} className="nc-startpage-add-floating">
+            <button
+              type="button"
+              className="nc-startpage-add-btn"
+              onClick={() => setAddPanelOpen((v) => !v)}
+              title="Add a block"
+              aria-haspopup="menu"
+              aria-expanded={addPanelOpen}
+            >
+              +
+            </button>
+            {addPanelOpen && (
+              <div className="nc-startpage-add-panel" role="menu">
+                <button
+                  type="button"
+                  className="nc-startpage-add-item"
+                  role="menuitem"
+                  onClick={addBlock}
+                >
+                  📡 RSS feed
+                </button>
+                <button
+                  type="button"
+                  className="nc-startpage-add-item"
+                  role="menuitem"
+                  onClick={addTaskArea}
+                >
+                  📌 Task area
+                </button>
+                <button
+                  type="button"
+                  className="nc-startpage-add-item"
+                  role="menuitem"
+                  onClick={addLinkBlock}
+                >
+                  🔗 Links
+                </button>
+              </div>
+            )}
+          </div>
+
           {config.blocks.map((block) => (
             <RssBlock
               key={block.id}
@@ -282,6 +356,14 @@ export function StartpagePage() {
               area={area}
               onChange={(patch) => updateTaskArea(area.id, patch)}
               onDelete={() => deleteTaskArea(area.id)}
+            />
+          ))}
+          {config.links.map((linkBlock) => (
+            <LinksBlock
+              key={linkBlock.id}
+              block={linkBlock}
+              onChange={(patch) => updateLinkBlock(linkBlock.id, patch)}
+              onDelete={() => deleteLinkBlock(linkBlock.id)}
             />
           ))}
         </div>

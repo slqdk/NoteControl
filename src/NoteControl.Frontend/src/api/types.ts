@@ -47,13 +47,6 @@ export interface FrontmatterDto {
   font: string | null;
   fontSize: number | null;
   width: number | null;
-  /**
-   * Ship 68: free-text per-note version. Always non-empty on the
-   * wire — the server fills in "v0.0" if the note's frontmatter
-   * doesn't have a version key. The Properties panel surfaces this
-   * for editing; the docx export renders it in the page-top header.
-   */
-  version: string;
 }
 
 export interface NoteDto {
@@ -83,12 +76,6 @@ export interface UpdateNoteRequest {
   font?: string | null;
   fontSize?: number | null;
   width?: number | null;
-  /**
-   * Ship 68: free-text per-note version. null/undefined = leave alone,
-   * any string = replace. Empty string is treated by the server as
-   * "reset to default v0.0" (not "remove the field").
-   */
-  version?: string | null;
 }
 
 export interface NoteSummaryDto {
@@ -174,6 +161,13 @@ export interface StartpageConfigDto {
    * on.
    */
   taskAreas: TaskAreaDto[];
+  /**
+   * Link blocks (Ship 74). Same persistence + back-compat story as
+   * taskAreas: the server normalises missing/null to [] on load,
+   * so consumers always see an array even when reading a config
+   * file written before Ship 74.
+   */
+  links: LinkBlockDto[];
 }
 
 /** One free-floating task area on the startpage (step 42). */
@@ -200,6 +194,33 @@ export interface StickyNoteDto {
    */
   color: string;
   done: boolean;
+}
+
+/**
+ * One free-floating links block on the startpage (Ship 74).
+ * Mirrors TaskAreaDto's shape — same drag/resize semantics, same
+ * id stability rules — but the children are link entries instead
+ * of sticky notes, capped at 10 per block client-side.
+ */
+export interface LinkBlockDto {
+  id: string;            // crypto.randomUUID()
+  title: string;         // empty allowed; UI shows placeholder
+  x: number;
+  y: number;
+  width: number;         // clamped client-side [220, 800]
+  height: number;        // clamped client-side [180, 1200]
+  items: LinkItemDto[];  // top-to-bottom display order; capped at 10
+}
+
+/** One link entry inside a LinkBlock. */
+export interface LinkItemDto {
+  id: string;            // crypto.randomUUID()
+  /** Bold first line. */
+  title: string;
+  /** Smaller, muted second line. May be empty (row collapses to one line). */
+  description: string;
+  /** Where the entry navigates to. Opened in a new tab. */
+  url: string;
 }
 
 /** One feed item, normalized server-side from RSS or Atom. */
