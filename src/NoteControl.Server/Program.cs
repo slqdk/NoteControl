@@ -240,6 +240,14 @@ try
     builder.Services.AddScoped<NoteControl.Server.Vaults.SampleData.ISampleDataInstaller,
         NoteControl.Server.Vaults.SampleData.SampleDataInstaller>();
 
+    // Ship 72: IDailyNoteService was missing from DI for the same
+    // reason ISampleDataInstaller was — the endpoint file existed
+    // and the service class existed, but the DI registration was
+    // never added. Scoped because DailyNoteService takes the
+    // scoped ServerDbContext + INoteService + ITemplateService.
+    builder.Services.AddScoped<NoteControl.Server.DailyNotes.Services.IDailyNoteService,
+        NoteControl.Server.DailyNotes.Services.DailyNoteService>();
+
     // Note services.
     builder.Services.AddSingleton<INotePathResolver, NotePathResolver>();
     builder.Services.AddScoped<INoteService, NoteService>();
@@ -532,6 +540,14 @@ try
     app.MapFolderRecursiveEndpoints();
     app.MapAssetEndpoints();
     app.MapTemplateEndpoints();
+    // Ship 72: daily-note endpoint mapping was missing from Program.cs
+    // (the Endpoints class itself existed). Without this, POST to
+    // /api/vaults/{id}/daily/today produced a 405 — routing found
+    // a path match in MapNoteEndpoints / MapFolderEndpoints (which
+    // own everything under /api/vaults/{vaultId}/...) but no method
+    // match for POST on this specific subpath, so it returned
+    // "method not allowed" instead of 404.
+    NoteControl.Server.DailyNotes.Endpoints.DailyNoteEndpoints.MapDailyNoteEndpoints(app);
     NoteControl.Server.Startpage.Endpoints.StartpageEndpoints.MapStartpageEndpoints(app);
     app.MapAdminConfigEndpoints();
     app.MapAdminBackupEndpoints();
