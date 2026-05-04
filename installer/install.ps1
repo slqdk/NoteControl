@@ -436,18 +436,106 @@ Write-Step "  Add/Remove Programs entry written." Green
 if (-not $NoTrayLaunch) {
     Write-Section "Launching tray"
 
-    # Subtle bit: this script runs elevated. If we just Start-Process
-    # the tray here, the tray inherits the elevated token, which is
-    # fine but also means it runs as Administrator and HKCU points
-    # at the elevated user's profile. For the "your tray is up,
-    # talking to a server you can manage" flow, that's actually what
-    # we want during an install -- the admin who installed it should
-    # see the tray.
+    # Ship 65: this got rewritten because Start-Process from inside
+    # an elevated installer does NOT reliably launch a WPF app for
+    # the interactive user. Two failure modes we hit:
     #
-    # On next login (and for non-admin users), the HKLM Run entry
-    # launches the tray non-elevated for whichever user logged in.
-    Start-Process -FilePath $trayExe -ErrorAction SilentlyContinue
-    Write-Step "  Tray launched." Green
+    #   1. -ErrorAction SilentlyContinue on Start-Process swallowed
+    #      genuine launch failures, so the script printed
+    #      "Tray launched" even when no process started.
+    #   2. When triggered from the tray's in-app updater, the
+    #      install.ps1 runs as elevated Administrator under the
+    #      same identity that ran the tray. After install, the
+    #      already-killed-old-tray needs to be replaced by a NEW
+    #      tray running for the INTERACTIVE user -- which the
+    #      elevated context doesn't reliably give us.
+    #
+    # The standard Windows pattern: schedule a one-shot Task
+    # Scheduler task that runs as the interactive user, run it,
+    # delete it. The Task Scheduler service does the
+    # context-switching for us; tray ends up in the right session
+    # under the right user with the right token.
+    #
+    # We try this path first, fall back to Start-Process if Task
+    # Scheduler is unavailable for some reason. Either way we
+    # check Get-Process afterwards to verify the launch actually
+    # worked, instead of silently swallowing failures.
+
+    $launched = $false
+    $taskName = "NoteControlTrayLaunch_$(Get-Random -Maximum 99999)"
+
+    # Resolve the interactive user. When install.ps1 is run from
+    # the tray's in-app update, $env:USERNAME is whichever user
+    # owns the tray process -- and that's exactly the user we want
+    # to launch the new tray for. When install.ps1 is run by an
+    # admin from PowerShell on a multi-user machine, this targets
+    # that admin's session, which is also correct.
+    $domain = $env:USERDOMAIN
+    $user   = $env:USERNAME
+    $fullUser = if ($domain) { "$domain\$user" } else { $user }
+
+    try {
+        # Build a no-window action that runs the tray.
+        $action = New-ScheduledTaskAction -Execute $trayExe
+
+        # InteractiveToken = run with the interactive user's token,
+        # not as SYSTEM and not elevated. This is the magic.
+        $principal = New-ScheduledTaskPrincipal `
+            -UserId $fullUser `
+            -LogonType Interactive `
+            -RunLevel Limited
+
+        $task = New-ScheduledTask -Action $action -Principal $principal
+
+        # Register, run, then unregister. The task itself only
+        # exists for ~1 second; we use it as a one-shot launcher.
+        Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
+        Start-ScheduledTask -TaskName $taskName
+
+        # Give the tray ~3 seconds to actually start before we
+        # delete the task and verify.
+        Start-Sleep -Seconds 3
+
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+
+        # Did it work?
+        $proc = Get-Process NoteControl.Tray -ErrorAction SilentlyContinue
+        if ($proc) {
+            Write-Step "  Tray launched (PID $($proc.Id), session $($proc.SessionId))." Green
+            $launched = $true
+        }
+    } catch {
+        Write-Step "  Task Scheduler launch path failed: $($_.Exception.Message)" Yellow
+        Write-Step "  Falling back to direct Start-Process..." Yellow
+        # Best-effort cleanup in case the task was registered but
+        # something downstream blew up.
+        try {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        } catch {}
+    }
+
+    # Fallback: direct Start-Process. Same behaviour as Ship 48
+    # had, but this time we VERIFY the launch worked instead of
+    # swallowing the error.
+    if (-not $launched) {
+        try {
+            Start-Process -FilePath $trayExe -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $proc = Get-Process NoteControl.Tray -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Step "  Tray launched via fallback (PID $($proc.Id), session $($proc.SessionId))." Green
+                $launched = $true
+            }
+        } catch {
+            Write-Step "  Fallback Start-Process failed: $($_.Exception.Message)" Yellow
+        }
+    }
+
+    if (-not $launched) {
+        Write-Step "  Could not auto-launch the tray." Yellow
+        Write-Step "  Sign out and back in (HKLM Run entry will launch it)," Yellow
+        Write-Step "  or double-click $trayExe manually." Yellow
+    }
 } else {
     Write-Step "Skipping tray launch (-NoTrayLaunch). HKLM Run entry will launch on next login." Yellow
 }
