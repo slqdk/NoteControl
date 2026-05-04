@@ -22,7 +22,7 @@ import {
   useNewNotePrompt,
   useRenamePrompt,
 } from '../tree/treeState';
-import { loadVariant, saveVariant, type TreeVariant } from '../tree/treeStyles';
+import { loadVariant, type TreeVariant } from '../tree/treeStyles';
 import { useTreeAppearance, buildTreeStyle } from '../tree/treeAppearance';
 
 /**
@@ -67,11 +67,14 @@ export function VaultLayout() {
   const newNote = useNewNotePrompt();
   const rename = useRenamePrompt();
 
-  const [variant, setVariantState] = useState<TreeVariant>(() => loadVariant());
-  const setVariant = useCallback((v: TreeVariant) => {
-    setVariantState(v);
-    saveVariant(v);
-  }, []);
+  // Ship 80: the variant picker is gone (compact-only) but we keep
+  // the variant STATE itself because TreeView still reads it to
+  // pick its CSS class. loadVariant() always returns 'compact' for
+  // first-time users; existing users who saved 'comfortable' will
+  // also keep working since the dead CSS rule is still in place.
+  // We no longer need a setter wrapper since the picker that called
+  // it is gone.
+  const [variant] = useState<TreeVariant>(() => loadVariant());
 
   const treeAppearance = useTreeAppearance();
 
@@ -682,26 +685,21 @@ export function VaultLayout() {
             propsVisible={layout.propsVisible}
             onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
             onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
-            variant={variant}
-            onVariantChange={setVariant}
             treeAppearance={treeAppearance}
           />
         }
         rightSettings={
           // Ship 70: settings cog moved to the right of the account
           // menu. Same component instance, just rendering its
-          // "settings" slot. The duplicated prop list is intentional
-          // (variant + treeAppearance are owned by VaultLayout, so
-          // both slot instances need them) — it's the cost of
-          // keeping the popover state consolidated.
+          // "settings" slot. Ship 80: variant + onVariantChange
+          // dropped from the props since the Win7/Win11 picker is
+          // gone (compact-only).
           <ToggleRailButtons
             slot="settings"
             treeVisible={layout.treeVisible}
             propsVisible={layout.propsVisible}
             onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
             onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
-            variant={variant}
-            onVariantChange={setVariant}
             treeAppearance={treeAppearance}
           />
         }

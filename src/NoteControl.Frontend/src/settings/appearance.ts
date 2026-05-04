@@ -99,11 +99,22 @@ const DEFAULT_GRADIENT_ID = 'slate';
 export interface AppearanceSettings {
   appWidth: AppWidth;
   gradientId: string;
+  /**
+   * Ship 80: explicit theme override. 'auto' respects the OS
+   * preference via prefers-color-scheme (the original behaviour);
+   * 'light' / 'dark' force a fixed scheme regardless of OS.
+   *
+   * Implementation: the runtime sets a data-theme attribute on
+   * <html>, and styles.css has [data-theme="dark"] / [data-theme="light"]
+   * rule blocks that mirror the prefers-color-scheme tokens.
+   */
+  theme: 'auto' | 'light' | 'dark';
 }
 
 const DEFAULTS: AppearanceSettings = {
   appWidth: APP_WIDTH_DEFAULT,
   gradientId: DEFAULT_GRADIENT_ID,
+  theme: 'auto',
 };
 
 // ---------------------------------------------------- persistence
@@ -137,6 +148,13 @@ export function loadAppearance(): AppearanceSettings {
         typeof parsed.gradientId === 'string' && isKnownGradient(parsed.gradientId)
           ? parsed.gradientId
           : DEFAULT_GRADIENT_ID,
+      // Ship 80: theme override. Anything that isn't a recognised
+      // value (including missing in pre-Ship-80 stored configs)
+      // falls back to 'auto' = honour the OS preference.
+      theme:
+        parsed.theme === 'light' || parsed.theme === 'dark'
+          ? parsed.theme
+          : 'auto',
     };
   } catch {
     return DEFAULTS;
@@ -180,6 +198,7 @@ export function useAppearance(): {
   settings: AppearanceSettings;
   setAppWidth: (w: AppWidth) => void;
   setGradientId: (id: string) => void;
+  setTheme: (theme: AppearanceSettings['theme']) => void;
 } {
   const [settings, setSettings] = useState<AppearanceSettings>(() => loadAppearance());
 
@@ -201,6 +220,15 @@ export function useAppearance(): {
       saveAppearance({
         ...loadAppearance(),
         gradientId: isKnownGradient(id) ? id : DEFAULT_GRADIENT_ID,
+      }),
+    // Ship 80: theme setter. Same persistence pattern as the others
+    // — saveAppearance writes localStorage and notifies subscribers
+    // (cross-tab + same-tab via the pubsub).
+    setTheme: (theme) =>
+      saveAppearance({
+        ...loadAppearance(),
+        theme:
+          theme === 'light' || theme === 'dark' ? theme : 'auto',
       }),
   };
 }
@@ -224,6 +252,18 @@ export function applyAppearanceCss(settings: AppearanceSettings): void {
   root.setProperty('--nc-app-width', `${settings.appWidth}px`);
   root.setProperty('--nc-page-bg-light', preset.light);
   root.setProperty('--nc-page-bg-dark', preset.dark);
+
+  // Ship 80: theme override. data-theme="auto" means "let
+  // prefers-color-scheme decide" — represented here as no
+  // attribute at all (so the @media block in styles.css runs).
+  // Explicit 'light' / 'dark' set the attribute, and
+  // [data-theme="..."] rule blocks override the @media tokens.
+  const html = document.documentElement;
+  if (settings.theme === 'light' || settings.theme === 'dark') {
+    html.setAttribute('data-theme', settings.theme);
+  } else {
+    html.removeAttribute('data-theme');
+  }
 }
 
 /**
@@ -235,4 +275,51 @@ export function useAppliedAppearance(): void {
   useEffect(() => {
     applyAppearanceCss(settings);
   }, [settings]);
+}
+
+/**
+ * Ship 80: clear ALL local-settings storage keys and reload.
+ *
+ * Used by the "Reset all settings to defaults" button in the
+ * settings cog. Wipes:
+ *   - nc.appearance       (this file: app width, gradient, theme)
+ *   - nc.treeBehaviour    (settings/treeBehaviour.ts)
+ *   - nc.noteDefaults     (settings/noteDefaults.ts)
+ *   - nc.treeVariant      (tree/treeStyles.ts — no-op now that the
+ *                          variant picker is hidden but cleaned up
+ *                          for completeness)
+ *   - nc.treeFontStack    (tree/treeAppearance.ts)
+ *   - nc.treeFontSize     (tree/treeAppearance.ts)
+ *
+ * Reload after the wipe so every consumer (each useState that
+ * initialised from localStorage) re-reads a fresh DEFAULTS without
+ * needing a coordinated rerender. The user already confirmed
+ * (caller pops a window.confirm before this), so the reload isn't
+ * disruptive.
+ *
+ * Why a hard reload instead of broadcasting a "reset" event:
+ * cleaner, simpler, no chance of a half-reset state from a
+ * subscriber that doesn't handle the event. The user just sees
+ * everything snap to factory defaults.
+ */
+const ALL_SETTING_KEYS: readonly string[] = [
+  'nc.appearance',
+  'nc.treeBehaviour',
+  'nc.noteDefaults',
+  'nc.treeVariant',
+  'nc.treeFontStack',
+  'nc.treeFontSize',
+];
+
+export function resetAllSettingsAndReload(): void {
+  try {
+    for (const key of ALL_SETTING_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    /* private mode / quota — silent. */
+  }
+  if (typeof window !== 'undefined') {
+    window.location.reload();
+  }
 }

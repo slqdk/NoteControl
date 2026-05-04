@@ -28,8 +28,14 @@
   --nc-topbar-h: 44px;
 }
 
+/* Auto mode (Ship 80 default + pre-Ship-80 only behaviour): the
+   OS preference picks light vs dark via prefers-color-scheme.
+   Wrapped in :not([data-theme]) so an explicit Light/Dark choice
+   from the settings popover wins regardless of OS — the user's
+   choice is persisted in nc.appearance.theme and applyAppearanceCss
+   sets the data-theme attribute on <html>. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --nc-fg: #e2e8f0;
     --nc-fg-muted: #94a3b8;
     --nc-bg: #0f172a;
@@ -45,6 +51,45 @@
     --nc-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
     --nc-shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.4);
   }
+}
+
+/* Ship 80: explicit dark theme override. Mirrors the @media
+   block above, but applies regardless of OS preference. */
+:root[data-theme="dark"] {
+  --nc-fg: #e2e8f0;
+  --nc-fg-muted: #94a3b8;
+  --nc-bg: #0f172a;
+  --nc-bg-elev: #1e293b;
+  --nc-bg-elev-2: #273449;
+  --nc-border: #334155;
+  --nc-border-strong: #475569;
+  --nc-accent: #3b82f6;
+  --nc-accent-bg-soft: rgba(59, 130, 246, 0.18);
+  --nc-accent-fg: #ffffff;
+  --nc-error-fg: #fca5a5;
+  --nc-error-bg: #450a0a;
+  --nc-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --nc-shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+/* Ship 80: explicit light theme override. Re-asserts the light
+   tokens so we beat the prefers-color-scheme @media block when
+   the user has Windows in dark mode but picked Light in app
+   settings. */
+:root[data-theme="light"] {
+  --nc-fg: #0f172a;
+  --nc-fg-muted: #64748b;
+  --nc-bg: #ffffff;
+  --nc-bg-elev: #f8fafc;
+  --nc-bg-elev-2: #f1f5f9;
+  --nc-border: #e2e8f0;
+  --nc-border-strong: #cbd5e1;
+  --nc-accent: #2563eb;
+  --nc-accent-bg-soft: rgba(37, 99, 235, 0.10);
+  --nc-accent-fg: #ffffff;
+  --nc-error-fg: #b91c1c;
+  --nc-error-bg: #fef2f2;
+  --nc-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --nc-shadow-popover: 0 4px 12px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.08);
 }
 
 html, body {
@@ -69,12 +114,31 @@ body {
   min-height: 100%;
 }
 @media (prefers-color-scheme: dark) {
-  body {
+  /* Auto mode (no data-theme attribute set on <html>): respect OS.
+     :root:not([data-theme]) body matches "body whose root html
+     element has no data-theme set" — i.e. theme=auto. When the
+     user picks Light or Dark explicitly, applyAppearanceCss adds
+     the attribute and the explicit-override blocks below win. */
+  :root:not([data-theme]) body {
     background: var(
       --nc-page-bg-dark,
       linear-gradient(180deg, #1e293b 0%, #0f172a 100%)
     );
   }
+}
+/* Ship 80: explicit theme override picks the right gradient
+   regardless of OS preference. */
+:root[data-theme="dark"] body {
+  background: var(
+    --nc-page-bg-dark,
+    linear-gradient(180deg, #1e293b 0%, #0f172a 100%)
+  );
+}
+:root[data-theme="light"] body {
+  background: var(
+    --nc-page-bg-light,
+    linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%)
+  );
 }
 
 /* The centered app frame. Caps width to the user's chosen
@@ -2354,21 +2418,77 @@ body.nc-dragging * {
 
 /* ----- Settings popover (cog dropdown) ---------------------------- */
 
-/* Wider than the old variant popover (which only had two rows of
-   tree-style options). Now hosts tree style + width slider +
-   gradient grid. Keeps the same visual language as the old
-   popover so the cog feels familiar. */
+/* Ship 80: 3-column popover layout. The popover used to be a
+   single tall column; now it's a flex-row of three columns inside
+   a fixed-max-height shell so the cog never spawns a vertical
+   scrollbar on common laptop heights. The columns wrap below
+   each other if the viewport is narrower than ~860px (rare on
+   desktop). */
 .nc-settings-popover {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
   background: var(--nc-bg);
   border: 1px solid var(--nc-border);
-  border-radius: var(--nc-radius);
+  border-radius: 10px;
   box-shadow: var(--nc-shadow-popover);
-  width: 300px;
-  padding: 4px;
+  /* Ship 80: 3 columns × ~250px each + gaps + padding ≈ 820px */
+  width: 820px;
+  /* Hard cap so it never grows tall; if content somehow exceeds
+     this we get a scrollbar (rare — three short columns easily
+     fit). Pre-Ship-80 there was no cap and the single-column
+     content forced a scrollbar on most displays. */
+  max-height: 700px;
+  overflow: auto;
+  padding: 12px;
   z-index: 200;
+}
+.nc-settings-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+.nc-settings-col {
+  flex: 1 1 240px;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nc-settings-col-heading {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--nc-fg-muted);
+  padding: 0 4px 4px;
+  border-bottom: 1px solid var(--nc-border);
+  margin-bottom: 4px;
+}
+/* Ship 80: reset row spans the full popover width below the
+   columns. Padding-aligned with the columns above; the button is
+   full-width to read as a single clear destructive action. */
+.nc-settings-reset-row {
+  display: block;
+  padding: 8px 4px 0;
+}
+.nc-settings-reset-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-error-fg);
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  cursor: pointer;
+  transition: background-color 80ms ease, border-color 80ms ease;
+}
+.nc-settings-reset-btn:hover {
+  background: var(--nc-error-bg);
+  border-color: var(--nc-error-fg);
 }
 
 /* ----- Generic dropdown popover (Ship 70 + Ship 78 polish) -------
