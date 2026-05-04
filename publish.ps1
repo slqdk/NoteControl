@@ -402,13 +402,28 @@ if ($Release) {
     # value matches the GitHub Release title.
     Push-Location $RepoRoot
     try {
+        # Push current branch first. Without this, if local HEAD
+        # is ahead of origin (a freshly-committed version bump,
+        # for example), the tag we push next will point at a
+        # commit that doesn't exist on origin, and gh release
+        # create will fail with "no matches found for <sha>"
+        # because gh resolves --target against origin's commits.
+        #
+        # `git push` with no args pushes the CURRENT branch to
+        # its tracked upstream. Safe -- we already verified the
+        # working tree is clean in the pre-flight checks. If
+        # there's nothing to push, this is a fast no-op.
+        Write-Host "Pushing current branch to origin..." -ForegroundColor White
+        & git push
+        if ($LASTEXITCODE -ne 0) { throw "git push (branch) failed" }
+
         Write-Host "Creating annotated git tag v$Version at HEAD..." -ForegroundColor White
         & git tag -a "v$Version" -m "Release $Version"
         if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
 
         Write-Host "Pushing tag to origin..." -ForegroundColor White
         & git push origin "v$Version"
-        if ($LASTEXITCODE -ne 0) { throw "git push failed" }
+        if ($LASTEXITCODE -ne 0) { throw "git push (tag) failed" }
     } finally {
         Pop-Location
     }
