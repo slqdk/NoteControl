@@ -154,7 +154,13 @@ internal sealed class ServerController
 
         if (det.Mode == ServerMode.Service)
         {
-            var sc = RunSc("start " + ServiceName);
+            // Ship 66: try sc.exe first. On exit-5 (Access denied)
+            // re-launch ourselves elevated to do just the sc call.
+            // The Ship-66 installer grants Authenticated Users
+            // start/stop via `sc sdset`, so the elevation path is
+            // a fallback for: (a) installs done before Ship 66, and
+            // (b) machines where sdset failed for some reason.
+            var sc = RunScWithElevationFallback("start " + ServiceName);
             if (sc.ExitCode != 0)
             {
                 return OperationResult.Fail(
@@ -210,9 +216,10 @@ internal sealed class ServerController
 
         if (det.Mode == ServerMode.Service)
         {
-            var sc = RunSc("stop " + ServiceName);
-            // Exit 1062 = service not started (already stopped). Treat
-            // as success — net effect matches what the user wanted.
+            // Ship 66: same elevation-fallback dance as Start.
+            // 1062 = ERROR_SERVICE_NOT_ACTIVE (already stopped) is
+            // success from the user's POV.
+            var sc = RunScWithElevationFallback("stop " + ServiceName);
             if (sc.ExitCode != 0 && sc.ExitCode != 1062)
             {
                 return OperationResult.Fail(
@@ -349,6 +356,106 @@ internal sealed class ServerController
             // Ex.HResult tends to be useless here; just return the
             // message so the caller can surface it.
             return (-1, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Ship 66: like <see cref="RunSc"/> but on exit-5 (Access denied)
+    /// re-launches the tray .exe elevated to perform just the sc
+    /// call. Used for start/stop operations on the service.
+    ///
+    /// Why two layers: the tray is asInvoker (un-elevated). Without
+    /// the Ship-66 installer's `sc sdset` widening the DACL, the
+    /// SCM rejects start/stop from a non-admin token with exit code
+    /// 5. Even WITH sdset, we keep the fallback for older installs
+    /// and for machines where sdset failed.
+    ///
+    /// Re-launch contract: the elevated tray sees argv
+    /// <c>--service-action start</c> or <c>--service-action stop</c>,
+    /// runs that sc command, and exits with the sc exit code as its
+    /// own process exit code. We surface that to the caller as if
+    /// they'd run sc directly.
+    ///
+    /// Why a re-launch instead of an embedded admin helper exe: it
+    /// keeps the Setup unchanged (one tray binary, no second
+    /// signed/elevation-marked sibling). The downside is one UAC
+    /// prompt per click on machines without the DACL widening, plus
+    /// the brief flash of a second tray.exe in Process Explorer.
+    /// Acceptable for an admin-only operation.
+    ///
+    /// We don't re-launch on every error. Only exit code 5 means
+    /// "permission denied at the SCM" and is what the elevation
+    /// path can fix. Other failures (1060 not installed, 1062 not
+    /// running, 1056 already running, etc.) are returned as-is.
+    /// </summary>
+    private static (int ExitCode, string CombinedOutput) RunScWithElevationFallback(string args)
+    {
+        var direct = RunSc(args);
+        if (direct.ExitCode != 5) return direct;
+
+        // Parse the verb out of args ("start NoteControlServer" -> "start").
+        // We only support start/stop here; defensive guard returns the
+        // original failure if anything else slips through.
+        var firstSpace = args.IndexOf(' ');
+        var verb = firstSpace > 0 ? args.Substring(0, firstSpace) : args;
+        if (verb is not ("start" or "stop"))
+        {
+            return direct;
+        }
+
+        try
+        {
+            // AppContext.BaseDirectory is the tray's own folder.
+            // We re-invoke the same .exe so we don't have to know
+            // where in Program Files it lives or how it was launched.
+            var trayExe = Path.Combine(
+                AppContext.BaseDirectory,
+                "NoteControl.Tray.exe");
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = trayExe,
+                Arguments = $"--service-action {verb}",
+                // Verb=runas triggers the UAC prompt. UseShellExecute
+                // must be true for Verb to be honored -- direct
+                // CreateProcess can't elevate.
+                UseShellExecute = true,
+                Verb = "runas",
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc is null)
+            {
+                return (-1, "Could not relaunch tray for elevation.");
+            }
+
+            // Wait long enough for the SCM call. sc start can take a
+            // while on cold-start (service is doing migrations etc.),
+            // but 60s is more than enough -- we already have a 30s
+            // health-poll on the caller side.
+            if (!proc.WaitForExit(60000))
+            {
+                try { proc.Kill(); } catch { /* best effort */ }
+                return (-1, "Elevated sc call timed out after 60s.");
+            }
+
+            // The elevated child set its ExitCode to whatever sc.exe
+            // returned (or to its own error code on failure). Return
+            // that as if we'd run sc directly. Output is empty
+            // because we can't pipe across the elevation boundary
+            // without a named-pipe dance we don't need yet.
+            return (proc.ExitCode, "");
+        }
+        catch (System.ComponentModel.Win32Exception wex) when (wex.NativeErrorCode == 1223)
+        {
+            // 1223 = ERROR_CANCELLED. User clicked No on the UAC
+            // prompt. Surface a friendly message instead of the
+            // raw "operation was canceled by the user" text.
+            return (5, "Administrator approval was declined.");
+        }
+        catch (Exception ex)
+        {
+            return (-1, "Elevation failed: " + ex.Message);
         }
     }
 

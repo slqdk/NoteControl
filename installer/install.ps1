@@ -330,11 +330,117 @@ if ($null -eq $service) {
 Write-Step "  Service configured." Green
 
 # ---------------------------------------------------------------
+# Grant Authenticated Users start/stop on the service (Ship 66)
+# ---------------------------------------------------------------
+# By default a Windows service created by `sc create` only lets
+# Administrators start/stop it. The tray runs un-elevated under the
+# user's interactive token, which means clicking "Restart server"
+# in the tray fails with exit-code-5 (Access denied) on every
+# install we've tested.
+#
+# Two ways to fix that: prompt for UAC every time, or widen the
+# service's DACL so normal users can start/stop it. We do both --
+# this widens the DACL so the common case (one user on this
+# machine, signed in, owns the data anyway) is silent. The tray
+# still has a UAC fallback for installs done before this script,
+# and for any case where this step somehow didn't take.
+#
+# Mechanism:
+#   1. Read the existing SDDL via `sc sdshow`.
+#   2. If our ACE is already there, skip (idempotent).
+#   3. Otherwise insert `(A;;RPWPDTLO;;;AU)` into the DACL --
+#      that grants Authenticated Users:
+#        RP = SERVICE_START
+#        WP = SERVICE_STOP
+#        DT = SERVICE_PAUSE_CONTINUE
+#        LO = SERVICE_INTERROGATE
+#      Read access (LCRRC etc.) is already granted to AU by the
+#      default service DACL.
+#   4. Write back via `sc sdset`.
+#
+# The ACE is appended INSIDE the D: section (DACL) -- after the
+# last existing ACE, before any S: section (SACL) if present.
+# Service SDDLs in the wild rarely have a SACL; we handle it
+# anyway so we don't corrupt the descriptor on edge-case
+# machines.
+Write-Section "Granting service start/stop to Authenticated Users"
+
+$desiredAce = '(A;;RPWPDTLO;;;AU)'
+$sdshow     = & sc.exe sdshow $ServiceName 2>&1 | Out-String
+$sdshow     = $sdshow.Trim()
+
+if ([string]::IsNullOrWhiteSpace($sdshow)) {
+    Write-Step "  sc sdshow returned nothing -- skipping DACL update." Yellow
+    Write-Step "  Tray will fall back to UAC prompt for start/stop." Yellow
+} elseif ($sdshow -like "*$desiredAce*") {
+    Write-Step "  DACL already grants AU start/stop -- skipping." Green
+} else {
+    # Find the boundary between D: (DACL) and S: (SACL, if any).
+    # Format examples:
+    #   D:(A;;...)(A;;...)             <-- no SACL
+    #   D:(A;;...)(A;;...)S:(AU;...)   <-- with SACL
+    # We need to insert our ACE at the end of the D: section.
+    $sIndex = $sdshow.IndexOf('S:')
+    if ($sIndex -ge 0) {
+        $newSddl = $sdshow.Substring(0, $sIndex) + $desiredAce + $sdshow.Substring($sIndex)
+    } else {
+        $newSddl = $sdshow + $desiredAce
+    }
+
+    Write-Step "  Updating service DACL ..."
+    # sc sdset wants the SDDL as a SINGLE positional arg. Quoting
+    # is crucial because SDDL contains parens and semicolons that
+    # PowerShell could otherwise misparse.
+    $sdsetOut = & sc.exe sdset $ServiceName $newSddl 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        Write-Step "  DACL updated. Tray can now start/stop without UAC." Green
+    } else {
+        # Don't throw -- the service still works, just the tray will
+        # need UAC. Surface enough detail for the user to investigate
+        # if they care.
+        Write-Step "  sc.exe sdset returned $LASTEXITCODE." Yellow
+        Write-Step "  Output: $($sdsetOut.Trim())" Yellow
+        Write-Step "  Tray will fall back to UAC prompt for start/stop." Yellow
+    }
+}
+
+# ---------------------------------------------------------------
 # Start service + health check
 # ---------------------------------------------------------------
 Write-Section "Starting service"
 
 Start-Service -Name $ServiceName -ErrorAction Stop
+
+# Verify the service actually reached Running. Start-Service is
+# fire-and-forget by default; on a heavily loaded box (or if the
+# server crashes during startup) it can return without the SCM
+# having transitioned the service to Running. Then the /health
+# probe below times out, and the install log says "didn't respond
+# in 30s" -- which is true but unhelpful.
+#
+# Ship 66 fix: poll Get-Service for up to 30 seconds, log the
+# outcome explicitly. This was the missing-link bug that bit
+# lightserver in the previous chat: install.ps1 said "service
+# started" but the service was actually in StartPending and
+# never reached Running.
+$svcDeadline = (Get-Date).AddSeconds(30)
+$svcReachedRunning = $false
+while ((Get-Date) -lt $svcDeadline) {
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq 'Running') {
+        $svcReachedRunning = $true
+        break
+    }
+    Start-Sleep -Milliseconds 500
+}
+if ($svcReachedRunning) {
+    Write-Step "  Service reached Running." Green
+} else {
+    $svcStatus = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
+    Write-Step "  Service didn't reach Running within 30s (current: $svcStatus)." Yellow
+    Write-Step "  /health probe will follow but is likely to fail too." Yellow
+    Write-Step "  Check $logsDir for server-side errors." Yellow
+}
 
 # Wait for /health. The server publishes its bound URL to
 # {DataRoot}\.server\server.url (Ship 43) once Kestrel has bound.

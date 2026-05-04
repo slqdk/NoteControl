@@ -44,6 +44,23 @@ public partial class App : Application
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
+        // Ship 66: elevated re-entry hook. When the un-elevated tray
+        // hits exit-5 on `sc start/stop`, it relaunches itself with
+        // `--service-action <verb>` via Verb=runas. That relaunched
+        // process lands here, runs ONLY the sc call, and exits with
+        // sc's exit code as its own process exit code. No tray icon,
+        // no UI, no message loop hanging around.
+        //
+        // Contract enforced by caller (ServerController.RunScWithElevationFallback):
+        //   - exactly two args: --service-action <verb>
+        //   - verb is "start" or "stop"
+        // Any other shape we ignore and continue normal startup --
+        // future-proofs against accidental flag clashes.
+        if (TryHandleServiceActionAndExit(e.Args))
+        {
+            return;
+        }
+
         _admin = new AdminWorkflow(_serverUrls.TrayUrl);
 
         _trayIcon = new TaskbarIcon
@@ -461,6 +478,86 @@ public partial class App : Application
             MessageBox.Show("Could not open the update dialog: " + ex.Message,
                 "NoteControl", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// Ship 66: handle the elevated-child entry point. Returns true
+    /// if the args matched and the application has been told to
+    /// shut down (caller should bail out of startup); false to
+    /// continue normal tray startup.
+    ///
+    /// What this does on a hit:
+    ///   1. Run `sc.exe &lt;verb&gt; NoteControlServer` directly.
+    ///   2. Set Environment.ExitCode to sc's exit code so the
+    ///      un-elevated parent can read it via Process.ExitCode.
+    ///   3. Call Shutdown() to dismantle the (still-empty) WPF app.
+    ///
+    /// We do NOT instantiate the tray icon, admin workflow, or
+    /// updater. This is a 200-millisecond invisible side-process,
+    /// not a second tray. The user sees only the original tray's
+    /// "Restarting..." tooltip until the parent's WaitForExit
+    /// returns.
+    ///
+    /// Why not Application.Current.Shutdown(0): the message loop
+    /// hasn't actually been pumped yet at this point in OnStartup,
+    /// so Shutdown is queued. Returning from OnStartup lets WPF
+    /// process the queued shutdown immediately. The exit code we
+    /// want is on Environment.ExitCode by the time the runtime
+    /// terminates the process.
+    ///
+    /// Process.Start with sc.exe must use UseShellExecute=false
+    /// here (we're already elevated by Verb=runas one level up).
+    /// CreateNoWindow=true keeps the brief sc console invisible.
+    /// </summary>
+    private bool TryHandleServiceActionAndExit(string[] args)
+    {
+        // Expected: ["--service-action", "start" | "stop"]
+        if (args.Length != 2 || args[0] != "--service-action") return false;
+
+        var verb = args[1];
+        if (verb is not ("start" or "stop")) return false;
+
+        int scExit;
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                Arguments = $"{verb} {ServerController.ServiceName}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null)
+            {
+                scExit = -1;
+            }
+            else
+            {
+                // Drain pipes before WaitForExit (deadlock-avoidance,
+                // same pattern as ServerController.RunSc).
+                _ = proc.StandardOutput.ReadToEnd();
+                _ = proc.StandardError.ReadToEnd();
+                proc.WaitForExit(30000);
+                scExit = proc.HasExited ? proc.ExitCode : -1;
+            }
+        }
+        catch (Exception ex)
+        {
+            // We can't show a MessageBox here -- the parent is
+            // waiting on us. Best we can do is a Debug write
+            // (visible to anyone running with a debugger / DebugView)
+            // and a generic non-zero exit code so the parent
+            // surfaces a failure.
+            Debug.WriteLine($"[NoteControl.Tray] --service-action {verb} threw: {ex}");
+            scExit = -1;
+        }
+
+        Environment.ExitCode = scExit;
+        Shutdown(scExit);
+        return true;
     }
 
     /// <summary>
