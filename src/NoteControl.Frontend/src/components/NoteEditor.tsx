@@ -18,6 +18,7 @@ import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtens
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
+import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
 import type { NoteDto } from '../api/types';
 import type { SaveState } from './SaveStatusIndicator';
 import { TableToolbar } from './TableToolbar';
@@ -510,6 +511,13 @@ export function NoteEditor({
     };
   }, [initialNote.path]);
 
+  // Ship 54: global note defaults. Resolution order at render time:
+  //   per-note frontmatter → global default → CSS baseline.
+  // Notes with explicit Width/Font/FontSize keep behaving exactly as
+  // before; notes without those fields pick up whatever the user
+  // set globally in the ⚙️ popover.
+  const noteDefaults = useNoteDefaults();
+
   // Apply the current appearance to the editor's root DOM element.
   // Setting style props on .nc-editor cascades into paragraphs and
   // headings: font-family inherits, font-size inherits (headings use
@@ -517,11 +525,30 @@ export function NoteEditor({
   useEffect(() => {
     if (!editor) return;
     const dom = editor.view.dom as HTMLElement;
-    // Empty string clears the inline value, falling back to CSS.
-    dom.style.fontFamily = appearance.font ?? '';
-    dom.style.fontSize = appearance.fontSize ? `${appearance.fontSize}px` : '';
-    dom.style.width = appearance.width ? `${appearance.width}px` : '';
-  }, [editor, appearance.font, appearance.fontSize, appearance.width]);
+    // Resolve through global defaults so notes without per-note
+    // values pick up whatever's in localStorage. Empty strings
+    // clear the inline value and fall back to the CSS baseline,
+    // which is what we want for the "no per-note + no global" case.
+    const resolved = resolveNoteAppearance(
+      {
+        font: appearance.font,
+        fontSize: appearance.fontSize,
+        width: appearance.width,
+      },
+      noteDefaults.defaults,
+    );
+    dom.style.fontFamily = resolved.font;
+    dom.style.fontSize = resolved.fontSize;
+    dom.style.width = resolved.width;
+  }, [
+    editor,
+    appearance.font,
+    appearance.fontSize,
+    appearance.width,
+    noteDefaults.defaults.fontStack,
+    noteDefaults.defaults.fontSize,
+    noteDefaults.defaults.width,
+  ]);
 
   return (
     <div className="nc-editor-shell">

@@ -23,6 +23,7 @@ import {
   useRenamePrompt,
 } from '../tree/treeState';
 import { loadVariant, saveVariant, type TreeVariant } from '../tree/treeStyles';
+import { useTreeAppearance, buildTreeStyle } from '../tree/treeAppearance';
 
 /**
  * Top-level vault shell. Owns:
@@ -71,6 +72,8 @@ export function VaultLayout() {
     setVariantState(v);
     saveVariant(v);
   }, []);
+
+  const treeAppearance = useTreeAppearance();
 
   const [selection, setSelection] = useState<TreeSelection | null>(null);
   const [vault, setVault] = useState<VaultDto | null>(null);
@@ -680,6 +683,7 @@ export function VaultLayout() {
             onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
             variant={variant}
             onVariantChange={setVariant}
+            treeAppearance={treeAppearance}
           />
         }
       />
@@ -729,6 +733,7 @@ export function VaultLayout() {
             </div>
             <div
               className="nc-rail-scroll"
+              style={buildTreeStyle(treeAppearance.fontStack, treeAppearance.fontSize)}
               onMouseDown={handleScrollAreaMouseDown}
             >
               <TreeView

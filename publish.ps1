@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
   Build a self-contained, versioned NoteControl distribution.
+  Optionally tag + publish a GitHub Release in one step.
 
 .DESCRIPTION
   Produces dist\NoteControl-<Version>\ containing the published
   server (with the React frontend inlined into wwwroot\), the tray
-  app, the installer scripts, and a VERSION.txt. Everything in the
-  dist folder is what gets shipped -- a user runs installer\install.ps1
-  to install onto a target machine.
+  app, and a VERSION.txt. Everything in the dist folder is what
+  gets shipped -- manually copied to a target machine, or wrapped
+  by an installer in a later step.
 
   Layout:
     dist\NoteControl-<Version>\
@@ -21,14 +22,14 @@
       tray\                         Self-contained tray
         NoteControl.Tray.exe
         ...
-      installer\                    PowerShell installer (Ship 48)
-        install.ps1
-        uninstall.ps1
       VERSION.txt                   Just the version string + git SHA
 
   Optionally produces dist\NoteControl-<Version>.zip alongside
-  the folder if -Zip is passed. The zip is what goes on GitHub
-  Releases.
+  the folder if -Zip is passed.
+
+  Optionally tags + pushes + publishes a GitHub Release if
+  -Release is passed (implies -Zip; you can't release without an
+  asset to attach).
 
 .PARAMETER Version
   Version string, e.g. "1.0.0". Required. Stamped into the dist
@@ -47,7 +48,7 @@
 
 .PARAMETER Zip
   Switch -- if set, also produce a .zip of the dist folder for
-  easy hand-distribution / GitHub Releases upload.
+  easy hand-distribution.
 
 .PARAMETER SkipFrontend
   Switch -- skip the npm build step. Useful if you've already
@@ -57,14 +58,44 @@
 .PARAMETER SkipTray
   Switch -- skip the tray publish. Useful for server-only iteration.
 
+.PARAMETER Release
+  Switch -- after a successful build, create a git tag (vX.Y.Z),
+  push it to origin, and publish a GitHub Release with the zip
+  attached. Implies -Zip. Requires `gh` CLI on PATH and authed
+  (`gh auth status` must pass). Refuses to run if the working
+  tree is dirty -- the release MUST match what's on GitHub, no
+  exceptions.
+
+  The tray's in-app updater finds new versions by polling
+  https://api.github.com/repos/slqdk/NoteControl/releases/latest,
+  so this is the one-button "ship a new version to all
+  installed instances" path.
+
+  The release is created with title "Release X.Y.Z" and an empty
+  body. Edit on github.com afterwards if you want to add release
+  notes -- the tray's update window shows whatever's there.
+
+.PARAMETER Prerelease
+  Switch -- if set with -Release, the GitHub Release is marked
+  pre-release. The tray's updater still picks these up (we use
+  /releases/latest by default, which excludes prereleases unless
+  the latest IS a prerelease). For staged rollouts, mark a build
+  prerelease, test it, then publish a non-prerelease build.
+
 .EXAMPLE
   .\publish.ps1 -Version 1.0.0
   Build dist\NoteControl-1.0.0\ in Release mode.
 
 .EXAMPLE
-  .\publish.ps1 -Version 1.0.0 -Zip
-  Build the dist folder AND a zip alongside it. Upload that zip
-  to a GitHub Release.
+  .\publish.ps1 -Version 1.0.0-rc1 -Zip
+  Build the dist folder AND a zip alongside it.
+
+.EXAMPLE
+  .\publish.ps1 -Version 0.2.5 -Release
+  Build, zip, tag v0.2.5, push the tag, and publish a GitHub
+  Release with the zip attached. The tray's in-app updater will
+  pick this up within 24h on running installs (or right away
+  via Check for updates).
 
 .NOTES
   Run from the repository root. Requires:
@@ -72,6 +103,8 @@
     - Node + npm on PATH (`node -v`, `npm -v`)
     - The repo's working tree to be clean enough to publish from
       (no lock files held by a running server / tray)
+    - For -Release: `gh` CLI on PATH, authed against github.com,
+      AND a clean git working tree.
 
   Stop the dev server BEFORE running this script. A live tray
   holding NoteControl.Tray.exe will make `dotnet publish` fail
@@ -90,7 +123,11 @@ param(
 
     [switch]$Zip,
     [switch]$SkipFrontend,
-    [switch]$SkipTray
+    [switch]$SkipTray,
+
+    # Ship 56: GitHub Release publishing.
+    [switch]$Release,
+    [switch]$Prerelease
 )
 
 # Stop on first error. Without this, a failure in the middle of
@@ -106,13 +143,24 @@ $SrcRoot    = Join-Path $RepoRoot "src"
 $ServerProj = Join-Path $SrcRoot "NoteControl.Server\NoteControl.Server.csproj"
 $TrayProj   = Join-Path $SrcRoot "NoteControl.Tray\NoteControl.Tray.csproj"
 $FrontDir   = Join-Path $SrcRoot "NoteControl.Frontend"
-$InstallerDir = Join-Path $RepoRoot "installer"
 $DistRoot   = Join-Path $RepoRoot "dist"
 $DistDir    = Join-Path $DistRoot "NoteControl-$Version"
+
+# -Release implies -Zip (we need the zip to attach as an asset).
+# Setting it here means downstream code doesn't have to worry
+# about the corner case of "asked to release but didn't build the
+# asset".
+if ($Release -and -not $Zip) {
+    Write-Host "Note: -Release implies -Zip. Enabling zip output." -ForegroundColor DarkYellow
+    $Zip = $true
+}
 
 Write-Host ""
 Write-Host "======================================================" -ForegroundColor Cyan
 Write-Host " NoteControl publish: v$Version ($Configuration / $Runtime)" -ForegroundColor Cyan
+if ($Release) {
+    Write-Host " Mode: BUILD + RELEASE to GitHub" -ForegroundColor Cyan
+}
 Write-Host "======================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -135,13 +183,68 @@ if (-not $SkipFrontend) {
     Test-Tool "node" "-v"
     Test-Tool "npm"  "-v"
 }
-Write-Host ""
 
-# Check the installer folder exists; bail early so we don't go through
-# a 90-second build only to fail at copy time.
-if (-not (Test-Path -LiteralPath $InstallerDir)) {
-    throw "Installer folder not found at $InstallerDir. Did Ship 48 land cleanly?"
+# Pre-flight checks for -Release. Done UP FRONT (before the slow
+# build) so a misconfigured release attempt fails in 5 seconds
+# rather than 5 minutes after dotnet publish + npm build.
+if ($Release) {
+    # gh CLI must be installed -- fail loudly if not. Per the
+    # ship 57 design choice, we don't auto-install or fall back
+    # to manual web steps; the message tells the user to install
+    # gh and try again.
+    Test-Tool "gh"
+
+    # gh must also be authed against github.com. The release
+    # call would fail otherwise; check now to keep error messages
+    # tight.
+    try {
+        & gh auth status 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "not authed" }
+    } catch {
+        throw "gh CLI is not authenticated. Run: gh auth login"
+    }
+
+    # Working tree must be clean. A release that doesn't match
+    # HEAD is an attractive nuisance -- the user installs the
+    # zip, looks at the source tree assuming it matches, and gets
+    # confused. Refuse loudly.
+    Push-Location $RepoRoot
+    try {
+        $dirty = & git status --porcelain
+    } finally {
+        Pop-Location
+    }
+    if ($dirty) {
+        Write-Host ""
+        Write-Host "Refusing to publish a release: working tree is dirty." -ForegroundColor Red
+        Write-Host "Uncommitted changes:" -ForegroundColor Red
+        Write-Host $dirty -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Commit, stash, or revert them first. The release zip" -ForegroundColor White
+        Write-Host "must match what's on GitHub at the tagged commit." -ForegroundColor White
+        throw "Dirty working tree blocks -Release."
+    }
+
+    # The tag must not already exist locally OR on the remote.
+    # If it does, the user probably re-ran publish with the same
+    # version by accident. Better to refuse than to clobber.
+    Push-Location $RepoRoot
+    try {
+        $existingTag = & git tag --list "v$Version"
+        if ($existingTag) {
+            throw "Tag v$Version already exists locally. Delete it (`git tag -d v$Version`) or pick a new version."
+        }
+        # `git ls-remote --tags origin v$Version` returns a line if
+        # the tag exists on the remote; empty otherwise.
+        $remoteTag = & git ls-remote --tags origin "refs/tags/v$Version" 2>$null
+        if ($remoteTag) {
+            throw "Tag v$Version already exists on origin. Pick a new version."
+        }
+    } finally {
+        Pop-Location
+    }
 }
+Write-Host ""
 
 # ---------------------------------------------------------------
 # Clean previous output for THIS version. Leaves other versions'
@@ -249,16 +352,6 @@ if (-not $SkipTray) {
 }
 
 # ---------------------------------------------------------------
-# Copy installer into the dist folder.
-# Ship 48: this is what makes the resulting zip self-installable.
-# Without it, the user would download the zip and have to figure
-# out how to start the server manually.
-# ---------------------------------------------------------------
-Write-Host "Copying installer..." -ForegroundColor White
-Copy-Item $InstallerDir -Destination $DistDir -Recurse -Force
-Write-Host ""
-
-# ---------------------------------------------------------------
 # VERSION.txt -- useful both for the installer and for "which
 # build is this?" forensics on someone else's machine.
 # ---------------------------------------------------------------
@@ -279,15 +372,77 @@ Set-Content -Path (Join-Path $DistDir "VERSION.txt") -Value $versionContent -Enc
 
 # ---------------------------------------------------------------
 # Optional zip.
-# Naming matches what we'll upload to GitHub Releases as the
-# release asset. The tray's update flow (Ship 49) downloads this
-# exact filename.
 # ---------------------------------------------------------------
+$ZipPath = $null
 if ($Zip) {
     $ZipPath = Join-Path $DistRoot "NoteControl-$Version.zip"
     if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
     Write-Host "Creating $ZipPath ..." -ForegroundColor White
     Compress-Archive -Path $DistDir -DestinationPath $ZipPath -Force
+}
+
+# ---------------------------------------------------------------
+# Ship 56: GitHub Release.
+# Tag + push + create release with the zip attached. All checks
+# done up front; if we got here, gh is installed, authed, the
+# tree is clean, and the tag doesn't exist yet.
+#
+# Title is "Release X.Y.Z", body is empty. The user can edit on
+# github.com afterwards -- the tray's update window will show
+# whatever's there.
+# ---------------------------------------------------------------
+if ($Release) {
+    Write-Host ""
+    Write-Host "------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host " Publishing GitHub Release v$Version" -ForegroundColor Cyan
+    Write-Host "------------------------------------------------------" -ForegroundColor Cyan
+
+    # Tag at HEAD. Annotated tag (-a) is the convention for
+    # release tags so they carry a message + author. The -m
+    # value matches the GitHub Release title.
+    Push-Location $RepoRoot
+    try {
+        Write-Host "Creating annotated git tag v$Version at HEAD..." -ForegroundColor White
+        & git tag -a "v$Version" -m "Release $Version"
+        if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
+
+        Write-Host "Pushing tag to origin..." -ForegroundColor White
+        & git push origin "v$Version"
+        if ($LASTEXITCODE -ne 0) { throw "git push failed" }
+    } finally {
+        Pop-Location
+    }
+
+    # Build the gh release create command. --target HEAD makes
+    # gh use the current commit even if there's a slight race
+    # (someone pushed to master between our push and now).
+    # --notes "" intentionally creates a release with an empty
+    # body -- per the ship 57 design choice, you edit on
+    # github.com afterwards if you want to add notes.
+    $ghArgs = @(
+        "release", "create", "v$Version",
+        $ZipPath,
+        "--title", "Release $Version",
+        "--notes", "",
+        "--target", "HEAD"
+    )
+    if ($Prerelease) { $ghArgs += "--prerelease" }
+
+    Write-Host "Creating GitHub Release..." -ForegroundColor White
+    & gh @ghArgs
+    if ($LASTEXITCODE -ne 0) {
+        # If the gh call failed we've already pushed the tag.
+        # Best-effort cleanup so the next attempt doesn't trip
+        # over the existing tag.
+        Write-Host "Release creation failed. Rolling back the tag..." -ForegroundColor Red
+        try { & git tag -d "v$Version" 2>&1 | Out-Null } catch {}
+        try { & git push origin ":refs/tags/v$Version" 2>&1 | Out-Null } catch {}
+        throw "gh release create failed."
+    }
+
+    Write-Host ""
+    Write-Host "Release v$Version published." -ForegroundColor Green
+    Write-Host "  https://github.com/slqdk/NoteControl/releases/tag/v$Version" -ForegroundColor Cyan
 }
 
 # ---------------------------------------------------------------
@@ -305,14 +460,24 @@ if ($Zip) {
     $zipSize = (Get-Item $ZipPath).Length
     Write-Host "  Zip:          $ZipPath ($([math]::Round($zipSize / 1MB, 1)) MB)"
 }
+if ($Release) {
+    Write-Host "  Released:     v$Version (https://github.com/slqdk/NoteControl/releases/tag/v$Version)"
+}
 Write-Host ""
-Write-Host "Install on this (or any Windows) machine:" -ForegroundColor White
-Write-Host "  Right-click PowerShell -> 'Run as administrator', then:" -ForegroundColor DarkGray
-Write-Host "  cd '$DistDir'" -ForegroundColor DarkGray
-Write-Host "  .\installer\install.ps1" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "To uninstall later:" -ForegroundColor White
-Write-Host "  Add/Remove Programs -> NoteControl, OR" -ForegroundColor DarkGray
-Write-Host "  cd 'C:\Program Files\NoteControl' (admin PowerShell)" -ForegroundColor DarkGray
-Write-Host "  .\uninstall.ps1" -ForegroundColor DarkGray
+if (-not $Release) {
+    Write-Host "Next: copy $DistDir\ to a Windows machine and run:" -ForegroundColor White
+    Write-Host "  cd server" -ForegroundColor DarkGray
+    Write-Host "  .\NoteControl.Server.exe" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Then in another terminal in the same dist folder:" -ForegroundColor White
+    Write-Host "  cd tray" -ForegroundColor DarkGray
+    Write-Host "  .\NoteControl.Tray.exe" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Browser at http://localhost:8080 -- frontend served by the server." -ForegroundColor White
+} else {
+    Write-Host "Installed instances will see this update on their next" -ForegroundColor White
+    Write-Host "auto-poll (within 24h) or via Check for updates." -ForegroundColor White
+    Write-Host ""
+    Write-Host "Want to add release notes? Open the URL above and edit." -ForegroundColor White
+}
 Write-Host ""

@@ -295,9 +295,26 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
 
     public async Task UnshareVaultAsync(Guid vaultId, Guid userId, CancellationToken ct = default)
     {
-        using var request = BuildRequest(HttpMethod.Delete, $"/api/vaults/{vaultId}/permissions/{userId}");
+        using var request = BuildRequest(HttpMethod.Delete,
+            $"/api/vaults/{vaultId}/permissions/{userId}");
         using var response = await _http.SendAsync(request, ct);
         await EnsureSuccessAsync(response, ct);
+    }
+    public async Task<InstallSampleDataResponse> InstallSampleDataAsync(
+        Guid vaultId, CancellationToken ct = default)
+    {
+        // Ship 52: POST /api/vaults/{id}/install-sample-data.
+        // No body — the vault id in the URL is the only input the
+        // server needs. Response carries file + folder counts.
+        using var request = BuildRequest(
+            HttpMethod.Post,
+            $"/api/vaults/{vaultId}/install-sample-data");
+        using var response = await _http.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+        return await response.Content
+            .ReadFromJsonAsync<InstallSampleDataResponse>(JsonOptions, ct)
+            ?? throw new AdminClientException(
+                "Server returned an empty install-sample-data response.");
     }
 
     // -----------------------------------------------------------------

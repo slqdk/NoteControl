@@ -31,9 +31,13 @@ export const VARIANT_LABELS: Record<TreeVariant, string> = {
 const STORAGE_KEY = 'nc.treeVariant';
 
 /**
- * Read the persisted variant. Defaults to 'comfortable' for first-time
- * users — modern OSes nudged people toward the larger touch-friendly
- * style, so it's the safer first impression.
+ * Read the persisted variant. Defaults to 'compact' for first-time
+ * users — the dense Win7-style layout fits more folders on screen
+ * without scrolling, which is the right starting point for a notes
+ * app where the tree's job is navigation, not touch interaction.
+ *
+ * Existing users who previously picked 'comfortable' keep their
+ * setting; the default only applies when nothing is stored.
  *
  * Wrapped in try/catch because some browsers (private mode, embedded
  * webviews) throw on localStorage access. Falling back to the default
@@ -48,7 +52,7 @@ export function loadVariant(): TreeVariant {
   } catch {
     /* ignore */
   }
-  return 'comfortable';
+  return 'compact';
 }
 
 export function saveVariant(variant: TreeVariant): void {

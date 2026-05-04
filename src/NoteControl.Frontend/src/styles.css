@@ -2320,7 +2320,10 @@ body.nc-dragging * {
    Putting overflow on this div would create nested scroll areas. */
 .nc-editor-page-area {
   flex: 1;
-  padding: 24px;
+  /* Ship 54: padding 24 → 0. Note card now sits flush against the
+     shell edge — only the card's internal text padding gives it
+     breathing room. */
+  padding: 0;
 }
 
 /* ----- Breadcrumb row (editor) ------------------------------------ */
@@ -2393,6 +2396,33 @@ body.nc-dragging * {
   font-weight: 500;
   letter-spacing: normal;
   text-transform: none;
+}
+
+/* Ship 53: tree font picker (select) + font size (number).
+   Visually align with the existing settings popover controls —
+   full-width, themed border, modest padding. */
+.nc-settings-select,
+.nc-settings-number {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  font: inherit;
+  margin: 4px 0 2px;
+}
+.nc-settings-select:focus,
+.nc-settings-number:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+}
+.nc-settings-number {
+  /* Number-spinner clutter is unhelpful inside the popover; keep
+     keyboard ↑/↓ working by NOT using -moz-appearance: textfield
+     globally — Firefox still allows the spinners on focus, which
+     is fine. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Width slider. Native range input with light styling — we don't
