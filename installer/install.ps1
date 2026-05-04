@@ -337,18 +337,41 @@ Write-Section "Starting service"
 Start-Service -Name $ServiceName -ErrorAction Stop
 
 # Wait for /health. The server publishes its bound URL to
-# {DataRoot}\.server\server.url (Ship 43); we could read that for
-# a perfectly accurate probe target, but at install time we just
-# care about the configured default port. A misconfigured port
-# isn't an installer failure -- the service is still installed
-# and the user can fix config and restart.
+# {DataRoot}\.server\server.url (Ship 43) once Kestrel has bound.
+# We probe that URL specifically, so reinstalls onto machines with
+# an existing config that runs on a non-default port (e.g. 1234)
+# don't get a false-negative "service didn't respond on 8080"
+# from the installer (Ship 64).
+#
+# The file is written shortly AFTER service start, so we have a
+# small bootstrap window where the file doesn't exist yet -- in
+# that case we fall back to the parameter port. The deadline-based
+# probe loop will retry, so eventually one of the two URLs gets
+# a 200.
+$serverUrlFile = Join-Path $DataRoot ".server\server.url"
 $healthUrl = "http://127.0.0.1:$Port/health"
-Write-Step "Probing $healthUrl ..."
+Write-Step "Probing /health ..."
 $healthy = $false
+$probedUrl = $healthUrl
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) {
+    # Re-read server.url every iteration. Once the server publishes
+    # it, we lock onto the real port and stop falling back.
+    if (Test-Path -LiteralPath $serverUrlFile) {
+        try {
+            $serverUrlJson = Get-Content -LiteralPath $serverUrlFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($serverUrlJson.trayUrl) {
+                # trayUrl is always loopback at the actual bound
+                # port (per Ship 43), so it's the right thing to
+                # probe from the installer.
+                $probedUrl = ($serverUrlJson.trayUrl.TrimEnd('/')) + "/health"
+            }
+        } catch {
+            # Malformed JSON or transient read; ignore and retry next loop.
+        }
+    }
     try {
-        $r = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        $r = Invoke-WebRequest -Uri $probedUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
         if ($r.StatusCode -eq 200) {
             $healthy = $true
             break
@@ -359,9 +382,9 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
 }
 if ($healthy) {
-    Write-Step "  Service is responding to /health." Green
+    Write-Step "  Service is responding at $probedUrl." Green
 } else {
-    Write-Step "  Service didn't respond on $healthUrl within 30s." Yellow
+    Write-Step "  Service didn't respond at $probedUrl within 30s." Yellow
     Write-Step "  Check logs at $logsDir for clues. Service is still registered." Yellow
 }
 
