@@ -428,46 +428,56 @@ if ($Release) {
         Pop-Location
     }
 
-    # Resolve HEAD to an explicit commit SHA. `gh release create
-    # --target` accepts a branch name or a commit SHA, but NOT
-    # the literal "HEAD" -- it shells out to git which doesn't
-    # know what HEAD means in gh's context. Pinning to the SHA
-    # also protects against the (rare) race where someone else
-    # pushes to master between our tag push and the release
-    # create.
-    Push-Location $RepoRoot
+    # Build the gh release create command.
+    #
+    # Two non-obvious choices:
+    #
+    # 1. Empty notes via a temp file, NOT via --notes "". When you
+    #    pass --notes "" through PowerShell, the parser strips the
+    #    empty string and gh thinks the value of --notes is the
+    #    next flag (--target), which results in a confusing
+    #    "no matches found for <sha>" error attributed to the
+    #    wrong field. Writing the empty body to a temp file and
+    #    using --notes-file dodges the PowerShell quoting issue
+    #    entirely.
+    #
+    # 2. No --target. gh defaults to the repo's default branch
+    #    (master), which is what we want anyway -- the tag we
+    #    just pushed points at HEAD on master. Earlier attempts
+    #    to pass --target with a SHA or a branch name failed for
+    #    reasons related to (1) above; dropping the flag avoids
+    #    that whole class of issue.
+    #
+    # Per the ship 57 design choice, the body is intentionally
+    # empty -- the user edits on github.com afterwards if they
+    # want notes.
+    $notesFile = New-TemporaryFile
     try {
-        $headSha = (& git rev-parse HEAD).Trim()
+        Set-Content -Path $notesFile.FullName -Value "" -Encoding UTF8 -NoNewline
+
+        $ghArgs = @(
+            "release", "create", "v$Version",
+            $ZipPath,
+            "--title", "Release $Version",
+            "--notes-file", $notesFile.FullName
+        )
+        if ($Prerelease) { $ghArgs += "--prerelease" }
+
+        Write-Host "Creating GitHub Release..." -ForegroundColor White
+        & gh @ghArgs
+        if ($LASTEXITCODE -ne 0) {
+            # If the gh call failed we've already pushed the tag.
+            # Best-effort cleanup so the next attempt doesn't trip
+            # over the existing tag.
+            Write-Host "Release creation failed. Rolling back the tag..." -ForegroundColor Red
+            try { & git tag -d "v$Version" 2>&1 | Out-Null } catch {}
+            try { & git push origin ":refs/tags/v$Version" 2>&1 | Out-Null } catch {}
+            throw "gh release create failed."
+        }
     } finally {
-        Pop-Location
-    }
-    if ([string]::IsNullOrWhiteSpace($headSha)) {
-        throw "Could not resolve HEAD to a commit SHA."
-    }
-
-    # Build the gh release create command. --notes "" intentionally
-    # creates a release with an empty body -- per the ship 57
-    # design choice, you edit on github.com afterwards if you want
-    # to add notes.
-    $ghArgs = @(
-        "release", "create", "v$Version",
-        $ZipPath,
-        "--title", "Release $Version",
-        "--notes", "",
-        "--target", $headSha
-    )
-    if ($Prerelease) { $ghArgs += "--prerelease" }
-
-    Write-Host "Creating GitHub Release..." -ForegroundColor White
-    & gh @ghArgs
-    if ($LASTEXITCODE -ne 0) {
-        # If the gh call failed we've already pushed the tag.
-        # Best-effort cleanup so the next attempt doesn't trip
-        # over the existing tag.
-        Write-Host "Release creation failed. Rolling back the tag..." -ForegroundColor Red
-        try { & git tag -d "v$Version" 2>&1 | Out-Null } catch {}
-        try { & git push origin ":refs/tags/v$Version" 2>&1 | Out-Null } catch {}
-        throw "gh release create failed."
+        if (Test-Path $notesFile.FullName) {
+            Remove-Item $notesFile.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Host ""
