@@ -229,6 +229,16 @@ try
     // Vault services.
     builder.Services.AddSingleton<IVaultPathResolver, VaultPathResolver>();
     builder.Services.AddScoped<IVaultService, VaultService>();
+    // Ship 71: ISampleDataInstaller WAS missing from DI registration.
+    // Without this, the minimal-API binder fell back to body-binding
+    // the `ISampleDataInstaller installer` parameter on the install
+    // endpoint, which produced a 415 with no Content-Type (what the
+    // tray sent) or a 500 trying to deserialise `{}` into the
+    // interface (what curl with Content-Type sent). The actual
+    // endpoint code never ran. Scoped because the implementation
+    // depends on the scoped ServerDbContext.
+    builder.Services.AddScoped<NoteControl.Server.Vaults.SampleData.ISampleDataInstaller,
+        NoteControl.Server.Vaults.SampleData.SampleDataInstaller>();
 
     // Note services.
     builder.Services.AddSingleton<INotePathResolver, NotePathResolver>();

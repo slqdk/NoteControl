@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NoteControl.Server.Audit;
 using NoteControl.Server.Auth;
@@ -401,11 +402,21 @@ public static class VaultEndpoints
     private static async Task<IResult> InstallSampleDataAsync(
         Guid vaultId,
         HttpContext http,
-        IVaultService vaults,
-        ISampleDataInstaller installer,
-        IIndexService index,
-        IAuditLog audit,
-        ILoggerFactory loggerFactory,
+        // Ship 71: explicit [FromServices] on every DI param. Pre-Ship-71
+        // this endpoint wasn't annotated, and ISampleDataInstaller wasn't
+        // registered in DI. The minimal-API binder fell back to BODY
+        // binding for the unresolved interface, which surfaced as a 415
+        // (no Content-Type) from the tray and a 500 (Content-Type set,
+        // body unparseable into the interface) from curl. The real fix
+        // is the DI registration in Program.cs; the [FromServices]
+        // annotations are belt-and-braces so a future "I forgot to
+        // register X" produces a clean DI exception at first call
+        // instead of an opaque body-binding failure.
+        [FromServices] IVaultService vaults,
+        [FromServices] ISampleDataInstaller installer,
+        [FromServices] IIndexService index,
+        [FromServices] IAuditLog audit,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var user = http.RequireUser();
