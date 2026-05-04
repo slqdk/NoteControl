@@ -3,12 +3,21 @@ import { useEffect, useRef, useState } from 'react';
 import type { StickyNoteDto } from '../api/types';
 
 /**
- * One sticky note inside a TaskArea (step 42).
+ * One sticky note inside a TaskArea.
  *
- * Layout: a small coloured panel with three rows:
- *   1. Header: checkbox (toggles done) + colour-key dot + ⚙ menu
- *   2. Headline (single-line input, always editable)
- *   3. Content (textarea, always editable, auto-grows up to a cap)
+ * Ship 76 layout — compacted:
+ *   Row 1: checkbox + headline input (inline, takes the rest of
+ *          the row) + ⚙ menu button
+ *   Row 2: content textarea, defaults to ONE line tall, expands
+ *          via field-sizing:content (Chrome 123+, Firefox 122+)
+ *          with a manual-resize-grip fallback so older browsers
+ *          still render usably.
+ *
+ * Pre-Ship-76 had three rows (header / headline / 3-line content)
+ * which wasted vertical space — most notes stay one line and the
+ * empty whitespace below them looked like a glitch. The new
+ * layout makes a brand-new sticky take ~2 lines of vertical
+ * space instead of ~5.
  *
  * Editing is inline — you type, the parent's debounced save
  * handles persistence. Enter on the headline jumps focus to the
@@ -28,10 +37,6 @@ import type { StickyNoteDto } from '../api/types';
  * palette can be retuned later without rewriting saved notes.
  * If a note has an unknown colour key (e.g. hand-edited file),
  * we fall back to "yellow" so the note still renders.
- *
- * Each entry has a label (human-readable, used for the swatch
- * tooltip) and a CSS class suffix (the .nc-sticky-note-color-XXX
- * class adds the actual colours).
  */
 export const STICKY_COLORS: Array<{ key: string; label: string }> = [
   { key: 'yellow', label: 'Yellow' },
@@ -89,12 +94,13 @@ export function StickyNote({ note, onChange, onDelete }: StickyNoteProps) {
         note.done ? 'nc-sticky-note-done' : '',
       ].filter(Boolean).join(' ')}
     >
+      {/*
+        Ship 76: header is now ONE row that holds checkbox +
+        headline + cog. Pre-Ship-76 had a header row plus a
+        separate headline row underneath; the headline row sat
+        empty whitespace at default and looked like a glitch.
+      */}
       <div className="nc-sticky-note-header">
-        {/*
-          Native checkbox — keyboard-accessible by default, no
-          custom rendering. The label wraps it so the click
-          target is generous.
-        */}
         <label
           className="nc-sticky-note-check"
           title={note.done ? 'Mark as not done' : 'Mark as done'}
@@ -107,7 +113,27 @@ export function StickyNote({ note, onChange, onDelete }: StickyNoteProps) {
           />
         </label>
 
-        <span className="nc-sticky-note-spacer" />
+        {/*
+          Headline now lives inline. flex:1 1 auto so it takes
+          all remaining space between the checkbox and the cog.
+          Same input shape as before; the CSS just snaps it into
+          a row instead of giving it its own block.
+        */}
+        <input
+          type="text"
+          className="nc-sticky-note-headline"
+          value={note.headline}
+          placeholder="Headline"
+          aria-label="Note headline"
+          onChange={(e) => onChange({ headline: e.target.value })}
+          onKeyDown={(e) => {
+            // Enter on headline → jump to content.
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              contentRef.current?.focus();
+            }
+          }}
+        />
 
         <button
           type="button"
@@ -143,9 +169,6 @@ export function StickyNote({ note, onChange, onDelete }: StickyNoteProps) {
                     aria-pressed={c.key === color}
                     onClick={() => {
                       onChange({ color: c.key });
-                      // Keep the menu open so the user can see the
-                      // change and pick another colour if they want.
-                      // Closes on outside click / Escape.
                     }}
                   />
                 ))}
@@ -156,10 +179,6 @@ export function StickyNote({ note, onChange, onDelete }: StickyNoteProps) {
                 type="button"
                 className="nc-btn nc-btn-danger nc-sticky-note-menu-delete"
                 onClick={() => {
-                  // Confirm because there's no undo. Notes are
-                  // small enough that retyping isn't catastrophic
-                  // but the dialog still saves the occasional
-                  // misclick.
                   // eslint-disable-next-line no-alert
                   if (window.confirm('Delete this note? This cannot be undone.')) {
                     setMenuOpen(false);
@@ -174,31 +193,24 @@ export function StickyNote({ note, onChange, onDelete }: StickyNoteProps) {
         )}
       </div>
 
-      <input
-        type="text"
-        className="nc-sticky-note-headline"
-        value={note.headline}
-        placeholder="Headline"
-        aria-label="Note headline"
-        onChange={(e) => onChange({ headline: e.target.value })}
-        onKeyDown={(e) => {
-          // Per design: Enter on headline → jump to content. We
-          // also block default form submission (no form here, but
-          // belt-and-braces).
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            contentRef.current?.focus();
-          }
-        }}
-      />
+      {/*
+        Ship 76: content textarea now defaults to ONE row visible
+        (rows=1). On modern Chromium / Firefox, field-sizing:content
+        (set in CSS) makes it auto-grow as the user types; on
+        older browsers it stays one line and the user can drag the
+        native resize handle if they need more. Either way, the
+        empty default no longer wastes vertical space.
 
+        Note kept the textarea (not <input>) so multi-line content
+        round-trips when read from disk.
+      */}
       <textarea
         ref={contentRef}
         className="nc-sticky-note-content"
         value={note.content}
         placeholder="Add details…"
         aria-label="Note content"
-        rows={3}
+        rows={1}
         onChange={(e) => onChange({ content: e.target.value })}
       />
     </div>
