@@ -81,11 +81,43 @@ $ErrorActionPreference = 'Stop'
 # who runs this and then asks "what happened?" can read install.log
 # next to the binaries afterwards. Console-only errors during early
 # bootstrapping are fine -- nothing mutated yet at that point.
-$global:LogLines = New-Object System.Collections.Generic.List[string]
+#
+# Ship 67: streaming. Pre-Ship-67, log lines were buffered in memory
+# and only persisted by Set-Content at the very end of the script.
+# If the script crashed mid-way (which happened on a botched in-tray
+# update -- tray\ folder ended up missing, log file untouched), every
+# log line went to /dev/null and the user was left staring at a stale
+# install.log from a previous run, with no clue which step failed.
+#
+# Now: lines still go into $global:LogLines (so the final summary
+# write works the same), but if $global:LogFile is set we also
+# append to disk on every call. $global:LogFile gets pointed at
+# install.log as soon as $InstallDir exists -- which is well before
+# anything risky like Stop-Service or Copy-Item runs. Pre-bootstrap
+# lines (the few before $InstallDir is created) get caught up by
+# the "flush whatever isn't yet on disk" pass at the end, OR by an
+# explicit Flush-Log call from a catch block.
+$global:LogLines     = New-Object System.Collections.Generic.List[string]
+$global:LogFile      = $null
+$global:LogFlushedTo = 0   # how many entries of $LogLines have been written to $LogFile
+
 function Write-Step {
     param([string]$Message, [ConsoleColor]$Color = [ConsoleColor]::White)
     Write-Host "  $Message" -ForegroundColor $Color
-    $global:LogLines.Add("[$(Get-Date -Format 'HH:mm:ss')] $Message")
+    $line = "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+    $global:LogLines.Add($line)
+    if ($global:LogFile) {
+        # Append-only; don't fight the file system if it's
+        # transiently locked (av scanning Program Files etc.).
+        try {
+            Add-Content -LiteralPath $global:LogFile -Value "  $line" -Encoding UTF8 -ErrorAction Stop
+            $global:LogFlushedTo = $global:LogLines.Count
+        } catch {
+            # Best-effort log; we'd rather lose a log line than
+            # blow up an install because of an antivirus race.
+            # The end-of-script flush will retry the whole tail.
+        }
+    }
 }
 function Write-Section {
     param([string]$Title)
@@ -93,6 +125,31 @@ function Write-Section {
     Write-Host "==> $Title" -ForegroundColor Cyan
     $global:LogLines.Add("")
     $global:LogLines.Add("==> $Title")
+    if ($global:LogFile) {
+        try {
+            Add-Content -LiteralPath $global:LogFile -Value @("", "==> $Title") -Encoding UTF8 -ErrorAction Stop
+            $global:LogFlushedTo = $global:LogLines.Count
+        } catch { }
+    }
+}
+
+# Flush any in-memory log entries that haven't yet been written to
+# the log file. Called from catch blocks and at the end of the
+# script. Idempotent -- safe to call multiple times.
+function Flush-Log {
+    if (-not $global:LogFile) { return }
+    if ($global:LogFlushedTo -ge $global:LogLines.Count) { return }
+    $tail = $global:LogLines.GetRange(
+        $global:LogFlushedTo,
+        $global:LogLines.Count - $global:LogFlushedTo)
+    try {
+        Add-Content -LiteralPath $global:LogFile -Value $tail -Encoding UTF8 -ErrorAction Stop
+        $global:LogFlushedTo = $global:LogLines.Count
+    } catch {
+        # If we can't even append at flush time, there's nothing
+        # more we can do -- the screen output is the user's only
+        # remaining record.
+    }
 }
 
 # ---------------------------------------------------------------
@@ -201,13 +258,37 @@ if ($service) {
 
 # Kill tray. Any installation that replaces tray.exe must do this
 # first, otherwise Copy-Item gets ACCESS DENIED on the live binary.
+#
+# Ship 67: the previous "Stop-Process | Start-Sleep 500" was fire-
+# and-forget. Stop-Process returns when the SCM has been told to
+# kill the process, NOT when the process has actually exited.
+# 500ms isn't always enough on a busy box, especially when tray.exe
+# is mid-shutdown disposing H.NotifyIcon resources. The result was
+# a botched in-tray update where Copy-Item failed on the still-
+# locked tray.exe, the script crashed silently (no streaming log
+# pre-Ship-67), and the user ended up with a missing tray\ folder.
+# Now we poll Get-Process until either the process is gone or 15s
+# passes. If it's still alive at 15s, log loudly and continue --
+# the copy step's try/catch will surface the file-lock error in
+# the (now persisted) log if it does fail.
 $trayProcs = Get-Process -Name "NoteControl.Tray" -ErrorAction SilentlyContinue
 if ($trayProcs) {
     Write-Step "Stopping tray ($($trayProcs.Count) process(es))..."
     $trayProcs | Stop-Process -Force -ErrorAction SilentlyContinue
-    # Brief settle so the file handle releases.
-    Start-Sleep -Milliseconds 500
-    Write-Step "  Tray stopped." Green
+
+    $trayDeadline = (Get-Date).AddSeconds(15)
+    $trayGone = $false
+    while ((Get-Date) -lt $trayDeadline) {
+        $still = Get-Process -Name "NoteControl.Tray" -ErrorAction SilentlyContinue
+        if (-not $still) { $trayGone = $true; break }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($trayGone) {
+        Write-Step "  Tray stopped (verified gone)." Green
+    } else {
+        Write-Step "  Tray STILL running after 15s -- copy may fail." Yellow
+        Write-Step "  This is unusual; check Task Manager for stuck NoteControl.Tray." Yellow
+    }
 }
 
 # ---------------------------------------------------------------
@@ -219,6 +300,41 @@ Write-Section "Copying files to $InstallDir"
 if (-not (Test-Path -LiteralPath $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Write-Step "Created $InstallDir"
+}
+
+# Ship 67: from this point on, every Write-Step / Write-Section
+# also appends to install.log immediately. We rotate the file
+# (truncate + write header) so the previous run's log is replaced
+# rather than appended to -- otherwise a chain of failed installs
+# leaves a Frankenstein log that's hard to read.
+$global:LogFile = Join-Path $InstallDir "install.log"
+$logHeader = @(
+    "NoteControl install log",
+    "Run at:  $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')",
+    "Version: $Version",
+    "Mode:    $(if ($isUpgrade) { 'upgrade' } else { 'fresh install' })",
+    "Source:  $DistRoot",
+    "Target:  $InstallDir",
+    "Data:    $DataRoot",
+    "User:    $env:USERDOMAIN\$env:USERNAME",
+    "----------------------------------------"
+)
+try {
+    # Set-Content (not Add-Content) so the file is truncated/created.
+    Set-Content -LiteralPath $global:LogFile -Value $logHeader -Encoding UTF8 -ErrorAction Stop
+    # Now flush the buffered lines from before this point (admin
+    # check, dist verification, service detect, stop-service, kill-
+    # tray) -- they accumulated in $global:LogLines while $LogFile
+    # was still null.
+    Flush-Log
+    Write-Step "Streaming log to $global:LogFile" Green
+} catch {
+    # If we can't open the log at all (read-only volume? AV?),
+    # disable streaming and fall back to the original behaviour
+    # (one big write at the end).
+    Write-Step "Could not open install.log for streaming: $($_.Exception.Message)" Yellow
+    Write-Step "Logs will only be written if the install completes." Yellow
+    $global:LogFile = $null
 }
 
 # For an upgrade, wipe the SUBFOLDERS we own (server\ and tray\) but
@@ -236,10 +352,35 @@ foreach ($sub in @("server", "tray")) {
     }
 }
 
-Write-Step "Copying server\ ..."
-Copy-Item -Path $ServerSrc -Destination $InstallDir -Recurse -Force
-Write-Step "Copying tray\ ..."
-Copy-Item -Path $TraySrc   -Destination $InstallDir -Recurse -Force
+# Ship 67: file copy is wrapped in try/catch + Flush-Log so a copy
+# failure (most likely cause: stale file lock on tray.exe from a
+# tray that didn't fully release its handles) writes the log to
+# disk before the script terminates. Pre-Ship-67, $ErrorActionPreference=Stop
+# turned a Copy-Item failure into a script-fatal exception that
+# never reached the end-of-script log write -- the user was left
+# with a stale install.log and no clue what failed.
+try {
+    Write-Step "Copying server\ ..."
+    Copy-Item -Path $ServerSrc -Destination $InstallDir -Recurse -Force -ErrorAction Stop
+    Write-Step "  server\ copied." Green
+} catch {
+    Write-Step "ERROR copying server\: $($_.Exception.Message)" Red
+    Flush-Log
+    throw
+}
+
+try {
+    Write-Step "Copying tray\ ..."
+    Copy-Item -Path $TraySrc -Destination $InstallDir -Recurse -Force -ErrorAction Stop
+    Write-Step "  tray\ copied." Green
+} catch {
+    Write-Step "ERROR copying tray\: $($_.Exception.Message)" Red
+    Write-Step "  Most likely cause: tray.exe was still locked when the copy started." Yellow
+    Write-Step "  Check if a NoteControl.Tray process is still running:" Yellow
+    Write-Step "    Get-Process NoteControl.Tray" Yellow
+    Flush-Log
+    throw
+}
 
 # Copy VERSION.txt and the uninstaller alongside, so they're available
 # without re-downloading the whole dist.
@@ -649,19 +790,46 @@ if (-not $NoTrayLaunch) {
 # ---------------------------------------------------------------
 # Persist the install log inside the install dir
 # ---------------------------------------------------------------
+# Ship 67: the log has been streaming to disk since the "Copying
+# files" section started (see $global:LogFile init above). Here we
+# just flush anything still in the buffer and append a footer so
+# the user can tell at a glance whether the install completed
+# normally or was truncated mid-way.
+#
+# If $global:LogFile is null, we hit the fallback branch below
+# (streaming was disabled because we couldn't open the log file)
+# and use the original one-shot write -- preserves the previous
+# behaviour for that edge case.
 $logPath = Join-Path $InstallDir "install.log"
-$header  = @(
-    "NoteControl install log",
-    "Run at:  $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')",
-    "Version: $Version",
-    "Mode:    $(if ($isUpgrade) { 'upgrade' } else { 'fresh install' })",
-    "Source:  $DistRoot",
-    "Target:  $InstallDir",
-    "Data:    $DataRoot",
-    "User:    $env:USERDOMAIN\$env:USERNAME",
-    "----------------------------------------"
-)
-Set-Content -Path $logPath -Value ($header + $global:LogLines) -Encoding UTF8
+if ($global:LogFile) {
+    Flush-Log
+    try {
+        Add-Content -LiteralPath $global:LogFile -Encoding UTF8 -Value @(
+            "----------------------------------------",
+            "Completed normally at $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')."
+        ) -ErrorAction Stop
+    } catch {
+        # Footer-write failure isn't worth crashing on; the
+        # streamed body is intact.
+    }
+} else {
+    # Fallback path: streaming was disabled; write everything in
+    # one go, exactly like pre-Ship-67. If we hit this, the install
+    # log might be incomplete (lines from before $InstallDir existed
+    # are buffered, lines from after were never persisted).
+    $header = @(
+        "NoteControl install log",
+        "Run at:  $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')",
+        "Version: $Version",
+        "Mode:    $(if ($isUpgrade) { 'upgrade' } else { 'fresh install' })",
+        "Source:  $DistRoot",
+        "Target:  $InstallDir",
+        "Data:    $DataRoot",
+        "User:    $env:USERDOMAIN\$env:USERNAME",
+        "----------------------------------------"
+    )
+    Set-Content -Path $logPath -Value ($header + $global:LogLines) -Encoding UTF8
+}
 
 # ---------------------------------------------------------------
 # Done
