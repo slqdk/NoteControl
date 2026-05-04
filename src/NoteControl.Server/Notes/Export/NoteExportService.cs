@@ -167,13 +167,19 @@ public sealed class NoteExportService : INoteExportService
         var noteParent = Path.GetDirectoryName(absolute) ?? string.Empty;
         var processed = await PostProcessHtmlAsync(html, vaultRoot, noteParent, ct);
 
-        // ---- 4. Build the docx -------------------------------------
-        var bytes = await BuildDocxAsync(processed, fm, ct);
-
         // Filename: strip the .md from the canonical path's last
         // segment. Sanitise so Content-Disposition doesn't choke.
         var baseName = Path.GetFileNameWithoutExtension(canonical);
         if (string.IsNullOrEmpty(baseName)) baseName = "note";
+
+        // Ship 68: derive a display title for the docx header.
+        // Same precedence as the search indexer (frontmatter "title"
+        // > first H1 > filename) so the export matches what the
+        // user sees in search results.
+        var title = DeriveTitle(fm, body, canonical);
+
+        // ---- 4. Build the docx -------------------------------------
+        var bytes = await BuildDocxAsync(processed, fm, title, ct);
 
         return new NoteExport(bytes, baseName);
     }
@@ -473,6 +479,7 @@ public sealed class NoteExportService : INoteExportService
     private async Task<byte[]> BuildDocxAsync(
         string html,
         ParsedFrontmatter fm,
+        string title,
         CancellationToken ct)
     {
         var fontFamily = ExtractPrimaryFontFamily(fm.Font) ?? DefaultFont;
@@ -500,6 +507,17 @@ public sealed class NoteExportService : INoteExportService
 
             // A4 page + 1-inch margins.
             ApplyPageSetup(mainPart);
+
+            // Ship 68: header line — title left, version right, on a
+            // single line. Built as a 2-cell borderless table because
+            // a paragraph with a right-aligned tab stop is fragile
+            // across Word/LibreOffice/Pages, while a table renders
+            // identically. The header is appended BEFORE ParseBody
+            // so it ends up as the first body child, ahead of any
+            // user content. Style is intentionally subdued (10pt,
+            // not bold, default font) — it's a reference header,
+            // not a title page.
+            AppendHeaderRow(mainPart, title, fm.Version, fontFamily);
 
             // Body conversion. We wrap in try/catch so a single
             // unparseable element doesn't sink the export — log
@@ -615,6 +633,165 @@ public sealed class NoteExportService : INoteExportService
                 Gutter = 0,
             });
         body.Append(sectPr);
+    }
+
+    /// <summary>
+    /// Ship 68: derive the display title for the docx header.
+    /// Mirrors NoteIndexer.DeriveTitle precedence: frontmatter
+    /// "title" Extra key > first H1 in the body > filename. Kept
+    /// here as a private static (rather than shared with the
+    /// indexer) because the alternative is exposing a public
+    /// helper purely for cross-module use, and the duplication is
+    /// six lines.
+    /// </summary>
+    private static string DeriveTitle(ParsedFrontmatter fm, string body, string canonicalRelative)
+    {
+        // 1. Frontmatter "title" — stored under Extra (not a typed
+        //    field on ParsedFrontmatter).
+        if (fm.Extra.TryGetValue("title", out var raw) && raw is string s && !string.IsNullOrWhiteSpace(s))
+        {
+            return s.Trim();
+        }
+
+        // 2. First H1.
+        using var reader = new StringReader(body);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (line.Length == 0) continue;
+            if (line.StartsWith("# ", StringComparison.Ordinal))
+            {
+                return line[2..].Trim();
+            }
+            // First non-blank, non-H1 line wins us nothing — fall through.
+            break;
+        }
+
+        // 3. Fallback to filename without extension.
+        return Path.GetFileNameWithoutExtension(canonicalRelative);
+    }
+
+    /// <summary>
+    /// Ship 68: build a borderless 2-cell table that puts the title
+    /// on the left and the version on the right, on a single line.
+    /// Appended as the first child of the document body so it sits
+    /// at the top of page 1 ahead of any markdown content.
+    ///
+    /// Why a table and not a tab-stop paragraph: tab-stop alignment
+    /// with a right-aligned tab to the page edge is fragile across
+    /// Word / LibreOffice / Pages — different defaults for the
+    /// usable text width, different handling of right-tab fill,
+    /// occasional glitches with wide page margins. A table cell
+    /// with width=50%pct + jc=right renders identically everywhere.
+    ///
+    /// Style intent: small (10 pt half-points = 20), not bold,
+    /// default font family. Just a reference header; the body
+    /// content is the document.
+    /// </summary>
+    private static void AppendHeaderRow(
+        MainDocumentPart mainPart,
+        string title,
+        string version,
+        string fontFamily)
+    {
+        // Word half-point sizes; 20 = 10 pt. Smaller than the body
+        // default (22 = 11 pt) so the header reads as metadata, not
+        // content. Bold deliberately omitted as per user's spec.
+        const string HeaderHalfPoints = "20";
+
+        // Run properties shared by both cells. RunFonts pinned to
+        // the same family as the document defaults so the header
+        // doesn't visually drift if the user picked an unusual
+        // body font (Cambria default; per-note Font override
+        // possible). FontSize forces the smaller header size.
+        static OpenXmlElement BuildCell(string text, string fontFamily, JustificationValues justify)
+        {
+            var runProps = new RunProperties(
+                new RunFonts
+                {
+                    Ascii = fontFamily,
+                    HighAnsi = fontFamily,
+                    ComplexScript = fontFamily,
+                },
+                new FontSize { Val = HeaderHalfPoints },
+                new FontSizeComplexScript { Val = HeaderHalfPoints });
+
+            // Title and version come from already-trimmed sources, so
+            // we don't need xml:space="preserve" handling on the run.
+            var run = new Run(runProps, new Text(text));
+
+            var paraProps = new ParagraphProperties(
+                new Justification { Val = justify },
+                // Match the line-height with the rest of the
+                // document so the header doesn't get an oversized
+                // line gap from the table-cell default.
+                new SpacingBetweenLines
+                {
+                    After = "0",
+                    Before = "0",
+                    LineRule = LineSpacingRuleValues.Auto,
+                });
+
+            // No cell borders; cell width is set in the parent.
+            var cellProps = new TableCellProperties(
+                new TableCellBorders(
+                    new TopBorder    { Val = BorderValues.Nil },
+                    new BottomBorder { Val = BorderValues.Nil },
+                    new LeftBorder   { Val = BorderValues.Nil },
+                    new RightBorder  { Val = BorderValues.Nil }));
+
+            return new TableCell(cellProps, new Paragraph(paraProps, run));
+        }
+
+        var leftCell  = BuildCell(title,   fontFamily, JustificationValues.Left);
+        var rightCell = BuildCell(version, fontFamily, JustificationValues.Right);
+
+        // Two-column grid, equal width (50% each via pct=2500 of
+        // 5000 = 100%). Borderless table-level too.
+        var tblProps = new TableProperties(
+            new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
+            new TableBorders(
+                new TopBorder     { Val = BorderValues.Nil },
+                new BottomBorder  { Val = BorderValues.Nil },
+                new LeftBorder    { Val = BorderValues.Nil },
+                new RightBorder   { Val = BorderValues.Nil },
+                new InsideHorizontalBorder { Val = BorderValues.Nil },
+                new InsideVerticalBorder   { Val = BorderValues.Nil }),
+            new TableLook
+            {
+                Val = "0000",
+                FirstRow = false,
+                LastRow = false,
+                FirstColumn = false,
+                LastColumn = false,
+                NoHorizontalBand = true,
+                NoVerticalBand = true,
+            });
+
+        var grid = new TableGrid(
+            new GridColumn { Width = "4500" },
+            new GridColumn { Width = "4500" });
+
+        var row = new TableRow(leftCell, rightCell);
+        var table = new Table(tblProps, grid, row);
+
+        // A blank paragraph after the header gives a small gap
+        // before body content starts. Without this the next
+        // paragraph hugs the table top edge.
+        var spacer = new Paragraph(
+            new ParagraphProperties(
+                new SpacingBetweenLines
+                {
+                    After = "0",
+                    Before = "0",
+                    LineRule = LineSpacingRuleValues.Auto,
+                }));
+
+        // mainPart.Document.Body is non-null because BuildDocxAsync
+        // assigned it before calling us.
+        var body = mainPart.Document.Body!;
+        body.AppendChild(table);
+        body.AppendChild(spacer);
     }
 
     /// <summary>

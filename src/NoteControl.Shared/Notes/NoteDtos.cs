@@ -11,6 +11,13 @@ namespace NoteControl.Shared.Notes;
 /// pixels and is constrained client-side to ≥ 700 (the default page
 /// width) — the server doesn't enforce a minimum, just round-trips
 /// the value.
+///
+/// Ship 68: Version is a free-text per-note string surfaced in the
+/// Properties panel and rendered into the docx export header. Defaults
+/// to "v0.0" if the on-disk frontmatter doesn't have it (the codec
+/// fills the default on Split, so the wire DTO always has a value).
+/// Free text by design — the user might use "v0.0", "1.2.3-rc1",
+/// "draft", or even TwinCAT-style "PRJ-22.A" identifiers.
 /// </summary>
 public sealed record FrontmatterDto(
     DateTimeOffset? Created,
@@ -20,6 +27,7 @@ public sealed record FrontmatterDto(
     string? Font,
     int? FontSize,
     int? Width,
+    string Version,
     IReadOnlyDictionary<string, string> Extra);
 
 /// <summary>
@@ -53,6 +61,12 @@ public sealed record CreateNoteRequest(
 /// Tags/Locked — null means "leave alone", non-null replaces. To clear a
 /// previously-set value, send an empty string for Font, or 0 for FontSize /
 /// Width — the server treats those as "remove from frontmatter".
+///
+/// Ship 68: Version is the free-text per-note version string. Same null
+/// semantics — null = leave alone, non-null = replace. Empty string is
+/// treated as "reset to default v0.0" rather than "remove": the field is
+/// always present on disk after a write (that's the backfill contract:
+/// any save persists v0.0 to a previously-unversioned note).
 /// </summary>
 public sealed record UpdateNoteRequest(
     string Body,
@@ -61,7 +75,8 @@ public sealed record UpdateNoteRequest(
     string? Etag = null,
     string? Font = null,
     int? FontSize = null,
-    int? Width = null);
+    int? Width = null,
+    string? Version = null);
 
 /// <summary>
 /// One row in a folder listing.

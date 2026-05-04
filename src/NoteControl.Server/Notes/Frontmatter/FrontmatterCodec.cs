@@ -33,6 +33,17 @@ public sealed class ParsedFrontmatter
     public int? Width { get; set; }
 
     /// <summary>
+    /// Ship 68: free-text per-note version string. Defaults to
+    /// <see cref="FrontmatterCodec.DefaultVersion"/> ("v0.0") for notes
+    /// whose YAML frontmatter doesn't carry a `version` key — the codec
+    /// fills the default during Split so consumers always see a value.
+    /// On write, EmitYaml always emits the key (so once a note is saved
+    /// after Ship 68 it has v0.0 persisted). Free-text by design — the
+    /// user picks the format.
+    /// </summary>
+    public string Version { get; set; } = FrontmatterCodec.DefaultVersion;
+
+    /// <summary>
     /// Unknown YAML keys preserved verbatim. Insertion order is preserved.
     /// Values are the deserialised YAML graph; pass them straight back to
     /// the serialiser to round-trip.
@@ -59,6 +70,7 @@ public sealed class ParsedFrontmatter
         return new FrontmatterDto(
             Created, Updated, Tags.ToList(), Locked,
             Font, FontSize, Width,
+            Version,
             extraStrings);
     }
 }
@@ -71,6 +83,16 @@ public sealed class ParsedFrontmatter
 public static class FrontmatterCodec
 {
     private const string Delim = "---";
+
+    /// <summary>
+    /// Ship 68: every note has a free-text version string. New notes
+    /// and pre-Ship-68 notes that have no `version` YAML key both
+    /// default to this value. The constant lives here (single source
+    /// of truth) so the parser, emitter, ApplyUpdate, and any future
+    /// caller that needs to pre-fill a sensible default all read it
+    /// from one place.
+    /// </summary>
+    public const string DefaultVersion = "v0.0";
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(NullNamingConvention.Instance)
@@ -139,13 +161,20 @@ public static class FrontmatterCodec
 
     /// <summary>
     /// Apply create/update semantics: bump Updated to now; set Created if
-    /// missing; replace Tags / Locked / Font / FontSize / Width if the
-    /// request supplied them; leave Extra alone.
+    /// missing; replace Tags / Locked / Font / FontSize / Width / Version
+    /// if the request supplied them; leave Extra alone.
     ///
     /// Empty-string Font, or 0 FontSize / Width, are interpreted as
     /// "remove this field" — the codec will then emit no key for them.
     /// This is how the frontend clears a previously-set value without a
     /// separate "delete" verb.
+    ///
+    /// Ship 68: Version is treated differently — it's never "removed".
+    /// Empty-string newVersion resets to <see cref="DefaultVersion"/>
+    /// rather than deleting the YAML key. Null/whitespace on the
+    /// existing fm.Version is also healed to the default here, which
+    /// is the backfill mechanism for pre-Ship-68 notes: any save
+    /// (tags, locked, body, etc.) lands a v0.0 in their frontmatter.
     /// </summary>
     public static void ApplyUpdate(
         ParsedFrontmatter fm,
@@ -154,7 +183,8 @@ public static class FrontmatterCodec
         bool? newLocked,
         string? newFont = null,
         int? newFontSize = null,
-        int? newWidth = null)
+        int? newWidth = null,
+        string? newVersion = null)
     {
         fm.Created ??= now;
         fm.Updated = now;
@@ -174,6 +204,25 @@ public static class FrontmatterCodec
         if (newWidth.HasValue)
         {
             fm.Width = newWidth.Value <= 0 ? null : newWidth.Value;
+        }
+
+        // Version: explicit value -> trim and set; empty -> reset to
+        // default (NOT delete); null -> don't touch.
+        if (newVersion is not null)
+        {
+            var trimmed = newVersion.Trim();
+            fm.Version = trimmed.Length == 0 ? DefaultVersion : trimmed;
+        }
+
+        // Backfill safety net: if the note has no version (pre-Ship-68
+        // file just read off disk where Split couldn't fill it because
+        // someone constructed ParsedFrontmatter manually, or the
+        // string field somehow ended up empty), make sure we write
+        // SOMETHING sensible. This is what "v0.0 added on first save"
+        // refers to in the user's spec.
+        if (string.IsNullOrWhiteSpace(fm.Version))
+        {
+            fm.Version = DefaultVersion;
         }
     }
 
@@ -225,10 +274,29 @@ public static class FrontmatterCodec
                 case "width":
                     fm.Width = ReadOptionalInt(kvp.Value);
                     break;
+                case "version":
+                    // Ship 68: read free-text version. Empty/whitespace
+                    // becomes the default below — we don't preserve a
+                    // blank version key as "blank version".
+                    fm.Version = ReadOptionalString(kvp.Value) ?? string.Empty;
+                    break;
                 default:
                     fm.Extra[key] = kvp.Value;
                     break;
             }
+        }
+
+        // Ship 68: backfill at READ time. If the on-disk frontmatter
+        // had no `version` key, fm.Version is still whatever the
+        // ParsedFrontmatter constructor set it to (DefaultVersion).
+        // If the key existed but was blank/whitespace, the case above
+        // wrote string.Empty — fix that up too. Either way, after
+        // ParseYaml returns the field is non-empty. The on-disk file
+        // ISN'T touched here; that happens whenever ApplyUpdate runs
+        // for any other reason ("on first save" semantics).
+        if (string.IsNullOrWhiteSpace(fm.Version))
+        {
+            fm.Version = DefaultVersion;
         }
 
         return fm;
@@ -252,6 +320,19 @@ public static class FrontmatterCodec
         if (!string.IsNullOrWhiteSpace(fm.Font)) output["font"] = fm.Font;
         if (fm.FontSize.HasValue) output["fontSize"] = fm.FontSize.Value;
         if (fm.Width.HasValue) output["width"] = fm.Width.Value;
+
+        // Ship 68: version is always emitted (unlike the appearance
+        // fields). A note that's been read or written under Ship 68+
+        // has fm.Version set — either from disk, from a user edit, or
+        // backfilled by ApplyUpdate. Always-emit means the file format
+        // is predictable: every saved note has a `version:` line.
+        // Defensive guard: if Version somehow ended up null/empty (a
+        // direct ParsedFrontmatter construction that bypassed
+        // ApplyUpdate, e.g.), fall back to the default rather than
+        // emitting `version:` with a blank value.
+        output["version"] = string.IsNullOrWhiteSpace(fm.Version)
+            ? DefaultVersion
+            : fm.Version;
 
         foreach (var kvp in fm.Extra)
         {

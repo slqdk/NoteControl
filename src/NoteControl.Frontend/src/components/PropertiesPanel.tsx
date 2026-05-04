@@ -9,6 +9,7 @@ import { EditableName } from './EditableName';
 import { EditableTags } from './EditableTags';
 import { EditableLocked } from './EditableLocked';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
+import { EditableVersion } from './EditableVersion';
 
 /**
  * Visual Studio-style properties panel.
@@ -186,6 +187,26 @@ export function PropertiesPanel({
   }
 
   /**
+   * Ship 68: save the per-note version. Free-text; server interprets
+   * empty string as "reset to default v0.0" rather than "remove",
+   * so a successful save with empty input will round-trip back as
+   * "v0.0" (which the EditableVersion useEffect picks up after the
+   * refreshTick re-reads the note).
+   */
+  async function saveVersion(version: string) {
+    if (!selection || selection.kind !== 'note' || !note) return;
+    try {
+      await notesApi.update(vaultId, selection.path, {
+        body: note.body,
+        version,
+      });
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      throw e instanceof ApiError ? new Error(e.message) : e;
+    }
+  }
+
+  /**
    * Per-note appearance saves. Each one sends ONLY the field being
    * changed (plus the body, which the server requires). After the
    * save we:
@@ -293,6 +314,14 @@ export function PropertiesPanel({
 
             <dt>Size</dt>
             <dd>{formatBytes(byteLength(note.body))}</dd>
+
+            <dt>Version</dt>
+            <dd>
+              <EditableVersion
+                value={note.frontmatter.version}
+                onSave={saveVersion}
+              />
+            </dd>
 
             <dt>Tags</dt>
             <dd>

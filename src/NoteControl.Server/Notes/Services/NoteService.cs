@@ -194,7 +194,13 @@ public sealed class NoteService : INoteService
             // the sentinel semantics (empty string / 0 = clear).
             request.Font,
             request.FontSize,
-            request.Width);
+            request.Width,
+            // Ship 68: free-text version. Empty string resets to
+            // DefaultVersion (not delete); null = leave alone. The
+            // backfill of pre-Ship-68 notes is implicit: ApplyUpdate
+            // ensures fm.Version is non-empty regardless of what we
+            // pass in here.
+            request.Version);
 
         var newText = FrontmatterCodec.Combine(fm, request.Body ?? string.Empty);
         await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);

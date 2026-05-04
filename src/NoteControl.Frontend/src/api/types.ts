@@ -47,6 +47,13 @@ export interface FrontmatterDto {
   font: string | null;
   fontSize: number | null;
   width: number | null;
+  /**
+   * Ship 68: free-text per-note version. Always non-empty on the
+   * wire — the server fills in "v0.0" if the note's frontmatter
+   * doesn't have a version key. The Properties panel surfaces this
+   * for editing; the docx export renders it in the page-top header.
+   */
+  version: string;
 }
 
 export interface NoteDto {
@@ -76,6 +83,12 @@ export interface UpdateNoteRequest {
   font?: string | null;
   fontSize?: number | null;
   width?: number | null;
+  /**
+   * Ship 68: free-text per-note version. null/undefined = leave alone,
+   * any string = replace. Empty string is treated by the server as
+   * "reset to default v0.0" (not "remove the field").
+   */
+  version?: string | null;
 }
 
 export interface NoteSummaryDto {
