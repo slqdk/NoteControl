@@ -300,26 +300,39 @@ public sealed class ConfigService : IConfigService
     }
 
     /// <summary>
-    /// Ship 93: standard path for the auto-generated Caddyfile.
-    /// Lives under DataRoot so backups + restores carry it along.
-    /// The Caddy service should be configured to read from THIS
-    /// path (the setup-https.ps1 script does that).
+    /// Ship 93/94: standard path for the auto-generated Caddyfile.
+    ///
+    /// Hardcoded to <c>C:\ProgramData\NoteControl\caddy\Caddyfile</c>
+    /// to match the setup-https.ps1 deployment convention. The Caddy
+    /// service registration points at THIS path; changing it here
+    /// without changing the service registration would silently
+    /// orphan the generated file.
+    ///
+    /// Why not derive from DataRoot? DataRoot is meant to be
+    /// configurable (movable to a D: drive, network share, etc) for
+    /// the user's notes content. The Caddy install location, by
+    /// contrast, is fixed by Windows convention (ProgramData) and
+    /// shared with the setup script. Coupling them was Ship 93's
+    /// initial design and turned out wrong: when DataRoot is
+    /// `C:\ProgramData\NoteControl\NotesData\` (the actual default),
+    /// the server wrote to `...\NotesData\caddy\Caddyfile` while the
+    /// script + service expected `...\caddy\Caddyfile` one level up.
     /// </summary>
-    private string ResolveCaddyfilePath()
+    private static string ResolveCaddyfilePath()
     {
-        var dataRoot = _storage.CurrentValue.DataRoot;
-        return Path.Combine(dataRoot, "caddy", "Caddyfile");
+        return @"C:\ProgramData\NoteControl\caddy\Caddyfile";
     }
 
     /// <summary>
-    /// Ship 93: standard path for the Caddy access log. Lives next
-    /// to the existing notecontrol-*.log files so the user has a
-    /// single logs directory to check.
+    /// Ship 93/94: standard path for the Caddy access log. Lives
+    /// in the same logs/ directory as notecontrol-*.log so the
+    /// user has a single place to look for diagnostic output.
+    /// Hardcoded for the same reason as
+    /// <see cref="ResolveCaddyfilePath"/>.
     /// </summary>
-    private string ResolveCaddyLogPath()
+    private static string ResolveCaddyLogPath()
     {
-        var dataRoot = _storage.CurrentValue.DataRoot;
-        return Path.Combine(dataRoot, "logs", "caddy-access.log");
+        return @"C:\ProgramData\NoteControl\logs\caddy-access.log";
     }
 
     // ---------------------------------------------------------------

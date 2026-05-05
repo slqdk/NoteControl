@@ -105,9 +105,33 @@ public sealed class CaddyConfigWriter
     {
         try
         {
+            // Ship 94: resolve caddy.exe explicitly. Pre-Ship-94 we
+            // relied on `caddy` resolving via PATH, which it doesn't
+            // — Windows doesn't add `C:\Program Files\Caddy\` to
+            // PATH automatically. The setup-https.ps1 script copies
+            // caddy.exe to that conventional location, so we look
+            // there first; PATH is checked as a fallback for unusual
+            // setups where someone deliberately put caddy.exe on
+            // PATH (e.g. via Chocolatey, Scoop, or a manual edit).
+            //
+            // If we can't find it, return false. The caller (settings-
+            // save flow, etc.) treats reload failure as a logged
+            // warning, not a thrown exception — Caddy will pick up
+            // the new config on its next start anyway.
+            var caddyExe = ResolveCaddyExe();
+            if (caddyExe is null)
+            {
+                _log.LogWarning(
+                    "Could not find caddy.exe to invoke reload. Looked in: " +
+                    "C:\\Program Files\\Caddy\\caddy.exe and on PATH. The Caddyfile " +
+                    "WAS written to {Path}; Caddy will pick it up on its next start.",
+                    caddyfilePath);
+                return false;
+            }
+
             var psi = new ProcessStartInfo
             {
-                FileName = "caddy",
+                FileName = caddyExe,
                 // --config picks the file; --adapter caddyfile is
                 // the default for .Caddyfile-format files but we
                 // pass it explicitly so a future Caddy version
@@ -122,7 +146,9 @@ public sealed class CaddyConfigWriter
             using var proc = Process.Start(psi);
             if (proc is null)
             {
-                _log.LogWarning("Could not start `caddy reload` — caddy not found on PATH?");
+                _log.LogWarning(
+                    "Could not start `{Exe} reload` — Process.Start returned null.",
+                    caddyExe);
                 return false;
             }
 
@@ -159,10 +185,47 @@ public sealed class CaddyConfigWriter
         catch (Exception ex)
         {
             _log.LogWarning(ex,
-                "Exception while invoking `caddy reload`. Caddy is probably not " +
-                "installed, or `caddy.exe` is not on PATH. The Caddyfile WAS " +
+                "Exception while invoking `caddy reload`. The Caddyfile WAS " +
                 "written successfully and Caddy will pick it up on next start.");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Ship 94: locate caddy.exe via fallback list. Returns null
+    /// if not found anywhere. Order:
+    ///   1. C:\Program Files\Caddy\caddy.exe — where setup-https.ps1
+    ///      puts it. The expected location for a NoteControl install.
+    ///   2. PATH — for edge cases where caddy was installed via
+    ///      package manager (Chocolatey: C:\ProgramData\chocolatey\bin,
+    ///      Scoop: %USERPROFILE%\scoop\shims, etc).
+    ///
+    /// We prefer the conventional location because PATH lookups
+    /// inside a Windows Service running as LocalSystem are subtler
+    /// than they look (different PATH from the desktop user that
+    /// installed Caddy via package manager). The script-deployed
+    /// location is reliable from any service identity.
+    /// </summary>
+    private static string? ResolveCaddyExe()
+    {
+        const string conventional = @"C:\Program Files\Caddy\caddy.exe";
+        if (File.Exists(conventional)) return conventional;
+
+        // PATH lookup. Walk PATH manually rather than relying on
+        // Process.Start's implicit search — the implicit search
+        // depends on the working directory + PATH of the calling
+        // process, which inside a Windows Service is typically
+        // C:\Windows\system32 with a LocalSystem PATH. Our explicit
+        // walk uses the same env var but doesn't add the working
+        // directory, matching what the user usually expects.
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            var candidate = Path.Combine(dir.Trim(), "caddy.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
     }
 }

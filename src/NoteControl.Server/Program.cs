@@ -473,13 +473,15 @@ try
         var network = app.Services.GetRequiredService<
             Microsoft.Extensions.Options.IOptionsMonitor<
                 NoteControl.Server.Options.NetworkOptions>>().CurrentValue;
-        var storage = app.Services.GetRequiredService<
-            Microsoft.Extensions.Options.IOptionsMonitor<
-                NoteControl.Server.Options.StorageOptions>>().CurrentValue;
         var caddyWriter = app.Services.GetRequiredService<
             NoteControl.Server.Caddy.CaddyConfigWriter>();
-        var caddyfilePath = Path.Combine(storage.DataRoot, "caddy", "Caddyfile");
-        var logPath = Path.Combine(storage.DataRoot, "logs", "caddy-access.log");
+        // Ship 94: hardcoded paths matching setup-https.ps1's
+        // deployment convention. See ConfigService.ResolveCaddyfilePath
+        // for rationale (the previous Ship 93 design derived these
+        // from DataRoot, which produced ...\NotesData\caddy\Caddyfile
+        // while the script + service expected one level up).
+        var caddyfilePath = @"C:\ProgramData\NoteControl\caddy\Caddyfile";
+        var logPath = @"C:\ProgramData\NoteControl\logs\caddy-access.log";
         var contents = NoteControl.Server.Caddy.CaddyfileGenerator.Generate(
             network.PublicHostnames ?? new List<string>(),
             network.Port,
