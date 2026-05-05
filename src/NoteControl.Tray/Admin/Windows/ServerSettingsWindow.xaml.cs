@@ -66,6 +66,12 @@ public partial class ServerSettingsWindow : Window
             : string.Join(Environment.NewLine, c.Network.LanUrls);
         PublicUrlBox.Text = c.Network.PublicUrl;
 
+        // Ship 93: HTTPS hostname list, one per line. Empty config →
+        // empty box (placeholder text shows the user what to enter).
+        PublicHostnamesBox.Text = c.Network.PublicHostnames.Count == 0
+            ? string.Empty
+            : string.Join(Environment.NewLine, c.Network.PublicHostnames);
+
         // Auth
         IdleTimeoutBox.Text = c.Auth.IdleTimeoutMinutes.ToString(CultureInfo.InvariantCulture);
         AbsoluteTimeoutBox.Text = c.Auth.AbsoluteTimeoutMinutes.ToString(CultureInfo.InvariantCulture);
@@ -152,12 +158,27 @@ public partial class ServerSettingsWindow : Window
             // the values we received (the server ignores them on save
             // but keeping a complete DTO shape is cleaner than
             // sending nulls).
+            //
+            // Ship 93: also parse PublicHostnames from the multi-line
+            // textbox. Each line becomes one hostname; blank lines and
+            // surrounding whitespace are stripped. Server-side
+            // validation catches malformed entries (the cleaner
+            // approach would be to validate here AND server-side, but
+            // a single source of truth — server — keeps the rules
+            // consistent across CLI / API / hand-edited config.json).
+            var hostnames = (PublicHostnamesBox.Text ?? "")
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0)
+                .ToList();
+
             var network = new NetworkConfigDto(
                 BindUrl: _current.Network.BindUrl,                       // server-derived; pass-through
                 ExposeOnLan: ExposeOnLanCheckbox.IsChecked == true,
                 Port: ParseInt(PortBox, "Port"),
                 LanUrls: _current.Network.LanUrls,                       // server-derived; pass-through
-                PublicUrl: PublicUrlBox.Text.Trim());
+                PublicUrl: PublicUrlBox.Text.Trim(),
+                PublicHostnames: hostnames);
 
             // Storage is read-only; pass it through unchanged.
             return new ServerConfigDto(

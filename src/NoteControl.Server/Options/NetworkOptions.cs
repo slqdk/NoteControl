@@ -51,4 +51,30 @@ public sealed class NetworkOptions
     /// loopback-only mode.
     /// </summary>
     public string PublicUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Ship 93: list of public hostnames to serve via Caddy
+    /// (HTTPS). Each hostname becomes a `<host> { reverse_proxy
+    /// 127.0.0.1:&lt;Port&gt; }` block in the auto-generated
+    /// Caddyfile at <c>{DataRoot}/caddy/Caddyfile</c>. Caddy
+    /// auto-fetches a Let's Encrypt cert for each hostname on
+    /// first use; provisioning requires:
+    ///   - The hostname's DNS A/AAAA record points to this server
+    ///   - The server's port 80 is reachable from the public
+    ///     internet (HTTP-01 challenge)
+    /// Adding a hostname whose DNS isn't set up yet is harmless
+    /// — Caddy retries with backoff and the rest of the served
+    /// hostnames are unaffected. The user is warned in the
+    /// Settings UI before saving.
+    ///
+    /// Empty list (default) means "no Caddy fronting required";
+    /// the auto-generated Caddyfile is a no-op stub and the
+    /// server should be reached directly on its bind URL. Use
+    /// this for local-only / LAN-only / no-HTTPS deployments.
+    ///
+    /// Each entry is a bare hostname (no scheme, no port, no
+    /// path): "notes.slq.dk", not "https://notes.slq.dk:443".
+    /// ConfigService validates the format on save.
+    /// </summary>
+    public List<string> PublicHostnames { get; set; } = new();
 }

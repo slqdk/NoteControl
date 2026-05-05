@@ -99,6 +99,41 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- =================== HTTPS (Ship 93) =================== -->
+            <TabItem Header="HTTPS">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+
+                        <!-- Setup-required notice -->
+                        <Border Background="#E3F2FD" BorderBrush="#1976D2" BorderThickness="1"
+                                Padding="10,8" Margin="0,0,0,12" CornerRadius="3">
+                            <TextBlock TextWrapping="Wrap" Foreground="#0D47A1"
+                                       Text="HTTPS is served via Caddy as a reverse proxy in front of NoteControl. Before adding hostnames here: install Caddy + run setup-https.ps1 (see deploy folder), and make sure each hostname's DNS A/AAAA record points at this server. Caddy auto-fetches a Let's Encrypt cert for each hostname; provisioning requires the server's port 80 to be reachable from the public internet."/>
+                        </Border>
+
+                        <TextBlock Text="Public hostnames" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,8"
+                                   Text="One hostname per line. Bare DNS form only — no scheme, no port, no path. Examples: notes.example.com, gv38.slq.dk. Empty list means 'no public HTTPS' — the server is reached directly on its bind URL."/>
+                        <TextBox x:Name="PublicHostnamesBox"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 FontFamily="Consolas"
+                                 VerticalScrollBarVisibility="Auto"
+                                 MinHeight="120"
+                                 Padding="6,4"
+                                 Margin="0,0,0,16"/>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,16"
+                                   Text="On Save: the Caddyfile at C:\ProgramData\NoteControl\caddy\Caddyfile is regenerated and Caddy is asked to reload. New certs provision automatically (1-2 minutes per hostname on first use). Failures land in C:\ProgramData\NoteControl\logs\caddy-access.log and the main server log."/>
+
+                        <TextBlock Text="What happens behind the scenes" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,8"
+                                   Text="The list above is written into config.json under Network.PublicHostnames. The server regenerates the Caddyfile on save AND on every startup. Caddy (running as a Windows Service) reads the file when reloaded. If Caddy isn't running yet, the new config will take effect when you start it."/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- =================== Authentication =================== -->
             <TabItem Header="Authentication">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">

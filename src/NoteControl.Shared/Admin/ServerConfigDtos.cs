@@ -43,7 +43,15 @@ public sealed record NetworkConfigDto(
     bool ExposeOnLan,
     int Port,
     IReadOnlyList<string> LanUrls,
-    string PublicUrl);
+    string PublicUrl,
+    /// <summary>
+    /// Ship 93: list of public hostnames to serve via Caddy
+    /// (HTTPS auto-cert). Empty list means "no Caddy fronting"
+    /// — the server is reached directly on its bind URL. Each
+    /// entry is a bare hostname (e.g. "notes.slq.dk"); validated
+    /// server-side before persistence.
+    /// </summary>
+    IReadOnlyList<string> PublicHostnames);
 
 /// <summary>
 /// All editable. Hot-reload-capable consumers (rate limiters, password

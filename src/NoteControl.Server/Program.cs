@@ -307,6 +307,16 @@ try
     builder.Services.AddSingleton<NoteControl.Server.Admin.Services.ISmtpTester,
         NoteControl.Server.Admin.Services.SmtpTester>();
 
+    // Ship 93: Caddy integration. CaddyConfigWriter is a thin
+    // singleton wrapping (a) atomic file write of the generated
+    // Caddyfile and (b) `caddy reload` invocation. Stateless aside
+    // from the injected ILogger; safe as a singleton.
+    //
+    // CaddyfileGenerator is a static class — no DI registration
+    // needed. ConfigService composes the two: generates the file
+    // contents, asks the writer to put them on disk + reload Caddy.
+    builder.Services.AddSingleton<NoteControl.Server.Caddy.CaddyConfigWriter>();
+
     // Local tray token (step 17). Singleton so the in-memory token
     // is stable for the lifetime of the process. Generated + written
     // to disk in the constructor; we eager-resolve below after the
@@ -443,6 +453,52 @@ try
     // it as soon as the server is up, and so any ACL/permission
     // problem surfaces in startup logs not under load.
     _ = app.Services.GetRequiredService<NoteControl.Server.Auth.Local.ILocalTrayTokenService>();
+
+    // Ship 93: write the auto-generated Caddyfile on every server
+    // startup so it stays in sync with the current hostname list +
+    // backend port. This handles two cases ConfigService.UpdateAsync
+    // doesn't:
+    //   1. First boot after upgrading from a pre-Ship-93 build —
+    //      no save has happened yet, but Caddy needs a Caddyfile
+    //      to start.
+    //   2. The user edited config.json by hand (rather than via the
+    //      Tray Settings UI). Their hand-edit takes effect on next
+    //      restart, and the Caddyfile is regenerated to match.
+    // We don't try to reload Caddy from here — at startup the user
+    // hasn't run setup-https.ps1 yet on first install, and even on
+    // subsequent boots the Caddy service starts on its own and
+    // reads the latest Caddyfile from disk. No reload needed.
+    try
+    {
+        var network = app.Services.GetRequiredService<
+            Microsoft.Extensions.Options.IOptionsMonitor<
+                NoteControl.Server.Options.NetworkOptions>>().CurrentValue;
+        var storage = app.Services.GetRequiredService<
+            Microsoft.Extensions.Options.IOptionsMonitor<
+                NoteControl.Server.Options.StorageOptions>>().CurrentValue;
+        var caddyWriter = app.Services.GetRequiredService<
+            NoteControl.Server.Caddy.CaddyConfigWriter>();
+        var caddyfilePath = Path.Combine(storage.DataRoot, "caddy", "Caddyfile");
+        var logPath = Path.Combine(storage.DataRoot, "logs", "caddy-access.log");
+        var contents = NoteControl.Server.Caddy.CaddyfileGenerator.Generate(
+            network.PublicHostnames ?? new List<string>(),
+            network.Port,
+            logPath);
+        caddyWriter.Write(caddyfilePath, contents);
+    }
+    catch (Exception ex)
+    {
+        // Don't let a Caddyfile-write failure prevent the server
+        // from booting. Log loudly; a restart with permissions
+        // fixed will recover.
+        var startupLog = app.Services.GetRequiredService<
+            Microsoft.Extensions.Logging.ILoggerFactory>()
+            .CreateLogger("CaddyfileStartup");
+        startupLog.LogWarning(ex,
+            "Could not generate Caddyfile at startup. The server is " +
+            "running normally; HTTPS via Caddy is unaffected only if " +
+            "an existing Caddyfile is still on disk.");
+    }
 
     // -------------------------------------------------------------------
     // Middleware pipeline.

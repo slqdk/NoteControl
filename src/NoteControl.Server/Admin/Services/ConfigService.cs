@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NoteControl.Server.Configuration;
 using NoteControl.Server.Options;
@@ -76,6 +77,16 @@ public sealed class ConfigService : IConfigService
     /// </summary>
     private readonly IServer _server;
 
+    /// <summary>
+    /// Ship 93: regenerates the Caddyfile + asks a running Caddy
+    /// service to reload after every Network section save. Wraps
+    /// both file-write and reload-invocation; failures are logged
+    /// but don't fail the save.
+    /// </summary>
+    private readonly Caddy.CaddyConfigWriter _caddy;
+
+    private readonly ILogger<ConfigService> _log;
+
     public ConfigService(
         IOptionsMonitor<StorageOptions> storage,
         IOptionsMonitor<AuthOptions> auth,
@@ -85,7 +96,9 @@ public sealed class ConfigService : IConfigService
         IOptionsMonitor<NetworkOptions> network,
         IServerConfigStore store,
         IConfiguration config,
-        IServer server)
+        IServer server,
+        Caddy.CaddyConfigWriter caddy,
+        ILogger<ConfigService> log)
     {
         _storage = storage;
         _auth = auth;
@@ -96,6 +109,8 @@ public sealed class ConfigService : IConfigService
         _store = store;
         _config = config;
         _server = server;
+        _caddy = caddy;
+        _log = log;
     }
 
     public ServerConfigDto GetCurrent()
@@ -143,7 +158,12 @@ public sealed class ConfigService : IConfigService
                 ExposeOnLan: network.ExposeOnLan,
                 Port: network.Port,
                 LanUrls: lanUrls,
-                PublicUrl: network.PublicUrl),
+                PublicUrl: network.PublicUrl,
+                // Ship 93: defensive ToList() so callers see a fresh
+                // snapshot even if NetworkOptions.PublicHostnames is
+                // mutated under them later. Empty list (default) is
+                // serialised as `[]` not omitted.
+                PublicHostnames: network.PublicHostnames?.ToList() ?? new List<string>()),
             Auth: new AuthConfigDto(
                 IdleTimeoutMinutes: auth.IdleTimeoutMinutes,
                 AbsoluteTimeoutMinutes: auth.AbsoluteTimeoutMinutes,
@@ -235,11 +255,71 @@ public sealed class ConfigService : IConfigService
                 config.Network.ExposeOnLan,
                 config.Network.Port,
                 config.Network.PublicUrl,
+                // Ship 93: persist the cleaned hostname list. Validation
+                // (Validate() below) lower-cases + strips each entry
+                // before we get here, so what we write is canonical.
+                PublicHostnames = config.Network.PublicHostnames?.ToList() ?? new List<string>(),
                 // BindUrl + LanUrls are derived; never persisted.
             })!,
         };
 
         await _store.UpdateSectionsAsync(sections, ct);
+
+        // Ship 93: regenerate Caddyfile based on the new hostname list +
+        // ask Caddy to reload. Both calls are best-effort:
+        //   - Write to disk should be ~always-succeed; if it fails
+        //     (disk full, permissions) we log and move on. The user's
+        //     config save IS persisted; only the Caddy-side artifact
+        //     is missing, which Caddy will pick up next time something
+        //     touches it.
+        //   - Reload may fail silently (Caddy not running, not on PATH).
+        //     Logged at warning level. New config takes effect when
+        //     Caddy restarts.
+        // Both wrapped in try/catch so a Caddy oddity can't fail the
+        // user's settings save flow.
+        try
+        {
+            var hostnames = config.Network.PublicHostnames?.ToList() ?? new List<string>();
+            var caddyfilePath = ResolveCaddyfilePath();
+            var logFilePath = ResolveCaddyLogPath();
+            var contents = Caddy.CaddyfileGenerator.Generate(
+                hostnames, config.Network.Port, logFilePath);
+            _caddy.Write(caddyfilePath, contents);
+            // Fire-and-forget reload. We don't await — the save call
+            // shouldn't block on Caddy I/O. Reload progress lands in
+            // the server log.
+            _ = _caddy.ReloadAsync(caddyfilePath);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "Caddyfile regeneration after config save failed. The user's " +
+                "settings WERE persisted; Caddy will pick up the change on " +
+                "next restart if/when the Caddyfile is regenerated.");
+        }
+    }
+
+    /// <summary>
+    /// Ship 93: standard path for the auto-generated Caddyfile.
+    /// Lives under DataRoot so backups + restores carry it along.
+    /// The Caddy service should be configured to read from THIS
+    /// path (the setup-https.ps1 script does that).
+    /// </summary>
+    private string ResolveCaddyfilePath()
+    {
+        var dataRoot = _storage.CurrentValue.DataRoot;
+        return Path.Combine(dataRoot, "caddy", "Caddyfile");
+    }
+
+    /// <summary>
+    /// Ship 93: standard path for the Caddy access log. Lives next
+    /// to the existing notecontrol-*.log files so the user has a
+    /// single logs directory to check.
+    /// </summary>
+    private string ResolveCaddyLogPath()
+    {
+        var dataRoot = _storage.CurrentValue.DataRoot;
+        return Path.Combine(dataRoot, "logs", "caddy-access.log");
     }
 
     // ---------------------------------------------------------------
@@ -451,6 +531,97 @@ public sealed class ConfigService : IConfigService
             }
         }
 
+        // Ship 93: validate each public hostname.
+        //
+        // Rules: bare hostname only — no scheme, no port, no path. Must
+        // be valid DNS label (letters, digits, hyphens, dots; cannot
+        // start or end with hyphen; total length ≤ 253 per RFC 1035).
+        // Empty list is fine (means "no Caddy fronting").
+        //
+        // We're STRICT here because a typo'd hostname goes straight
+        // into the Caddyfile, where Caddy will try to provision a
+        // Let's Encrypt cert for it. Bad hostnames waste rate-limit
+        // budget; very-bad hostnames (with shell metacharacters) could
+        // theoretically cause issues if Caddy parses them oddly. We
+        // enforce a conservative subset.
+        if (config.Network.PublicHostnames is not null)
+        {
+            for (int i = 0; i < config.Network.PublicHostnames.Count; i++)
+            {
+                var raw = config.Network.PublicHostnames[i];
+                var key = $"Network.PublicHostnames[{i}]";
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    errors[key] = "Hostname cannot be empty.";
+                    continue;
+                }
+                var trimmed = raw.Trim().ToLowerInvariant();
+                if (trimmed.Length > 253)
+                {
+                    errors[key] = "Hostname too long (max 253 characters).";
+                    continue;
+                }
+                if (!IsValidDnsHostname(trimmed))
+                {
+                    errors[key] = $"'{raw}' is not a valid hostname. Use bare DNS form: 'notes.example.com' (no scheme, no port, no path).";
+                }
+            }
+            // Reject duplicates after trimming. Two entries that
+            // case-fold or whitespace-fold to the same hostname would
+            // produce duplicate Caddy site blocks → Caddy refuses to
+            // start.
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < config.Network.PublicHostnames.Count; i++)
+            {
+                var trimmed = (config.Network.PublicHostnames[i] ?? "").Trim().ToLowerInvariant();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+                if (!seen.Add(trimmed))
+                {
+                    errors[$"Network.PublicHostnames[{i}]"] =
+                        $"Duplicate hostname '{trimmed}' (case-insensitive). Each hostname must appear once.";
+                }
+            }
+        }
+
         return errors;
+    }
+
+    /// <summary>
+    /// Ship 93: conservative DNS hostname validator. Accepts what
+    /// RFC 1035/1123 allow for the grand-parent of all DNS labels:
+    /// letters, digits, hyphens, dots; labels can't start/end with
+    /// hyphens; labels ≤ 63 chars; full hostname ≤ 253 chars
+    /// (the caller checks total length separately so the error
+    /// message can be specific). Rejects everything else
+    /// (underscores, spaces, slashes, scheme prefixes).
+    ///
+    /// We deliberately don't allow trailing dots (`example.com.`).
+    /// They're valid DNS but Caddy doesn't accept them in site
+    /// labels.
+    /// </summary>
+    private static bool IsValidDnsHostname(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return false;
+        // Reject scheme prefixes — easy mistake.
+        if (s.Contains("://", StringComparison.Ordinal)) return false;
+        // Reject ports + paths + paths-via-slash.
+        if (s.Contains(':') || s.Contains('/') || s.Contains('?') || s.Contains('#')) return false;
+
+        var labels = s.Split('.');
+        if (labels.Length < 2) return false; // require at least one dot
+        foreach (var label in labels)
+        {
+            if (label.Length == 0 || label.Length > 63) return false;
+            if (label[0] == '-' || label[^1] == '-') return false;
+            foreach (var ch in label)
+            {
+                bool ok = (ch >= 'a' && ch <= 'z')
+                       || (ch >= 'A' && ch <= 'Z')
+                       || (ch >= '0' && ch <= '9')
+                       || ch == '-';
+                if (!ok) return false;
+            }
+        }
+        return true;
     }
 }
