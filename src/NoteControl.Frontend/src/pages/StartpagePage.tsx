@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useOutletContext, useParams } from 'react-router-dom';
+import { Navigate, useOutletContext, useParams } from 'react-router-dom';
 
 import { ApiError, startpageApi } from '../api/client';
 import type {
@@ -13,6 +13,7 @@ import { RssBlock } from '../components/RssBlock';
 import { TaskArea } from '../components/TaskArea';
 import type { VaultLayoutContext } from '../components/VaultLayout';
 import { useDebouncedSave } from '../hooks/useDebouncedSave';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { newId } from '../util/id';
 
 /**
@@ -48,6 +49,23 @@ export function StartpagePage() {
   // Pull the outlet context so the type check doesn't drift if the
   // layout shape changes; the value isn't used in render directly.
   useOutletContext<VaultLayoutContext>();
+
+  // Ship 86: redirect mobile users away from the startpage. The
+  // startpage is a desktop-first canvas (free-floating draggable
+  // blocks); it has no working interaction model on touch and looks
+  // visually broken in the narrow mobile shell. We send mobile
+  // users to the vault's folder root instead — that's the layout
+  // they'll actually use on a phone (tree strip + folder/note
+  // editing).
+  //
+  // The hook MUST be called unconditionally here so its order is
+  // stable across renders; the conditional Navigate happens at
+  // render time below, after every other hook has also run.
+  // Resizing back to desktop in the same tab won't auto-navigate
+  // back to the startpage — the user simply re-clicks the
+  // startpage row in the tree (or reloads the page that brought
+  // them in via Ship 47's vault-list link).
+  const isMobile = useIsMobile();
 
   const [config, setConfig] = useState<StartpageConfigDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -253,6 +271,17 @@ export function StartpagePage() {
   }, [addBlock, addTaskArea, addLinkBlock]);
 
   if (!vaultId) return null;
+
+  // Ship 86: render-time redirect on mobile. Placed AFTER every
+  // hook call so the hook order stays consistent (Rules of Hooks).
+  // Side effect: a mobile render does fire the initial GET in the
+  // load effect above before this Navigate unmounts the page —
+  // wasted round-trip but harmless (the cancelled flag prevents
+  // setState calls into an unmounted component). If this becomes
+  // hot, lift the redirect into a route-level guard.
+  if (isMobile) {
+    return <Navigate to={`/vaults/${vaultId}`} replace />;
+  }
 
   // Empty-state detection: nothing of any type exists yet.
   const isEmpty =

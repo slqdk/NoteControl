@@ -3960,4 +3960,21 @@ a.nc-rss-item-title:hover {
     font-size: 14px;
     padding: 10px 14px;
   }
+
+  /* ---- Ship 86: hide Startpage row in the tree on mobile ----- */
+  /* The startpage is a desktop-first canvas (free-floating
+     draggable blocks) with no working interaction model on touch.
+     Hiding the synthetic row in the mobile tree strip prevents
+     the user from arriving at /startpage from the tree. The
+     /startpage URL itself ALSO redirects to the folder root on
+     mobile (see StartpagePage.tsx) so direct links / browser
+     back-button arrivals are also blocked. The Widgets+ button
+     in the topbar is gated on !isMobile in TopBar.tsx for the
+     same reason. The CSS hide-only-the-row approach is enough
+     because the rest of the entry points are JSX-gated; this is
+     the one place where the row would otherwise still render
+     inside the always-on TreeView. */
+  .nc-rail-mobile .nc-tree-row-startpage {
+    display: none;
+  }
 }

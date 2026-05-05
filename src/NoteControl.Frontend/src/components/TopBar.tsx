@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { AccountMenu } from './AccountMenu';
 import { SearchBox } from './SearchBox';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 interface TopBarProps {
   /** The currently-open vault, if any. */
@@ -45,6 +46,14 @@ interface TopBarProps {
  */
 export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
   const location = useLocation();
+  // Ship 86: drives the Widgets+ button gate. The button is meant
+  // for the desktop startpage; on mobile we redirect away from
+  // /startpage entirely (StartpagePage), so the button has nothing
+  // to add to. Hiding it here is defensive — the redirect should
+  // already mean isOnStartpage is false on mobile, but a brief
+  // mid-navigation render or a multi-tab flip could otherwise
+  // show the button momentarily.
+  const isMobile = useIsMobile();
 
   // Match `/vaults/:id/startpage` (with optional trailing slash). We
   // do this as a path-string check rather than a route-match because
@@ -120,7 +129,7 @@ export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
       <div className="nc-topbar-right">
         {rightExtras}
 
-        {isOnStartpage && (
+        {isOnStartpage && !isMobile && (
           /*
             Widgets+ dropdown. Mirrors AccountMenu's
             click-outside / Escape pattern. We use the same
