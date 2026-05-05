@@ -17,8 +17,11 @@ The app is just a friendly UI on top.
       - The tray menu
       - The Server Settings window
 -->
-*(Screenshots coming soon — drop them in `docs/screenshots/` and edit
-this section.)*
+![Start page with widgets](docs/screenshots/StartHere.png)
+*Start page — pinned widgets and quick links.*
+
+![Code block](docs/screenshots/Codeblock.png)
+*Markdown code blocks with syntax highlighting, including ST keywords.*
 
 ---
 
