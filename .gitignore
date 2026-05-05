@@ -51,6 +51,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .vite/
+*.tsbuildinfo
 
 # ---------------------------------------------------
 # OS
@@ -64,8 +65,8 @@ $RECYCLE.BIN/
 # ---------------------------------------------------
 # Application data (local dev only)
 # ---------------------------------------------------
-# Local dev data — actual NoteControl vaults and server data
-# should NEVER be committed
+# Local dev data: actual NoteControl vaults and server data
+# should NEVER be committed.
 /data/
 /NotesData/
 *.db
@@ -82,8 +83,5 @@ secrets.json
 appsettings.Development.json
 appsettings.Local.json
 
-# Server dev data — test vaults with real notes/screenshots
+# Server dev data: test vaults with real notes/screenshots
 src/NoteControl.Server/dev-data/
-src/NoteControl.Frontend/tsconfig.tsbuildinfo
-*.tsbuildinfo
-*.tsbuildinfo

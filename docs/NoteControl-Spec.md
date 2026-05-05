@@ -1,3 +1,17 @@
+> **HISTORICAL DOCUMENT — for reference only.**
+>
+> This is the original v0.1 design-phase specification, written before
+> any code was shipped. Many details (scope, naming, architecture,
+> APIs, file layouts) have evolved since this was written. The shipping
+> app is at v0.2.9 and differs from this document in numerous places.
+>
+> Treat this file as a record of the original intent and as context
+> for *why* certain decisions were made — **not** as authoritative
+> documentation of how the app currently works. For current behaviour,
+> read the source.
+
+---
+
 # NotesApp — Project Specification
 
 **Version:** 0.1 (design phase)
