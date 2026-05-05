@@ -3516,6 +3516,31 @@ a.nc-rss-item-title:hover {
 
 @media (max-width: 768px) {
 
+  /* Ship 87: bump --nc-topbar-h to fit the 2-row mobile topbar.
+     Desktop's 44px is one row (brand | search | account). On
+     mobile the search box wraps to its own row (see
+     .nc-topbar-center grid-column: 1 / -1 below), making the
+     topbar ~88px tall in practice. The shell's height calc also
+     reads --nc-topbar-h so bumping the variable keeps the shell
+     from starting "inside" the topbar — pre-Ship-87 you saw the
+     wrapped search box visually overlapping the tree strip
+     because the shell started at y=44 while the topbar's content
+     extended to y=~80. */
+  :root {
+    --nc-topbar-h: 88px;
+  }
+
+  /* The topbar's explicit `height` was fixed at --nc-topbar-h on
+     desktop. Now that --nc-topbar-h is 88px on mobile we still
+     want the topbar to AT LEAST be that tall, but if it ever
+     wraps further (e.g. larger fonts) it should grow. min-height
+     handles both cases; height: auto cancels the desktop's
+     fixed value. */
+  .nc-topbar {
+    height: auto;
+    min-height: var(--nc-topbar-h);
+  }
+
   /* ---- Topbar: compact spacing, drop the centred search column ----
      The desktop topbar uses a 3-col grid (left | center | right). On
      phones there's no room for a search column wide enough to be
@@ -3576,15 +3601,36 @@ a.nc-rss-item-title:hover {
     border-bottom: 1px solid var(--nc-border);
   }
 
-  /* The toggle button itself: a single full-width row with chevron
-     + label (note title or "Tree"). 44px tap target — Apple/Google
-     touch guidelines minimum. */
+  /* Ship 87: merged toggle + action buttons row.
+     Pre-Ship-87, the mobile rail rendered:
+       (44px) chevron+label toggle button, full-width
+       (~30px) Tree caption + Daily+/📄+/📁+ buttons row
+     for ~74px of header before any tree row appeared. Ship 87
+     puts both into one 44px row; the toggle takes the left
+     (flex: 1) and the action buttons sit on the right (flex: 0).
+     Saves ≈30px of vertical space per mobile tree-strip render. */
+  .nc-mobile-tree-row {
+    display: flex;
+    align-items: center;
+    height: 44px;
+    /* Right-side padding leaves a small breathing gap after the
+       last action button. Left-side padding is on the toggle
+       button itself (its own padding handles indentation). */
+    padding-right: 6px;
+  }
+
+  /* The toggle button: chevron + label on the left of the merged
+     row. Height comes from the parent row; width grows to fill
+     the leftover space after the action buttons. Pre-Ship-87 this
+     was width: 100% / height: 44px standalone — both replaced by
+     flex sizing here. */
   .nc-mobile-tree-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
-    height: 44px;
+    flex: 1 1 auto;
+    min-width: 0;          /* allow ellipsis on long labels */
+    height: 100%;
     padding: 0 14px;
     background: transparent;
     border: none;
@@ -3594,8 +3640,8 @@ a.nc-rss-item-title:hover {
     font-size: 14px;
     text-align: left;
     cursor: pointer;
-    /* Truncate long note names rather than wrapping — 44px high
-       row stays a single line. */
+    /* Truncate long note names rather than wrapping — single line
+       inside the 44px row. */
     white-space: nowrap;
     overflow: hidden;
   }
@@ -3616,13 +3662,13 @@ a.nc-rss-item-title:hover {
     text-overflow: ellipsis;
   }
 
-  /* When the mobile tree is COLLAPSED, hide the rail header
-     (Daily+/📄+/📁+ buttons) and the tree itself. The toggle
-     button stays visible. We use the parent shell's
-     [data-tree-expanded] attribute as the state source — the
-     attribute is only present (with value "true") when expanded. */
+  /* When the mobile tree is COLLAPSED, hide everything except
+     the toggle button — the action buttons (which sit in a
+     sibling within the merged row) and the tree below.
+     Ship 87: replaces the pre-Ship-87 rule that hid the now-
+     gone .nc-rail-header. */
   .nc-shell[data-mobile="true"]:not([data-tree-expanded="true"])
-    .nc-rail-mobile .nc-rail-header,
+    .nc-rail-mobile .nc-rail-header-actions,
   .nc-shell[data-mobile="true"]:not([data-tree-expanded="true"])
     .nc-rail-mobile .nc-rail-scroll {
     display: none;
@@ -3639,11 +3685,11 @@ a.nc-rss-item-title:hover {
     max-height: 60vh;
   }
 
-  /* Add a subtle bottom border to the toggle button when the
-     tree is expanded, separating it from the tree contents. */
+  /* Add a subtle bottom border to the merged row when the tree
+     is expanded, separating it from the tree contents below. */
   .nc-shell[data-mobile="true"][data-tree-expanded="true"]
-    .nc-mobile-tree-toggle {
-    border-bottom-color: var(--nc-border);
+    .nc-rail-mobile .nc-mobile-tree-row {
+    border-bottom: 1px solid var(--nc-border);
   }
 
   /* ---- Main content area -------------------------------------- */
@@ -3814,6 +3860,21 @@ a.nc-rss-item-title:hover {
      those gaps look excessive against the smaller viewport. */
   .nc-editor h1, .nc-editor h2, .nc-editor h3 {
     margin-top: 0.8em;
+  }
+
+  /* ---- Ship 87: hide editor breadcrumb row on mobile --------- */
+  /* The editor's breadcrumb row shows "Vault / path/to/note.md"
+     on the left and the save-status badge + upload pills on the
+     right. On a 375px phone the path quickly wraps to two or
+     three lines, eating ~50px of vertical space before the note
+     content even starts — and it duplicates the location info
+     already visible in the tree-strip toggle button above. The
+     save-status badge is also hidden because the user explicitly
+     said no on this; if you ever want it back, change to
+     `.nc-breadcrumb { display: none }` instead so the row's
+     right side stays. */
+  .nc-breadcrumb-row {
+    display: none;
   }
 
   /* ---- Ship 84: mobile note properties ----------------------- */

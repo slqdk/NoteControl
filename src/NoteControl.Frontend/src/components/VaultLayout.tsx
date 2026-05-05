@@ -91,23 +91,19 @@ export function VaultLayout() {
   const isMobile = useIsMobile();
 
   // Ship 81 — mobile tree strip expanded/collapsed. Ephemeral state
-  // (not persisted): on mobile the tree starts collapsed to a one-
-  // row strip below the topbar; tapping the strip expands the full
-  // tree inline. Tapping a row in the expanded tree collapses it
-  // again so the editor regains the screen. Desktop ignores this
-  // state entirely.
-  const [mobileTreeExpanded, setMobileTreeExpanded] = useState(false);
+  // (not persisted) but Ship 87 changed the DEFAULT to true so the
+  // user lands inside an expanded tree on first vault arrival —
+  // which is what they actually need to navigate. They can still
+  // collapse manually via the chevron toggle button. Pre-Ship-87
+  // the strip started collapsed and auto-collapsed on /note
+  // navigation, which felt fiddly on a phone.
+  const [mobileTreeExpanded, setMobileTreeExpanded] = useState(true);
 
-  // Auto-collapse the mobile tree strip whenever the route changes
-  // to a note URL — i.e. the user picked something. Without this
-  // the expanded tree would stay open after navigation, hiding the
-  // editor they just asked to see.
-  useEffect(() => {
-    if (!isMobile) return;
-    if (location.pathname.endsWith('/note')) {
-      setMobileTreeExpanded(false);
-    }
-  }, [isMobile, location.pathname, searchParams]);
+  // Ship 87 deliberately removed the auto-collapse-on-/note effect
+  // that Ship 81 had here. The user prefers the tree to stay open
+  // above the editor, both for context and so they don't have to
+  // re-expand it for the next navigation. The toggle button still
+  // lets them collapse manually if they want full editor space.
 
   // Ship 80: the variant picker is gone (compact-only) but we keep
   // the variant STATE itself because TreeView still reads it to
@@ -205,9 +201,11 @@ export function VaultLayout() {
     setSelection(null);
     setMoveModeItem(null);
     navigate(`/vaults/${vaultId}/startpage`);
-    // Ship 81: collapse the mobile tree strip after picking
-    // startpage too — same UX as picking a note.
-    setMobileTreeExpanded(false);
+    // Ship 87: removed the auto-collapse of the mobile tree strip
+    // here. The user wants the tree to stay open after navigating.
+    // (And anyway, Ship 86 redirects mobile users away from the
+    // startpage URL, so this branch never runs on mobile in
+    // practice.)
   }, [navigate, vaultId]);
 
   // ---------------------------------------------------- vault metadata
@@ -798,45 +796,53 @@ export function VaultLayout() {
   // Ship 81: shared rail-header content. Same JSX whether desktop
   // or mobile-expanded; only the wrapping container changes shape.
   // Extracted so we don't duplicate the three buttons.
+  //
+  // Ship 87: split the action buttons into their own variable so
+  // the mobile merged toggle-row can render them without
+  // duplicating the three button definitions.
+  const actionButtons = (
+    <span className="nc-rail-header-actions">
+      {/*
+        Daily-note button — always opens (or creates and
+        opens) today's daily note. Idempotent server-side,
+        so spamming this is harmless. Title shows the local
+        date so the user can verify they're about to land
+        on today's, not yesterday's. Ship 78: text "Daily+"
+        to match the sibling 📄+ / 📁+ pattern (icon-or-
+        word + plus glyph) — pre-Ship-78 the lone 📅 emoji
+        read inconsistent with the other two buttons.
+      */}
+      <button
+        type="button"
+        className="nc-rail-header-button"
+        title={`Today's daily note (${formatLocalDate(new Date())})`}
+        onClick={() => void onOpenDailyNote()}
+      >
+        Daily+
+      </button>
+      <button
+        type="button"
+        className="nc-rail-header-button"
+        title={`New note in ${toolbarParentLabel}`}
+        onClick={() => onNewNoteUnder(toolbarParent)}
+      >
+        📄+
+      </button>
+      <button
+        type="button"
+        className="nc-rail-header-button"
+        title={`New folder in ${toolbarParentLabel}`}
+        onClick={() => onNewFolderUnder(toolbarParent)}
+      >
+        📁+
+      </button>
+    </span>
+  );
+
   const railHeader = (
     <div className="nc-rail-header nc-rail-header-with-action">
       <span>Tree</span>
-      <span className="nc-rail-header-actions">
-        {/*
-          Daily-note button — always opens (or creates and
-          opens) today's daily note. Idempotent server-side,
-          so spamming this is harmless. Title shows the local
-          date so the user can verify they're about to land
-          on today's, not yesterday's. Ship 78: text "Daily+"
-          to match the sibling 📄+ / 📁+ pattern (icon-or-
-          word + plus glyph) — pre-Ship-78 the lone 📅 emoji
-          read inconsistent with the other two buttons.
-        */}
-        <button
-          type="button"
-          className="nc-rail-header-button"
-          title={`Today's daily note (${formatLocalDate(new Date())})`}
-          onClick={() => void onOpenDailyNote()}
-        >
-          Daily+
-        </button>
-        <button
-          type="button"
-          className="nc-rail-header-button"
-          title={`New note in ${toolbarParentLabel}`}
-          onClick={() => onNewNoteUnder(toolbarParent)}
-        >
-          📄+
-        </button>
-        <button
-          type="button"
-          className="nc-rail-header-button"
-          title={`New folder in ${toolbarParentLabel}`}
-          onClick={() => onNewFolderUnder(toolbarParent)}
-        >
-          📁+
-        </button>
-      </span>
+      {actionButtons}
     </div>
   );
 
@@ -855,10 +861,11 @@ export function VaultLayout() {
         selection={selection}
         onSelect={(sel) => {
           setSelection(sel);
-          // Ship 81: collapse the mobile tree strip after the
-          // user picks a row. On desktop this is harmless —
-          // mobileTreeExpanded is ignored.
-          if (isMobile) setMobileTreeExpanded(false);
+          // Ship 87: no longer auto-collapsing the mobile tree
+          // strip on row selection — the user wants the tree to
+          // stay open above the editor (see initial-state default
+          // and the removed /note auto-collapse effect at the top
+          // of this component for the matching changes).
         }}
         onContextMenu={(sel, x, y) =>
           setContextMenu({ selection: sel, x, y })
@@ -952,39 +959,62 @@ export function VaultLayout() {
             // buttons accessible in the expanded state.
             <div className="nc-rail nc-rail-left nc-rail-mobile">
               <div className="nc-rail-content">
-                <button
-                  type="button"
-                  className="nc-mobile-tree-toggle"
-                  onClick={() => setMobileTreeExpanded((v) => !v)}
-                  aria-expanded={mobileTreeExpanded}
-                  aria-label={
-                    mobileTreeExpanded ? 'Collapse tree' : 'Expand tree'
-                  }
-                >
-                  <span className="nc-mobile-tree-toggle-chev">
-                    {mobileTreeExpanded ? '▾' : '▸'}
-                  </span>
-                  <span className="nc-mobile-tree-toggle-label">
-                    {selection
-                      ? // Strip .md off note names for the strip label —
-                        // the user knows it's a markdown file. Folder
-                        // names stay as-is.
-                        selection.kind === 'note' &&
-                        selection.name.toLowerCase().endsWith('.md')
-                        ? selection.name.slice(0, -3)
-                        : selection.name
-                      : isOnStartpage
-                        ? 'Startpage'
-                        : 'Tree'}
-                  </span>
-                </button>
                 {/*
-                  Header + tree are always rendered; the CSS hides
-                  them when [data-tree-expanded] is absent. This
-                  lets the browser keep the tree's scroll position
-                  and React state across collapse/expand cycles.
+                  Ship 87: merged toggle + action-buttons row.
+                  Pre-Ship-87, the chevron toggle and the
+                  Daily+/📄+/📁+ row were two stacked rows (~44 +
+                  30 = ~74px). On a phone that header took 10% of
+                  the viewport before the first folder row even
+                  appeared. Ship 87 puts both in the same flex
+                  row at 44px tall.
+
+                  The toggle stays a real <button> with the
+                  chevron + label; the action buttons live in a
+                  sibling span. Tapping an action button doesn't
+                  bubble to the toggle (different element) so the
+                  expand/collapse state stays put. The original
+                  desktop {railHeader} is no longer rendered in
+                  the mobile branch — its content is fully
+                  represented by the merged row.
                 */}
-                {railHeader}
+                <div className="nc-mobile-tree-row">
+                  <button
+                    type="button"
+                    className="nc-mobile-tree-toggle"
+                    onClick={() => setMobileTreeExpanded((v) => !v)}
+                    aria-expanded={mobileTreeExpanded}
+                    aria-label={
+                      mobileTreeExpanded ? 'Collapse tree' : 'Expand tree'
+                    }
+                  >
+                    <span className="nc-mobile-tree-toggle-chev">
+                      {mobileTreeExpanded ? '▾' : '▸'}
+                    </span>
+                    <span className="nc-mobile-tree-toggle-label">
+                      {selection
+                        ? // Strip .md off note names for the strip label —
+                          // the user knows it's a markdown file. Folder
+                          // names stay as-is.
+                          selection.kind === 'note' &&
+                          selection.name.toLowerCase().endsWith('.md')
+                          ? selection.name.slice(0, -3)
+                          : selection.name
+                        : isOnStartpage
+                          ? 'Startpage'
+                          : 'Tree'}
+                    </span>
+                  </button>
+                  {actionButtons}
+                </div>
+                {/*
+                  Tree content — always rendered; CSS hides it
+                  when [data-tree-expanded] is absent. This lets
+                  the browser keep the tree's scroll position and
+                  React state across collapse/expand cycles.
+                  Ship 87: removed the {railHeader} render from
+                  this mobile branch; its content is now in the
+                  merged row above.
+                */}
                 {treeContent}
               </div>
             </div>
