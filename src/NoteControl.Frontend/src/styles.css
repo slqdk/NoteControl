@@ -3645,10 +3645,41 @@ a.nc-rss-item-title:hover {
     color: var(--nc-fg-muted);
     font-size: 11px;
   }
+  /* Ship 89: label no longer grabs all leftover space — the
+     title span next to it does. Keep label at intrinsic width so
+     "Show Tree" reads as a fixed-width label. */
   .nc-mobile-tree-toggle-label {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Ship 89: visual `|` between "Show Tree" and the note title.
+     Muted colour so it reads as a divider, not a punctuation mark.
+     Hidden when the tree is expanded (no title to separate from)
+     via the rule below. */
+  .nc-mobile-tree-toggle-sep {
+    flex: 0 0 auto;
+    color: var(--nc-fg-muted);
+    margin: 0 8px;
+    /* Slightly taller than text so it reads more like a rule than
+       a glyph. Kept as a real `|` character (rather than a styled
+       border-left) because flex layout makes a border-left on a
+       sibling tricky to align vertically — the glyph just works. */
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  /* Ship 89: note title slot. flex: 1 1 auto so it takes whatever
+     space remains after chev + "Show Tree" + separator. Truncates
+     long titles with ellipsis so the row stays one line. min-width: 0
+     is required for ellipsis to work inside a flex child. */
+  .nc-mobile-tree-toggle-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--nc-fg-muted);
   }
 
   /* When the mobile tree is COLLAPSED, hide everything except
@@ -3660,6 +3691,34 @@ a.nc-rss-item-title:hover {
     .nc-rail-mobile .nc-rail-header-actions,
   .nc-shell[data-mobile="true"]:not([data-tree-expanded="true"])
     .nc-rail-mobile .nc-rail-scroll {
+    display: none;
+  }
+
+  /* Ship 89: when the mobile tree is EXPANDED, hide the separator
+     and the note title — the action buttons take that right side
+     of the row instead. Collapsed mode = "I'm reading, show me
+     what I'm reading"; expanded mode = "I'm navigating, give me
+     create-buttons". The toggle's flex layout naturally fills the
+     reclaimed space when the title hides. */
+  .nc-shell[data-mobile="true"][data-tree-expanded="true"]
+    .nc-rail-mobile .nc-mobile-tree-toggle-sep,
+  .nc-shell[data-mobile="true"][data-tree-expanded="true"]
+    .nc-rail-mobile .nc-mobile-tree-toggle-title {
+    display: none;
+  }
+
+  /* Ship 89: when no note is selected (the title span is empty),
+     hide both the title and the separator so we don't show a
+     stranded `|` next to nothing. Order in DOM: sep, then title.
+     :has() targets the separator based on the empty title that
+     follows it. Browser support: Chrome 105+, iOS Safari 15.4+
+     (Sept 2022 / March 2022). On older browsers the separator
+     would still appear next to an empty span — visually a `|`
+     floating in space, mildly ugly but not broken. */
+  .nc-mobile-tree-toggle-title:empty {
+    display: none;
+  }
+  .nc-mobile-tree-toggle-sep:has(+ .nc-mobile-tree-toggle-title:empty) {
     display: none;
   }
 

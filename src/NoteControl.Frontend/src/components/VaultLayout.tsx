@@ -1002,18 +1002,38 @@ export function VaultLayout() {
                     <span className="nc-mobile-tree-toggle-chev">
                       {mobileTreeExpanded ? '▾' : '▸'}
                     </span>
+                    {/*
+                      Ship 89: label is "Show Tree" (not "Tree") to
+                      make the button's purpose explicit on a phone
+                      where there's no hover-tooltip affordance.
+                      Followed by a visual `|` separator and, when
+                      the tree is COLLAPSED and a note is selected,
+                      the note's display name. The note name is
+                      hidden when expanded — at that point the user
+                      is navigating and the action buttons take the
+                      right side of the row instead. CSS handles
+                      the show/hide via .nc-shell[data-tree-expanded]
+                      so we render the title-span unconditionally
+                      and let CSS pick the visible state.
+                    */}
                     <span className="nc-mobile-tree-toggle-label">
-                      {/*
-                        Ship 88: always "Tree". Pre-Ship-88 this
-                        switched between selection.name (note or
-                        folder) and "Tree"/"Startpage". The user
-                        explicitly doesn't want the note title
-                        echoed here — it duplicates info already
-                        in the editor + breadcrumb (and on mobile
-                        the breadcrumb is hidden anyway, but the
-                        tree-strip is still wrong place for it).
-                      */}
-                      Tree
+                      Show Tree
+                    </span>
+                    <span
+                      className="nc-mobile-tree-toggle-sep"
+                      aria-hidden="true"
+                    >
+                      |
+                    </span>
+                    <span className="nc-mobile-tree-toggle-title">
+                      {selection && selection.kind === 'note'
+                        ? // Strip .md off note names — the user knows
+                          // the underlying file format, no need to
+                          // shout it in the strip.
+                          selection.name.toLowerCase().endsWith('.md')
+                          ? selection.name.slice(0, -3)
+                          : selection.name
+                        : ''}
                     </span>
                   </button>
                   {actionButtons}
