@@ -130,6 +130,12 @@ export function VaultLayout() {
 
   const [selection, setSelection] = useState<TreeSelection | null>(null);
   const [vault, setVault] = useState<VaultDto | null>(null);
+  // Ship 91: full list of vaults the caller can see, kept in state so
+  // the topbar VaultPicker can render alternatives + the appearance
+  // popover's optimistic update has a place to splice changes back
+  // into. Pre-Ship-91 the list-fetch effect threw the result away
+  // after picking out the active vault.
+  const [allVaults, setAllVaults] = useState<VaultDto[]>([]);
 
   /*
     Step 36: which row (if any) is currently in "move mode" — armed
@@ -232,9 +238,16 @@ export function VaultLayout() {
       try {
         const all = await vaultsApi.list();
         if (cancelled) return;
+        // Ship 91: store the full list AND set the active vault from
+        // it. The picker reads `allVaults` for alternatives;
+        // pre-Ship-91 the list was discarded after the find().
+        setAllVaults(all);
         setVault(all.find((v) => v.id === vaultId) ?? null);
       } catch {
-        if (!cancelled) setVault(null);
+        if (!cancelled) {
+          setAllVaults([]);
+          setVault(null);
+        }
       }
     })();
     return () => {
@@ -903,6 +916,20 @@ export function VaultLayout() {
     <>
       <TopBar
         vault={vault ?? undefined}
+        vaults={allVaults}
+        onVaultUpdated={(updated) => {
+          // Ship 91: splice the updated DTO back into the in-memory
+          // list so the picker re-renders with the new icon/colour
+          // immediately. Also update the active `vault` if that's
+          // the one that changed — keeps any other consumers (e.g.
+          // the tree/editor headers) consistent without a refetch.
+          setAllVaults((prev) =>
+            prev.map((v) => (v.id === updated.id ? updated : v)),
+          );
+          if (vault?.id === updated.id) {
+            setVault(updated);
+          }
+        }}
         rightExtras={
           // Ship 81: hide the rail-toggle buttons (📁 ℹ️) on mobile.
           // The mobile layout forces tree-on-top and props-hidden;

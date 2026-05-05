@@ -28,6 +28,20 @@ export interface VaultDto {
   ownerId: string;
   createdAt: string;
   role: 'owner' | 'editor' | 'viewer';
+  /**
+   * Ship 91: optional emoji glyph for the topbar vault picker. One of
+   * 12 from the fixed palette (📁 📓 🛠 🔧 💼 ✏️ 📊 🏠 🎓 🎨 🔬 📐).
+   * undefined/null means "use the auto-derived first-letter avatar
+   * (deterministic colour from name hash)" — every vault renders
+   * cleanly without ever being configured.
+   */
+  iconKey?: string | null;
+  /**
+   * Ship 91: optional named colour swatch (one of "blue" | "green" |
+   * "orange" | "purple" | "red" | "teal" | "amber" | "pink"). Same
+   * fallback semantics as iconKey.
+   */
+  colorKey?: string | null;
 }
 
 // ---------------------------------------------------------------- Notes

@@ -92,6 +92,14 @@ public static class AuditEventTypes
     public const string VaultShared      = "vault.shared";
     public const string VaultUnshared    = "vault.unshared";
 
+    // Ship 91: per-vault appearance change (icon glyph + colour swatch
+    // for the topbar picker). Cosmetic, low-risk, but worth auditing
+    // because the pre-Ship-91 view was "vaults are immutable other
+    // than their permissions" — knowing when a name's *visual* shifted
+    // helps a future co-editor figure out "wait, why is Beckhoff a
+    // chemistry flask now?". Payload includes both old + new keys.
+    public const string VaultAppearanceChanged = "vault.appearance.changed";
+
     // Ship 52: tray's "Install Sample Data" button writes this.
     // Re-running over an existing install (which overwrites files)
     // emits one event per click — useful for distinguishing "user

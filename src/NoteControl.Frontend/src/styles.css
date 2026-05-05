@@ -195,6 +195,277 @@ body.nc-dragging * {
 .nc-topbar-sep { color: var(--nc-fg-muted); }
 .nc-username { color: var(--nc-fg-muted); font-size: 13px; }
 
+/* ==========================================================
+   Ship 91 — Vault picker (desktop topbar)
+   ==========================================================
+   Replaces the pre-Ship-91 plain "/<vaultname>" text. Two modes:
+     - Inline pills when there are ≤3 vaults
+     - Single active pill + dropdown when there are >3
+   Avatars use a fixed 8-colour palette plus an auto-derived
+   fallback for vaults with no explicit appearance set.
+   On mobile this whole subtree is hidden via a JSX gate in
+   TopBar.tsx (the picker only renders when !isMobile).
+   ========================================================== */
+
+.nc-vault-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The pill itself: avatar + name in a rounded clickable surface.
+   Used both for inline mode (one pill per vault) and dropdown mode
+   (one pill that opens the dropdown). Matches the topbar's height
+   visually so the picker doesn't add vertical bulk. */
+.nc-vault-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid transparent;
+  font: inherit;
+  color: var(--nc-fg);
+  text-decoration: none;
+  cursor: pointer;
+  /* Smooth the hover/active background flip — gives the picker a
+     polished feel on rapid hover-over. */
+  transition: background 90ms ease-out, border-color 90ms ease-out;
+}
+.nc-vault-pill:hover {
+  background: var(--nc-bg-elev);
+}
+.nc-vault-pill-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent-bg-soft);
+}
+.nc-vault-pill-active:hover {
+  /* Make hover on the active pill stand out a touch more than
+     hover on a regular pill — easier to discover the right-click
+     "customize" affordance. */
+  border-color: var(--nc-accent);
+}
+.nc-vault-pill-label {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+/* The ▾ caret only appears in dropdown mode. Muted so it reads as
+   an affordance, not a sibling word. */
+.nc-vault-pill-caret {
+  color: var(--nc-fg-muted);
+  font-size: 10px;
+  margin-left: 2px;
+}
+.nc-vault-pill-placeholder-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg-muted);
+  font-size: 13px;
+}
+
+/* Avatar — coloured circle with icon glyph or first letter.
+   Size + font size are set inline by VaultAvatar.tsx so the same
+   class works at multiple sizes (22 in pills, 28 default, 36 in
+   the appearance popover preview). */
+.nc-vault-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #ffffff;
+  font-weight: 600;
+  /* Override `inherit` line-height that would offset emoji glyphs
+     vertically inside the circle. 1 = exactly the font's em-height. */
+  line-height: 1;
+  /* Prevent layout flicker on hover (parent's bg change shouldn't
+     re-paint the avatar). */
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+/* The 8 named colour swatches. Picked for: distinguishable from
+   each other across theme variants, decent contrast on white text.
+   Same hex for light + dark themes — the avatar is solid-colour
+   with white text, so it reads cleanly on both backgrounds. */
+.nc-vault-avatar-blue   { background: #2563eb; }
+.nc-vault-avatar-green  { background: #16a34a; }
+.nc-vault-avatar-orange { background: #ea580c; }
+.nc-vault-avatar-purple { background: #7c3aed; }
+.nc-vault-avatar-red    { background: #dc2626; }
+.nc-vault-avatar-teal   { background: #0d9488; }
+.nc-vault-avatar-amber  { background: #d97706; }
+.nc-vault-avatar-pink   { background: #db2777; }
+
+/* ---------- Dropdown menu (>3 vaults) ---------- */
+
+.nc-vault-picker-dropdown {
+  position: relative;
+}
+
+.nc-vault-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+}
+.nc-vault-picker-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  text-decoration: none;
+  cursor: pointer;
+}
+.nc-vault-picker-menu-item:hover {
+  background: var(--nc-bg-elev);
+}
+.nc-vault-picker-menu-item-active {
+  background: var(--nc-accent-bg-soft);
+}
+.nc-vault-picker-menu-name {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 500;
+}
+.nc-vault-picker-menu-path {
+  /* Path is shown muted on the right so the user can disambiguate
+     vaults with the same display name (admin's "all vaults" view
+     is the main case). Truncates with ellipsis if it doesn't fit. */
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/* ---------- Appearance popover (right-click on active pill) ---------- */
+
+.nc-vault-appearance-popover {
+  position: fixed;
+  z-index: 1100;
+  width: 280px;
+  padding: 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: var(--nc-shadow-popover);
+}
+.nc-vault-appearance-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.nc-vault-appearance-title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nc-vault-appearance-close {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--nc-fg-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--nc-radius-sm);
+}
+.nc-vault-appearance-close:hover {
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+}
+.nc-vault-appearance-section {
+  margin-top: 8px;
+}
+.nc-vault-appearance-label {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* Grid of swatches — auto-fits 32px squares with 4px gap. Wraps to
+   multiple rows on the 12-emoji icon grid. */
+.nc-vault-appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, 32px);
+  gap: 4px;
+}
+.nc-vault-appearance-swatch {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  font-size: 18px;
+  cursor: pointer;
+  /* Fast colour transition on selection so swatches feel responsive
+     to the optimistic save's local state flip. */
+  transition: border-color 80ms ease-out, background 80ms ease-out;
+}
+.nc-vault-appearance-swatch:hover {
+  background: var(--nc-bg-elev);
+}
+.nc-vault-appearance-swatch-active {
+  border-color: var(--nc-accent);
+  background: var(--nc-accent-bg-soft);
+}
+/* Auto fallback swatch: muted-text glyph (the auto-derived letter
+   or a tiny coloured circle for the colour reset) with a slight
+   visual signal that it's the "(auto)" choice. */
+.nc-vault-appearance-swatch-auto {
+  font-size: 14px;
+  color: var(--nc-fg-muted);
+  border-style: dashed;
+}
+/* Tiny coloured circle inside a colour swatch — used both in the
+   colour-picker swatches AND in the auto-colour swatch to preview
+   what auto would resolve to. */
+.nc-vault-appearance-color-preview {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+.nc-vault-appearance-error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: var(--nc-error-bg);
+  color: var(--nc-error-fg);
+  border-radius: var(--nc-radius-sm);
+  font-size: 12px;
+}
+
 /* ---------- Toggle buttons + variant picker ----------------------- */
 
 .nc-toggles {
@@ -3552,6 +3823,16 @@ a.nc-rss-item-title:hover {
      search + 👤. The `/` separator and vault link stay so the
      user still sees which vault they're in. */
   .nc-brand {
+    display: none;
+  }
+
+  /* Ship 91: hide the desktop vault picker on mobile defensively.
+     TopBar.tsx already gates it on !isMobile so it shouldn't render
+     here, but during a viewport flip (window resize, device rotate)
+     React may re-render before unmount; the CSS hide makes the flip
+     instant. The pre-Ship-91 brand+vault-name span renders alongside
+     it on mobile and stays visible. */
+  .nc-vault-picker {
     display: none;
   }
 

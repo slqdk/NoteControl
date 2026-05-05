@@ -1,10 +1,38 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 
 import { ApiError, vaultsApi } from '../api/client';
 import type { VaultDto } from '../api/types';
 import { TopBar } from '../components/TopBar';
+import { LAST_VAULT_LS_KEY } from '../components/VaultPicker';
 
+/**
+ * /vaults — the landing page.
+ *
+ * Ship 91 changed this from a static landing page into an auto-redirect
+ * to the user's last-opened vault. Behaviour:
+ *
+ *   1. Fetch the list of vaults the user can see.
+ *   2. If localStorage `nc:last-vault-id` matches one of those vaults,
+ *      redirect there immediately (target is the vault's startpage,
+ *      same as Ship 47).
+ *   3. Otherwise, if there's at least one vault, redirect to the
+ *      first one alphabetically (the list is already path-sorted
+ *      server-side).
+ *   4. If the user has no vaults, render the original "no vaults"
+ *      empty state with guidance to ask an administrator.
+ *
+ * Why this instead of the old visible list:
+ *   - Single-user solo dev with 3 vaults: the list page was an
+ *     unnecessary stop on every login.
+ *   - The picker in the topbar (Ship 91) lets the user switch
+ *     vaults from any page, so a dedicated "list page" no longer
+ *     earns its place in the flow.
+ *
+ * If you ever want to admin-browse all vaults explicitly, expose a
+ * separate route (e.g. `/vaults/all`) that doesn't redirect. The
+ * pre-Ship-91 list-rendering JSX is in git history.
+ */
 export function VaultListPage() {
   const [vaults, setVaults] = useState<VaultDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,17 +54,36 @@ export function VaultListPage() {
     };
   }, []);
 
-  const personal = vaults?.filter((v) => v.scope === 'personal') ?? [];
-  const shared = vaults?.filter((v) => v.scope === 'shared') ?? [];
+  // Decide AFTER the fetch resolves; before that we render a loading
+  // placeholder so the user isn't briefly left at a blank screen
+  // while the network round-trip happens.
+  if (vaults !== null && vaults.length > 0) {
+    let targetId: string | null = null;
 
-  // Ship 47: vault clicks land on the per-vault Startpage instead of
-  // the folder-root listing. Done by linking to `/startpage` directly
-  // here rather than redirecting the index route — the index route is
-  // also reused for "click vault root in the tree", which should still
-  // open the folder listing. So we change the entry-point only, not the
-  // route's semantics.
-  const targetFor = (vaultId: string) => `/vaults/${vaultId}/startpage`;
+    // Prefer the last-opened vault if it still exists.
+    try {
+      const stored = localStorage.getItem(LAST_VAULT_LS_KEY);
+      if (stored && vaults.some((v) => v.id === stored)) {
+        targetId = stored;
+      }
+    } catch {
+      // localStorage may be disabled (private mode etc); just skip.
+    }
 
+    // Fall back to first-alpha if no usable last-id. The server
+    // already orders by Path so the first entry is a sensible default.
+    if (!targetId) {
+      targetId = vaults[0].id;
+    }
+
+    // Same target shape as Ship 47's vault-list links: land on the
+    // per-vault startpage, not the folder root. On mobile the
+    // startpage redirects to the folder root via Ship 86's mobile
+    // guard, so phones land on a usable navigation view.
+    return <Navigate to={`/vaults/${targetId}/startpage`} replace />;
+  }
+
+  // ---- fallback render: no vaults, error, or still loading ----
   return (
     <>
       <TopBar />
@@ -52,40 +99,6 @@ export function VaultListPage() {
             You don&apos;t have access to any vaults yet. Ask an administrator
             to create one for you.
           </p>
-        )}
-
-        {personal.length > 0 && (
-          <section className="nc-section">
-            <h2 className="nc-section-heading">Personal</h2>
-            <ul className="nc-list">
-              {personal.map((v) => (
-                <li key={v.id}>
-                  <Link to={targetFor(v.id)} className="nc-vault-link">
-                    <span className="nc-vault-link-name">{v.name}</span>
-                    <span className="nc-vault-link-path">{v.path}</span>
-                    <span className="nc-vault-link-role">{v.role}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {shared.length > 0 && (
-          <section className="nc-section">
-            <h2 className="nc-section-heading">Shared</h2>
-            <ul className="nc-list">
-              {shared.map((v) => (
-                <li key={v.id}>
-                  <Link to={targetFor(v.id)} className="nc-vault-link">
-                    <span className="nc-vault-link-name">{v.name}</span>
-                    <span className="nc-vault-link-path">{v.path}</span>
-                    <span className="nc-vault-link-role">{v.role}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
         )}
       </main>
     </>

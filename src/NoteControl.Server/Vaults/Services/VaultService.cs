@@ -83,6 +83,25 @@ public interface IVaultService
     /// if they have no access. Used by the RequireVaultRole filter.
     /// </summary>
     Task<string?> GetEffectiveRoleAsync(Guid vaultId, Guid userId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Ship 91: set or clear the vault's icon glyph and colour key for
+    /// the topbar picker. Both fields can be null individually; null
+    /// means "use the auto-derived fallback for that field". The
+    /// endpoint enforces the editor-or-owner role gate before calling
+    /// (viewers can't rebrand vaults they only read).
+    ///
+    /// Validates IconKey against the fixed 12-emoji palette and
+    /// ColorKey against the 8-name colour palette; unknown values
+    /// throw VaultException with statusCode=400. Returns the updated
+    /// VaultDto so the client can refresh its in-memory copy without
+    /// a separate GET.
+    /// </summary>
+    Task<VaultDto> UpdateAppearanceAsync(
+        Guid vaultId,
+        Guid callerId,
+        UpdateVaultAppearanceRequest request,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -126,7 +145,9 @@ public sealed class VaultService : IVaultService
                           join v in _db.Vaults on p.VaultId equals v.Id
                           join u in _db.Users on v.OwnerId equals u.Id
                           orderby v.Path
-                          select new VaultDto(v.Id, v.Path, v.Name, v.Scope, v.OwnerId, u.Username, p.Role, v.CreatedAt))
+                          select new VaultDto(
+                              v.Id, v.Path, v.Name, v.Scope, v.OwnerId, u.Username, p.Role, v.CreatedAt,
+                              v.IconKey, v.ColorKey))
                          .ToListAsync(ct);
         return rows;
     }
@@ -150,7 +171,8 @@ public sealed class VaultService : IVaultService
                           select new VaultDto(
                               v.Id, v.Path, v.Name, v.Scope, v.OwnerId, u.Username,
                               p != null ? p.Role : "none",
-                              v.CreatedAt))
+                              v.CreatedAt,
+                              v.IconKey, v.ColorKey))
                          .ToListAsync(ct);
         return rows;
     }
@@ -161,7 +183,9 @@ public sealed class VaultService : IVaultService
                       where p.UserId == userId && p.VaultId == vaultId
                       join v in _db.Vaults on p.VaultId equals v.Id
                       join u in _db.Users on v.OwnerId equals u.Id
-                      select new VaultDto(v.Id, v.Path, v.Name, v.Scope, v.OwnerId, u.Username, p.Role, v.CreatedAt))
+                      select new VaultDto(
+                          v.Id, v.Path, v.Name, v.Scope, v.OwnerId, u.Username, p.Role, v.CreatedAt,
+                          v.IconKey, v.ColorKey))
                      .FirstOrDefaultAsync(ct);
     }
 
@@ -285,7 +309,11 @@ public sealed class VaultService : IVaultService
         // owner==caller, so this is the new branch.
         var myRole = callerId == targetOwnerId ? RoleOwner : "none";
 
-        return new VaultDto(vault.Id, vault.Path, vault.Name, vault.Scope, vault.OwnerId, targetOwnerUsername, myRole, vault.CreatedAt);
+        // Ship 91: appearance fields default to null on new vault entities,
+        // which the client renders as the auto-derived fallback avatar.
+        return new VaultDto(
+            vault.Id, vault.Path, vault.Name, vault.Scope, vault.OwnerId, targetOwnerUsername, myRole, vault.CreatedAt,
+            vault.IconKey, vault.ColorKey);
     }
 
     public async Task<VaultDto> RegisterAsync(
@@ -400,7 +428,11 @@ public sealed class VaultService : IVaultService
 
         var myRole = callerId == targetOwnerId ? RoleOwner : "none";
 
-        return new VaultDto(vault.Id, vault.Path, vault.Name, vault.Scope, vault.OwnerId, targetOwnerUsername, myRole, vault.CreatedAt);
+        // Ship 91: appearance fields default to null on new vault entities,
+        // which the client renders as the auto-derived fallback avatar.
+        return new VaultDto(
+            vault.Id, vault.Path, vault.Name, vault.Scope, vault.OwnerId, targetOwnerUsername, myRole, vault.CreatedAt,
+            vault.IconKey, vault.ColorKey);
     }
 
     public async Task DeleteAsync(Guid vaultId, Guid callerId, bool callerIsAdmin, CancellationToken ct = default)
@@ -537,5 +569,69 @@ public sealed class VaultService : IVaultService
             .Where(p => p.VaultId == vaultId && p.UserId == userId)
             .Select(p => p.Role)
             .FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>
+    /// Ship 91: validation palettes for the appearance endpoint. The
+    /// emoji set is the 12-icon palette the client picker exposes; the
+    /// colour set is the 8 named swatches. Server validates against
+    /// these so an attacker (or a typo'd payload from a future bug)
+    /// can't write garbage values that would render as broken UI.
+    ///
+    /// If the palettes change, update both this set AND the client's
+    /// VaultPicker fixture in lockstep. Mismatches will fail with 400
+    /// — the server is the source of truth.
+    /// </summary>
+    private static readonly HashSet<string> ValidIconKeys = new()
+    {
+        "📁", "📓", "🛠", "🔧", "💼", "✏️", "📊", "🏠", "🎓", "🎨", "🔬", "📐",
+    };
+
+    private static readonly HashSet<string> ValidColorKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "blue", "green", "orange", "purple", "red", "teal", "amber", "pink",
+    };
+
+    public async Task<VaultDto> UpdateAppearanceAsync(
+        Guid vaultId,
+        Guid callerId,
+        UpdateVaultAppearanceRequest request,
+        CancellationToken ct = default)
+    {
+        // Validate palette membership BEFORE touching the DB so a bad
+        // request never causes a partial write. Empty string is treated
+        // as null — the client's reset path may send "" and that should
+        // mean "clear it", not "store empty".
+        var icon = string.IsNullOrEmpty(request.IconKey) ? null : request.IconKey;
+        var color = string.IsNullOrEmpty(request.ColorKey) ? null : request.ColorKey;
+
+        if (icon is not null && !ValidIconKeys.Contains(icon))
+            throw new VaultException($"Unknown icon key '{icon}'.", statusCode: 400);
+        if (color is not null && !ValidColorKeys.Contains(color))
+            throw new VaultException($"Unknown colour key '{color}'.", statusCode: 400);
+
+        var vault = await _db.Vaults.FirstOrDefaultAsync(v => v.Id == vaultId, ct)
+            ?? throw new VaultException("Vault not found.", statusCode: 404);
+
+        vault.IconKey = icon;
+        vault.ColorKey = color;
+        await _db.SaveChangesAsync(ct);
+
+        // Re-project to a VaultDto using the same join shape as
+        // GetForUserAsync. Inlined rather than calling the public method
+        // to keep the round-trip count to one — we already have the
+        // entity in memory and just need owner username + caller's role.
+        var ownerUsername = await _db.Users
+            .Where(u => u.Id == vault.OwnerId)
+            .Select(u => u.Username)
+            .FirstOrDefaultAsync(ct) ?? "(unknown)";
+        var myRole = await _db.VaultPermissions
+            .Where(p => p.VaultId == vaultId && p.UserId == callerId)
+            .Select(p => p.Role)
+            .FirstOrDefaultAsync(ct) ?? "none";
+
+        return new VaultDto(
+            vault.Id, vault.Path, vault.Name, vault.Scope, vault.OwnerId, ownerUsername, myRole, vault.CreatedAt,
+            vault.IconKey, vault.ColorKey);
     }
 }

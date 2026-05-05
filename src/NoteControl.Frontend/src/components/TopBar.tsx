@@ -4,11 +4,36 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { AccountMenu } from './AccountMenu';
 import { SearchBox } from './SearchBox';
+import { VaultPicker } from './VaultPicker';
 import { useIsMobile } from '../hooks/useIsMobile';
+import type { VaultDto } from '../api/types';
 
 interface TopBarProps {
-  /** The currently-open vault, if any. */
+  /**
+   * The currently-open vault, if any.
+   *
+   * Ship 91: kept as the loose `{id,name}` shape (not a full
+   * VaultDto) for back-compat with callers that don't have the
+   * full DTO on hand. The picker uses this only to highlight
+   * which inline pill is "active"; appearance fields come from
+   * the matching entry inside `vaults`.
+   */
   vault?: { id: string; name: string };
+  /**
+   * Ship 91: full list of vaults the caller can see, used by the
+   * desktop VaultPicker. When undefined or empty, we fall back to
+   * the pre-Ship-91 brand+vault-name span (e.g. on the vault list
+   * page where vaults haven't been loaded into a layout yet).
+   * VaultLayout passes this in once its own vaultsApi.list() resolves.
+   */
+  vaults?: VaultDto[];
+  /**
+   * Ship 91: callback when an entry in `vaults` was updated via the
+   * appearance popover. The parent should splice the new DTO into
+   * its in-memory list so re-renders pick up the new icon/colour
+   * everywhere (tree row, picker, dropdown).
+   */
+  onVaultUpdated?: (updated: VaultDto) => void;
   /**
    * Slot rendered between the search box and the Templates link.
    * Used by VaultLayout to inject the rail toggle buttons (📁 ℹ️).
@@ -44,7 +69,9 @@ interface TopBarProps {
  * logged in); everything else is optional and depends on whether a
  * vault is open.
  */
-export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
+export function TopBar({
+  vault, vaults, onVaultUpdated, rightExtras, rightSettings,
+}: TopBarProps) {
   const location = useLocation();
   // Ship 86: drives the Widgets+ button gate. The button is meant
   // for the desktop startpage; on mobile we redirect away from
@@ -111,15 +138,52 @@ export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
   return (
     <header className="nc-topbar">
       <div className="nc-topbar-left">
-        <Link to="/vaults" className="nc-brand">
-          NoteControl
-        </Link>
-        {vault && (
+        {/*
+          Ship 91: the topbar's left side has two layouts.
+
+          Desktop: a vault picker (inline pills if ≤3 vaults, dropdown
+          otherwise) replacing the pre-Ship-91 "NoteControl / <vault>"
+          plain text. The picker renders the brand-as-home-link
+          implicitly via clicking on a non-active pill.
+
+          Mobile: the original brand link is hidden (Ship 81 CSS) and
+          the vault name is shown alongside the `/` separator in a
+          small one-line topbar. The picker would crowd the topbar's
+          one-line layout, so we keep the simple text on phones.
+
+          When `vaults` isn't supplied (e.g. the bare /vaults page
+          before VaultLayout loads), we render the legacy brand+
+          vault-name on desktop too so the topbar still works.
+        */}
+        {!isMobile && vaults && vaults.length > 0 ? (
           <>
-            <span className="nc-topbar-sep">/</span>
-            <Link to={`/vaults/${vault.id}`} className="nc-vault-name">
-              {vault.name}
+            <Link to="/vaults" className="nc-brand">
+              NoteControl
             </Link>
+            <span className="nc-topbar-sep">/</span>
+            <VaultPicker
+              vaults={vaults}
+              active={
+                vault
+                  ? vaults.find((v) => v.id === vault.id) ?? null
+                  : null
+              }
+              onVaultUpdated={onVaultUpdated}
+            />
+          </>
+        ) : (
+          <>
+            <Link to="/vaults" className="nc-brand">
+              NoteControl
+            </Link>
+            {vault && (
+              <>
+                <span className="nc-topbar-sep">/</span>
+                <Link to={`/vaults/${vault.id}`} className="nc-vault-name">
+                  {vault.name}
+                </Link>
+              </>
+            )}
           </>
         )}
       </div>

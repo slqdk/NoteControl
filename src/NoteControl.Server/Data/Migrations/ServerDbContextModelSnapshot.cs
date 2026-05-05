@@ -98,6 +98,8 @@ namespace NoteControl.Server.Data.Migrations
                     .HasColumnType("TEXT");
 
                 b.Property<DateTimeOffset>("CreatedAt").HasColumnType("TEXT");
+                b.Property<string>("ColorKey").HasMaxLength(32).HasColumnType("TEXT");
+                b.Property<string>("IconKey").HasMaxLength(32).HasColumnType("TEXT");
                 b.Property<string>("Name").IsRequired().HasMaxLength(128).HasColumnType("TEXT");
                 b.Property<Guid>("OwnerId").HasColumnType("TEXT");
                 b.Property<string>("Path").IsRequired().HasMaxLength(512).HasColumnType("TEXT");

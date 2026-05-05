@@ -148,6 +148,28 @@ export const authApi = {
 export const vaultsApi = {
   /** GET /api/vaults — vaults the caller has any role on. */
   list: () => request<VaultDto[]>('/api/vaults'),
+
+  /**
+   * Ship 91: PUT /api/vaults/{id}/appearance — set or clear the
+   * vault's icon glyph and/or colour swatch. Either field can be
+   * null individually; both null means "revert to auto-derived
+   * avatar". Returns the updated VaultDto so the caller can
+   * splice it into local state without a separate GET.
+   *
+   * 403 (server-side) when the caller has only viewer role —
+   * editors and owners may rebrand. 400 if iconKey isn't in the
+   * fixed 12-emoji palette or colorKey isn't a known swatch name;
+   * the client picker constrains both, so a 400 means a stale
+   * client / a hand-edited DOM, not normal operation.
+   */
+  updateAppearance: (
+    vaultId: string,
+    body: { iconKey: string | null; colorKey: string | null },
+  ) =>
+    request<VaultDto>(`/api/vaults/${vaultId}/appearance`, {
+      method: 'PUT',
+      body,
+    }),
 };
 
 // ============================================================== NOTES

@@ -39,4 +39,27 @@ public sealed class Vault
     public Guid OwnerId { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Ship 91: optional emoji glyph used by the topbar vault picker.
+    /// One of a fixed palette of 12 (📁 📓 🛠 🔧 💼 ✏️ 📊 🏠 🎓 🎨 🔬 📐).
+    /// Stored as the literal emoji character(s) — opaque to the server,
+    /// validated client-side against the palette. NULL means "use the
+    /// auto-derived first-letter avatar" — every vault renders cleanly
+    /// without ever being configured. The picker UI lets the owner
+    /// change this; it lives globally on the vault row, so co-editors
+    /// see the same icon (matches the philosophy that the icon is for
+    /// the vault's identity, not per-user preference).
+    /// </summary>
+    public string? IconKey { get; set; }
+
+    /// <summary>
+    /// Ship 91: optional colour key (one of "blue" | "green" | "orange"
+    /// | "purple" | "red" | "teal" | "amber" | "pink" — the eight-swatch
+    /// palette). Stored as a key, not a hex value, so we can retune the
+    /// visual palette later without rewriting saved rows. NULL means
+    /// "use the auto-derived hash colour from the vault name." Same
+    /// global-on-vault semantics as IconKey.
+    /// </summary>
+    public string? ColorKey { get; set; }
 }

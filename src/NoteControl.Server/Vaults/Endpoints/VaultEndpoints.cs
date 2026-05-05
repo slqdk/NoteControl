@@ -52,6 +52,13 @@ public static class VaultEndpoints
         // destructive (no permanent data loss, just file overwrites).
         group.MapPost("/{vaultId:guid}/install-sample-data", InstallSampleDataAsync);
 
+        // Ship 91: set or clear the vault's icon glyph + colour swatch
+        // for the topbar vault picker. PUT (replace), accepts a body
+        // with optional iconKey + colorKey strings. Editor-or-owner
+        // gate — viewers can read appearance via the list/get DTO but
+        // can't change it.
+        group.MapPut("/{vaultId:guid}/appearance", UpdateAppearanceAsync);
+
         return app;
     }
 
@@ -489,5 +496,80 @@ public static class VaultEndpoints
 
         return Results.Ok(new InstallSampleDataResponse(
             result.FilesWritten, result.FoldersCreated));
+    }
+
+    /// <summary>
+    /// Ship 91: PUT /{vaultId}/appearance — set/clear icon + colour for
+    /// the topbar vault picker.
+    ///
+    /// Permission gate: caller must hold editor or owner role on the
+    /// vault, OR be an admin (god-mode for vault management). Viewers
+    /// are explicitly rejected with 403 — they can SEE the appearance
+    /// via the vault DTO but can't change it.
+    ///
+    /// On success, audits with both old and new icon/colour values so
+    /// post-hoc review can answer "who changed Beckhoff to a flask?".
+    /// </summary>
+    private static async Task<IResult> UpdateAppearanceAsync(
+        Guid vaultId,
+        UpdateVaultAppearanceRequest request,
+        HttpContext http,
+        IVaultService vaults,
+        IAuditLog audit,
+        CancellationToken ct)
+    {
+        var user = http.RequireUser();
+        var isAdmin = http.IsAdmin();
+
+        // Permission gate: editor or owner. We check role against the
+        // vault before delegating so the audit-on-success path can
+        // assume the caller is authorized.
+        if (!isAdmin)
+        {
+            var role = await vaults.GetEffectiveRoleAsync(vaultId, user.Id, ct);
+            if (role is null)
+            {
+                return Results.NotFound();
+            }
+            if (!string.Equals(role, VaultService.RoleOwner, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(role, VaultService.RoleEditor, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Problem(statusCode: 403, title: "Editor or owner role required.");
+            }
+        }
+
+        // Capture the BEFORE state for the audit payload. We re-read
+        // through the service so we get a normalised DTO (and bail
+        // early if the vault doesn't exist, before any side-effects
+        // in UpdateAppearanceAsync).
+        var before = await vaults.GetForUserAsync(vaultId, user.Id, ct);
+        if (before is null && !isAdmin)
+        {
+            return Results.NotFound();
+        }
+
+        try
+        {
+            var updated = await vaults.UpdateAppearanceAsync(vaultId, user.Id, request, ct);
+            await audit.WriteAsync(
+                AuditEventTypes.VaultAppearanceChanged,
+                user.Id,
+                http.GetClientIp(),
+                new
+                {
+                    vaultId,
+                    iconKeyBefore = before?.IconKey,
+                    iconKeyAfter = updated.IconKey,
+                    colorKeyBefore = before?.ColorKey,
+                    colorKeyAfter = updated.ColorKey,
+                    asAdmin = isAdmin ? (bool?)true : null,
+                },
+                ct);
+            return Results.Ok(updated);
+        }
+        catch (VaultException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
     }
 }

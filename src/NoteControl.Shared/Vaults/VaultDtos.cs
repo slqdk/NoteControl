@@ -2,6 +2,12 @@ namespace NoteControl.Shared.Vaults;
 
 /// <summary>
 /// Public projection of a vault for list / detail responses.
+///
+/// Ship 91 added <see cref="IconKey"/> and <see cref="ColorKey"/> for the
+/// topbar vault picker. Both are nullable; null means "client should use
+/// the auto-derived fallback avatar (first letter on hashed colour)".
+/// Whenever the owner sets a custom icon or colour, the corresponding
+/// field becomes non-null.
 /// </summary>
 public sealed record VaultDto(
     Guid Id,
@@ -11,7 +17,9 @@ public sealed record VaultDto(
     Guid OwnerId,
     string OwnerUsername,
     string MyRole,       // "owner" | "editor" | "viewer"
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string? IconKey,     // null = auto-derived fallback (Ship 91)
+    string? ColorKey);   // null = auto-derived fallback (Ship 91)
 
 /// <summary>
 /// POST /api/vaults — create a new vault. The Path must start with
@@ -89,3 +97,20 @@ public sealed record ShareVaultRequest(
 /// at the full file count (we always overwrite).
 /// </summary>
 public sealed record InstallSampleDataResponse(int FilesWritten, int FoldersCreated);
+
+/// <summary>
+/// Ship 91: PUT /api/vaults/{id}/appearance — set or clear the vault's
+/// icon glyph and colour key for the topbar picker.
+///
+/// Either field can be null individually. Setting both to null reverts
+/// the vault to the auto-derived fallback avatar (first letter, hashed
+/// colour). The server validates IconKey against a fixed 12-emoji
+/// palette and ColorKey against the 8-name palette; unknown values are
+/// rejected with 400 to keep stored data clean.
+///
+/// Permission: requires the caller to have at least editor role on the
+/// vault — owners and editors can rebrand it, viewers cannot.
+/// </summary>
+public sealed record UpdateVaultAppearanceRequest(
+    string? IconKey,
+    string? ColorKey);
