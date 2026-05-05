@@ -65,6 +65,14 @@ export function TreeContextMenu({
             label: 'Properties',
             onClick: () => onShowProperties(selection),
             accelerator: 'Alt+Enter',
+            // Ship 85: on mobile, the desktop right-rail Properties
+            // panel is force-hidden (Ship 81). Tapping this item
+            // would do nothing visible. Note properties on mobile
+            // live at the bottom of the editor (Ship 84's
+            // MobileNoteProperties); the user already has access
+            // there. Hide this entry on phones to avoid a dead
+            // menu choice.
+            mobileHidden: true,
           },
         ]
       : [
@@ -107,6 +115,11 @@ export function TreeContextMenu({
             label: 'Properties',
             onClick: () => onShowProperties(selection),
             accelerator: 'Alt+Enter',
+            // Ship 85: hidden on mobile. Folder properties have no
+            // mobile UI yet (Ship 84 was notes-only); the right-
+            // rail panel that this would open is force-hidden on
+            // phones (Ship 81). Tapping it would do nothing.
+            mobileHidden: true,
           },
         ];
 

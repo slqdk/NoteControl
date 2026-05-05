@@ -31,7 +31,24 @@ export interface TableToolbarProps {
 interface ToolbarPosition {
   top: number;
   left: number;
+  /**
+   * Ship 83: 'above' (default) renders 40px above the table.
+   * 'below' kicks in when the table's top edge is too close to
+   * the topbar — then we render just below the table's top edge.
+   * Note we use 'top edge' not 'bottom edge' because tall tables
+   * would push the "below" placement way down the screen.
+   */
+  placement: 'above' | 'below';
 }
+
+// Ship 83: estimated rendered toolbar width for horizontal clamping.
+// Toolbar has 8 buttons + 3 separators ≈ 280px on a phone. If the
+// menu ever grows, switch to ref-based measurement.
+const TABLE_TOOLBAR_WIDTH_ESTIMATE = 280;
+
+// Same clamping fallback as BubbleMenu — kept in sync with that
+// module's FALLBACK_TOP_INSET.
+const FALLBACK_TOP_INSET = 8;
 
 export function TableToolbar({ editor }: TableToolbarProps) {
   const [active, setActive] = useState(false);
@@ -81,12 +98,50 @@ export function TableToolbar({ editor }: TableToolbarProps) {
       }
 
       const rect = el.getBoundingClientRect();
-      // Float the toolbar 40px above the table, left-aligned with
-      // it. The 40px gap matches our other floating toolbars
-      // (image, video) so the visual rhythm is consistent.
+
+      // Ship 83: pick "above" or "below" based on whether the
+      // toolbar would clip behind the topbar at its 40px-above
+      // position. Same approach BubbleMenu uses; we look up the
+      // topbar's bottom rather than hardcode --nc-topbar-h so a
+      // wrapped multi-row mobile topbar is handled correctly.
+      const topbarEl = document.querySelector('.nc-topbar') as HTMLElement | null;
+      const minVisibleTop = topbarEl
+        ? topbarEl.getBoundingClientRect().bottom + 4
+        : FALLBACK_TOP_INSET;
+      const wouldClipAbove = rect.top - 40 < minVisibleTop;
+      const placement: 'above' | 'below' = wouldClipAbove ? 'below' : 'above';
+
+      // Top:
+      //   above: 40px above the table (existing behaviour)
+      //   below: 8px below the table's top edge — sits inside the
+      //          table's first row, which is fine because the
+      //          toolbar is a fixed overlay; user can still see
+      //          the cell underneath through the toolbar's spaces.
+      const top = placement === 'above' ? rect.top - 40 : rect.top + 8;
+
+      // Ship 83: clamp left so the toolbar can't slide off either
+      // viewport edge. Wide tables that the user has horizontally
+      // scrolled can put rect.left at a negative number; the
+      // clamp pulls the toolbar back on-screen with a small inset.
+      const minLeft = 8;
+      const maxLeft = window.innerWidth - TABLE_TOOLBAR_WIDTH_ESTIMATE - 8;
+      const clampedLeft = Math.min(Math.max(rect.left, minLeft), maxLeft);
+
+      // Ship 85: clamp the toolbar's bottom edge to the visualViewport
+      // bottom so the soft keyboard can't hide it. Toolbar height
+      // is ~32px (one row of buttons + padding); estimate it.
+      // Same approach BubbleMenu uses; see useVisualViewportBottom.ts
+      // for the rationale.
+      const TABLE_TOOLBAR_HEIGHT_ESTIMATE = 32;
+      const vv = window.visualViewport;
+      const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+      const topMax = visibleBottom - TABLE_TOOLBAR_HEIGHT_ESTIMATE - 4;
+      const clampedTop = Math.min(top, topMax);
+
       setPosition({
-        top: rect.top - 40,
-        left: rect.left,
+        top: clampedTop,
+        left: clampedLeft,
+        placement,
       });
     }
 
@@ -97,11 +152,25 @@ export function TableToolbar({ editor }: TableToolbarProps) {
     window.addEventListener('scroll', update, true); // capture-phase: catch scrolling in any ancestor
     window.addEventListener('resize', update);
 
+    // Ship 85: visualViewport changes (soft keyboard show/hide)
+    // don't fire window.resize on iOS Safari. Subscribe directly
+    // so the keyboard-aware clamp recomputes when the keyboard
+    // appears/disappears.
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', update);
+      vv.addEventListener('scroll', update);
+    }
+
     return () => {
       editor.off('selectionUpdate', update);
       editor.off('transaction', update);
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
+      if (vv) {
+        vv.removeEventListener('resize', update);
+        vv.removeEventListener('scroll', update);
+      }
     };
   }, [editor]);
 

@@ -3494,3 +3494,470 @@ a.nc-rss-item-title:hover {
   color: var(--nc-danger, #c53030);
   border-color: var(--nc-danger, #c53030);
 }
+
+/* ====================================================================
+   Ship 81 — Mobile shell (≤768px)
+   --------------------------------------------------------------------
+   Goal: collapse the desktop 3-column shell into a single-column
+   tree-on-top layout. Tree starts collapsed to a one-row strip; tap
+   to expand into a full tree below the topbar; tapping a row
+   collapses again. Properties rail is hidden on mobile (handled in
+   VaultLayout.tsx by gating effectivePropsVisible).
+
+   Why the mobile rules sit at the END of the file: they must beat
+   any earlier rules (including the inline width style on
+   ResizableRail's container — only the JSX-level mobile branch
+   avoids ResizableRail to dodge that, but if a future ship reuses
+   it, !important on width here is the safety net).
+
+   Breakpoint matches MOBILE_BREAKPOINT_PX in src/hooks/useIsMobile.ts.
+   Keep them in sync.
+   ==================================================================== */
+
+@media (max-width: 768px) {
+
+  /* ---- Topbar: compact spacing, drop the centred search column ----
+     The desktop topbar uses a 3-col grid (left | center | right). On
+     phones there's no room for a search column wide enough to be
+     useful AND a vault name AND the account menu. Collapse to two
+     auto cols and let the search box wrap onto its own row.
+     There's an older 780px @media block earlier in this file that
+     does part of this; we re-state at 768px (matching the JS
+     breakpoint) with tighter padding and the brand-text hide. */
+  .nc-topbar {
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  /* Push the search box (center column) onto its own row beneath
+     the brand + right-side icons. Keeps it usable without crowding
+     the brand row. */
+  .nc-topbar-center {
+    grid-column: 1 / -1;
+  }
+  /* Hide the brand text on the very narrowest phones to make room
+     for vault name + buttons. The `/` separator and vault link stay. */
+  .nc-brand {
+    display: none;
+  }
+
+  /* Right side: kill the gap a bit so 4 buttons fit. */
+  .nc-topbar-right {
+    gap: 6px;
+  }
+
+  /* Templates link is hidden on mobile — the user manages templates
+     from desktop. Hiding via CSS rather than forking TopBar JSX
+     because the link is hardcoded there and forking adds a prop
+     for one breakpoint's worth of behaviour. */
+  .nc-topbar-link[title="Manage templates"] {
+    display: none;
+  }
+
+  /* ---- Shell: stack vertically -------------------------------- */
+  .nc-shell[data-mobile="true"] {
+    flex-direction: column;
+  }
+
+  /* Disable resize-cursor side-effects on mobile (no drag handles). */
+  .nc-shell[data-mobile="true"] .nc-rail-handle {
+    display: none;
+  }
+
+  /* ---- Mobile tree rail --------------------------------------- */
+
+  /* The mobile rail is always rendered full-width. Height is auto
+     but the inner collapsible content (header + tree) only shows
+     when [data-tree-expanded="true"] sits on the parent shell. */
+  .nc-rail-mobile {
+    width: 100% !important;          /* defeats any inline width if reused */
+    flex: 0 0 auto;
+    border-right: none;
+    border-bottom: 1px solid var(--nc-border);
+  }
+
+  /* The toggle button itself: a single full-width row with chevron
+     + label (note title or "Tree"). 44px tap target — Apple/Google
+     touch guidelines minimum. */
+  .nc-mobile-tree-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid transparent;
+    color: var(--nc-fg);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    /* Truncate long note names rather than wrapping — 44px high
+       row stays a single line. */
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .nc-mobile-tree-toggle:hover,
+  .nc-mobile-tree-toggle:focus-visible {
+    background: var(--nc-bg-elev-2);
+    outline: none;
+  }
+  .nc-mobile-tree-toggle-chev {
+    flex: 0 0 auto;
+    width: 14px;
+    color: var(--nc-fg-muted);
+    font-size: 11px;
+  }
+  .nc-mobile-tree-toggle-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* When the mobile tree is COLLAPSED, hide the rail header
+     (Daily+/📄+/📁+ buttons) and the tree itself. The toggle
+     button stays visible. We use the parent shell's
+     [data-tree-expanded] attribute as the state source — the
+     attribute is only present (with value "true") when expanded. */
+  .nc-shell[data-mobile="true"]:not([data-tree-expanded="true"])
+    .nc-rail-mobile .nc-rail-header,
+  .nc-shell[data-mobile="true"]:not([data-tree-expanded="true"])
+    .nc-rail-mobile .nc-rail-scroll {
+    display: none;
+  }
+
+  /* When expanded: cap the tree's height so it doesn't push the
+     editor offscreen. 60vh leaves ~40% of the viewport for the
+     editor underneath, which is enough to peek at the content
+     and confirm "yes I picked the right note" before tapping
+     a row. The rail-scroll already has overflow-y: auto so
+     contents inside scroll within this cap. */
+  .nc-shell[data-mobile="true"][data-tree-expanded="true"]
+    .nc-rail-mobile .nc-rail-scroll {
+    max-height: 60vh;
+  }
+
+  /* Add a subtle bottom border to the toggle button when the
+     tree is expanded, separating it from the tree contents. */
+  .nc-shell[data-mobile="true"][data-tree-expanded="true"]
+    .nc-mobile-tree-toggle {
+    border-bottom-color: var(--nc-border);
+  }
+
+  /* ---- Main content area -------------------------------------- */
+  /* On desktop, .nc-shell-main has flex:1 horizontally. With the
+     shell switched to flex-direction: column it now grows
+     vertically, which is what we want — fills the remaining
+     viewport height under the tree strip. min-height: 0 mirrors
+     the desktop's min-width: 0 and stops main from refusing to
+     shrink below its content's intrinsic height (without it, an
+     expanded tree at 60vh would push main offscreen when its
+     content is taller than the remaining space). */
+  .nc-shell[data-mobile="true"] .nc-shell-main {
+    min-height: 0;
+    /* Allow horizontal scrolling for any content that's wider
+       than the screen (wide tables in the editor, code blocks
+       with long lines). The editor itself handles wrap; this is
+       belt-and-braces. */
+    overflow-x: auto;
+  }
+
+  /* ---- Ship 82: tree row touch refinements -------------------- */
+  /* Goal: thumbable rows + larger chevron hit targets, without
+     redoing the row's flex layout. The visual chevron stays small
+     (it's just a glyph); we only expand its INVISIBLE hit area
+     so tapping near the arrow reliably toggles. The row body's
+     own click area absorbs taps that miss the chevron — single
+     tap selects + opens, same as desktop.
+
+     Density tradeoff: 36px is a deliberate compromise. 44px
+     (Apple's HIG minimum) eats 4 screens of vertical space for
+     a 30-note folder; 32px (Ship 81's bump) feels twitchy. 36px
+     reads as "thumbable list" without sacrificing density.
+
+     Long-press for context menu: untouched — the existing
+     onContextMenu wiring fires on long-press in Chrome Android
+     and iOS Safari. iOS Safari ALSO triggers its native text
+     selection on long-press, which can fight with our menu;
+     this is a known iOS quirk we accept rather than build a
+     custom press-detector for. */
+
+  /* Row height bump: 32 → 36px. min-height takes over from the
+     compact-variant's tight padding, so all rows get the same
+     comfortable height regardless of which variant is loaded. */
+  .nc-rail-mobile .nc-tree-row {
+    min-height: 36px;
+    /* The compact variant uses padding: 1px which fights min-height
+       for vertical centering. Re-apply a slightly looser padding
+       so flex-align-center has actual room to centre the row's
+       contents within the 36px box. */
+    padding-top: 6px;
+    padding-bottom: 6px;
+    /* Bump the row's font slightly — the compact variant uses
+       12.5px which feels small at thumb distance. 13.5px reads
+       as "list row" without being chunky. Override per-variant
+       below as needed. */
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+
+  /* The Startpage row is a one-off below the topbar; match the
+     same 36px target so it's not skinnier than the other rows. */
+  .nc-rail-mobile .nc-tree-row-startpage {
+    min-height: 36px;
+  }
+
+  /* Chevron: wider invisible hit area horizontally + vertical
+     hit area constrained to the row's height (no overflow into
+     adjacent rows). The visible glyph is bumped to 11px (compact's
+     8px is a speck under a thumb). Horizontal padding makes the
+     click rectangle ~34px wide; the negative horizontal margin
+     compensates so the row's flex layout doesn't shift. Vertical
+     padding matches the row's own 6px so the hit area fills the
+     row top-to-bottom but no further — desktop's -4px margin let
+     the chevron's hit area overflow slightly into the previous
+     row, which on a phone causes mistaps; we don't repeat that.
+     Pre-mobile: padding 4×6 → ~16×24 hit. Post-mobile: padding
+     6×10 → ~24×34 hit, fully inside the 36px row. */
+  .nc-rail-mobile .nc-tree-chevron {
+    padding: 6px 10px;
+    margin: 0 -2px;
+    width: 14px;
+    font-size: 11px;
+  }
+
+  /* Tree icon: small bump so 📁/📝 don't look stranded next to
+     the larger label and 36px row. Variant-agnostic for the same
+     reason. */
+  .nc-rail-mobile .nc-tree-icon {
+    font-size: 14px;
+    width: 22px;
+  }
+
+  /* ---- Rail-header buttons: thumbable Daily+/📄+/📁+ ---------- */
+  /* The desktop rail-header buttons (Daily+, 📄+, 📁+) are 22px
+     tall — way too small for a thumb. On mobile they only appear
+     when the tree strip is expanded, so we have full freedom to
+     resize them without breaking the desktop layout.
+
+     Use the same .nc-rail-header-button base; just override
+     height + padding on mobile. The "Tree" caption gets a touch
+     more breathing room too — the .nc-rail-header padding bumps
+     so the caption sits centered against the taller buttons. */
+  .nc-rail-mobile .nc-rail-header {
+    padding: 10px 12px;
+  }
+  .nc-rail-mobile .nc-rail-header-button {
+    height: 36px;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+  /* Daily+ has a longer label than 📄+/📁+; let it breathe. */
+  .nc-rail-mobile .nc-rail-header-button:first-child {
+    padding: 0 12px;
+  }
+
+  /* ---- Slash menu: bigger tap targets on mobile -------------- */
+  /* Desktop rows are ~30px tall (6px padding + 13px font + 28px
+     icon centering). Below the 44px native-touch guideline. Bump
+     padding so each row sits at ~44px on a phone, the icon block
+     gets a bit more breathing room, and the title font reads more
+     comfortably. The popup itself (positioning, flip, fade)
+     stays exactly as desktop — tippy's default flip handles the
+     "no room below the cursor" case automatically.
+     Min-width 260px is fine on a 375px+ phone after 16px insets;
+     leave it alone. */
+  .nc-slash-row {
+    padding: 10px 12px;
+    gap: 12px;
+  }
+  .nc-slash-icon {
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+  .nc-slash-title {
+    font-size: 14px;
+  }
+  .nc-slash-subtitle {
+    font-size: 12px;
+  }
+
+  /* Settings cog and popover are hidden on mobile (VaultLayout
+     passes null for rightSettings when isMobile), so no mobile
+     popover override is needed. Templates link is also hidden
+     above. */
+
+  /* ---- Ship 83: editor padding compact on mobile -------------- */
+  /* The desktop editor card has 28px top/bottom × 32px sides of
+     padding to feel like a real "page" surface. On a 375px-wide
+     phone that's 64px (17%) of horizontal space lost to padding,
+     leaving ~310px for body text — narrow.
+
+     Drop padding to 12px top/bottom × 16px sides on mobile. Body
+     text gets ~340px of width (≈10% wider line length). The card
+     still has visible padding so it reads as a card, not a flush-
+     edge text area; just less of a "page on a desk" feel.
+
+     The 700px width is left at max-width: 100% (already set) so
+     the card spans the full viewport on mobile minus any rail
+     padding. The page-area parent has padding: 0 from Ship 54,
+     so the editor card is flush against the shell edges. */
+  .nc-editor {
+    padding: 12px 16px;
+  }
+  /* Reduce per-element top spacing too — the desktop margins on
+     headings and paragraphs assume a 28px-padded page; on mobile
+     those gaps look excessive against the smaller viewport. */
+  .nc-editor h1, .nc-editor h2, .nc-editor h3 {
+    margin-top: 0.8em;
+  }
+
+  /* ---- Ship 84: mobile note properties ----------------------- */
+  /* Section sits at the bottom of NoteEditor's shell, after the
+     page area, so it scrolls with the editor content. The user
+     scrolls past their note's last line to reach it. Visually
+     separated by a top border so it doesn't feel like a floating
+     footer. */
+  .nc-mobile-props {
+    border-top: 1px solid var(--nc-border);
+    background: var(--nc-bg);
+    /* Generous bottom padding because mobile browsers reserve a
+       chunk of viewport for their address bar / home indicator
+       and pad-bottom prevents content getting clipped. */
+    padding-bottom: 32px;
+  }
+
+  /* The big collapsed-by-default header. 44px tap target. The
+     chevron + word "Properties" reads as a button without needing
+     visual emphasis — keeping it understated so it doesn't compete
+     with the note content above. */
+  .nc-mobile-props-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    background: transparent;
+    border: none;
+    color: var(--nc-fg);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+  }
+  .nc-mobile-props-toggle:hover,
+  .nc-mobile-props-toggle:focus-visible {
+    background: var(--nc-bg-elev-2);
+    outline: none;
+  }
+  .nc-mobile-props-chev {
+    display: inline-flex;
+    width: 14px;
+    color: var(--nc-fg-muted);
+    font-size: 11px;
+  }
+  .nc-mobile-props-title {
+    flex: 1 1 auto;
+  }
+
+  /* Body: padded a touch on the inside so labels don't kiss the
+     edge. Nests the dl, action buttons, and "More" subtoggle. */
+  .nc-mobile-props-body {
+    padding: 4px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* On mobile bump the dt column wider so longer field names
+     ("Modified", "Locked") don't get squashed against tiny
+     editable values like the locked checkbox. 100px is enough
+     for any current label without eating thumb space on a 375px
+     phone. */
+  .nc-mobile-props .nc-props-grid {
+    grid-template-columns: 100px 1fr;
+    /* Slightly looser row gap reads more comfortably on a small
+       screen than the 8px desktop default. */
+    row-gap: 12px;
+    /* Reset font-size in case the variant rules above
+       (nc-props-compact) leak in — we want the mobile dl at the
+       same 13px as the surrounding text, not the 12px compact
+       desktop variant. */
+    font-size: 13px;
+  }
+
+  /* Action button row: fills width, centred text, ample tap
+     height. Existing .nc-btn handles colour; we just stretch
+     it on mobile. */
+  .nc-mobile-props-body .nc-props-actions {
+    /* The desktop .nc-props-actions already does flex-direction
+       column with a 1px top divider — that's fine here too. */
+    margin-top: 4px;
+  }
+  .nc-mobile-props-body .nc-btn {
+    /* Bump tap target. Desktop .nc-btn is whatever its default
+       padding is; mobile gets a guaranteed 44px-ish height via
+       padding. */
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  /* "More" subtoggle. Inset slightly from the section's outer
+     padding so it reads as nested, not as a sibling of the main
+     toggle. Same shape as the main toggle just smaller. */
+  .nc-mobile-props-more-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 0;
+    margin-top: 4px;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--nc-border);
+    color: var(--nc-fg-muted);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .nc-mobile-props-more-toggle:hover,
+  .nc-mobile-props-more-toggle:focus-visible {
+    color: var(--nc-fg);
+    outline: none;
+  }
+
+  /* ---- Ship 85: context-menu items hidden on mobile ----------- */
+  /* Context menu items flagged with mobileHidden in JSX get the
+     class nc-context-item-mobile-hidden. We hide them at ≤768px so
+     the menu shrinks to actions that actually work on touch.
+     Currently only "Properties" uses this — on mobile, note
+     properties live at the bottom of the editor (Ship 84) and
+     folders have no mobile properties UI at all.
+
+     We hide the item but NOT its surrounding divider, because
+     dividers are positional siblings rendered between items; CSS
+     can't easily pair a divider to its hidden neighbour. The
+     divider above Properties stays, leaving a tiny visual gap at
+     the bottom of the menu. Worth living with — the alternative
+     is plumbing more state through ContextMenu's render. */
+  .nc-context-item-mobile-hidden {
+    display: none;
+  }
+
+  /* While we're here: bump context menu row tap targets on mobile.
+     Desktop is 13px font + 6px padding = ~25px tall — below the
+     tap-target threshold. The Ship 81/82 tree-row work bumped tree
+     rows; the long-press menu deserves the same treatment. */
+  .nc-context-item {
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+}

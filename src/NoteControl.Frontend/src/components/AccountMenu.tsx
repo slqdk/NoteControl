@@ -34,12 +34,19 @@ export function AccountMenu() {
 
   // Click-outside + Escape close. Mirrors the cog popover's
   // approach: one effect that owns the listeners, attached only
-  // while open. We bind both mousedown (to fire before click
-  // handlers inside) and keydown.
+  // while open.
+  //
+  // Ship 85: pointerdown instead of mousedown. iOS Safari doesn't
+  // always fire mousedown on tap-then-scroll outside the menu,
+  // which left the menu stuck open until a real tap landed.
+  // pointerdown fires on touchstart unconditionally, so the
+  // menu dismisses as soon as the user starts a gesture outside.
+  // Desktop mouse behaviour is unchanged — pointerdown also fires
+  // for mouse left-button down.
   useEffect(() => {
     if (!open) return;
 
-    function onMouseDown(e: MouseEvent) {
+    function onPointerDown(e: PointerEvent) {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
@@ -47,10 +54,10 @@ export function AccountMenu() {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
     }
-    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);

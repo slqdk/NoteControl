@@ -61,7 +61,9 @@ export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
 
   useEffect(() => {
     if (!widgetsOpen) return;
-    function onDocDown(e: MouseEvent) {
+    // Ship 85: pointerdown not mousedown — see AccountMenu / ContextMenu
+    // / SearchBox for the rationale (iOS Safari + tap-then-scroll).
+    function onDocDown(e: PointerEvent) {
       if (
         widgetsRef.current &&
         !widgetsRef.current.contains(e.target as Node)
@@ -72,10 +74,10 @@ export function TopBar({ vault, rightExtras, rightSettings }: TopBarProps) {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setWidgetsOpen(false);
     }
-    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('pointerdown', onDocDown);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('pointerdown', onDocDown);
       document.removeEventListener('keydown', onKey);
     };
   }, [widgetsOpen]);

@@ -101,17 +101,23 @@ export function ToggleRailButtons({
     setWidthDraft(settings.appWidth);
   }, [settings.appWidth]);
 
-  // Close picker on outside click. Mousedown (not click) so a quick
-  // drag on the slider thumb doesn't accidentally close the popover.
+  // Close picker on outside click/tap. Ship 85: pointerdown not
+  // mousedown — see AccountMenu/ContextMenu for rationale (iOS
+  // Safari + tap-then-scroll). The "drag on slider thumb doesn't
+  // accidentally close" property still holds because pointerdown
+  // also fires on mouse left-button-down, which is what the slider
+  // listens for; both events bubble up to document, but the
+  // pickerRef.contains check excludes inside-popover events
+  // identically to before.
   useEffect(() => {
-    function onDown(e: MouseEvent) {
+    function onDown(e: PointerEvent) {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setPickerOpen(false);
       }
     }
     if (pickerOpen) {
-      document.addEventListener('mousedown', onDown);
-      return () => document.removeEventListener('mousedown', onDown);
+      document.addEventListener('pointerdown', onDown);
+      return () => document.removeEventListener('pointerdown', onDown);
     }
   }, [pickerOpen]);
 

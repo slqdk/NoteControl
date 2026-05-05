@@ -19,10 +19,12 @@ import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
+import { useIsMobile } from '../hooks/useIsMobile';
 import type { NoteDto } from '../api/types';
 import type { SaveState } from './SaveStatusIndicator';
 import { TableToolbar } from './TableToolbar';
 import { BubbleMenu } from './BubbleMenu';
+import { MobileNoteProperties } from './MobileNoteProperties';
 
 const AUTOSAVE_DEBOUNCE_MS = 2000;
 
@@ -66,6 +68,11 @@ export function NoteEditor({
   onSaveStateChange,
   onUploadsChange,
 }: NoteEditorProps) {
+  // Ship 84: drives whether we render the mobile properties section
+  // below the editor's page area. Desktop never sees that block —
+  // properties live in the right rail there.
+  const isMobile = useIsMobile();
+
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
 
   /**
@@ -645,6 +652,23 @@ export function NoteEditor({
         */}
         <BubbleMenu editor={editor} />
       </div>
+      {/*
+        Ship 84: mobile-only properties section. Rendered AFTER the
+        page area but still inside the editor shell so it scrolls
+        with the note content — the user scrolls past the last line
+        of their note to reach it. Desktop never renders this; the
+        properties rail covers the same job there. Gated on isMobile
+        so the JSX tree stays lean on desktop (no hidden DOM, no
+        unnecessary network fetch from MobileNoteProperties' own
+        refresh effect).
+      */}
+      {isMobile && (
+        <MobileNoteProperties
+          vaultId={vaultId}
+          notePath={initialNote.path}
+          initialNote={initialNote}
+        />
+      )}
     </div>
   );
 }

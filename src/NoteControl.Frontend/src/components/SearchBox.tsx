@@ -43,14 +43,19 @@ export function SearchBox({ vaultId, folderPath = '', placeholder = 'Search…' 
     return () => clearTimeout(timer);
   }, [query, vaultId, folderPath]);
 
+  // Outside-click dismissal. Ship 85: pointerdown so iOS taps that
+  // become scrolls reliably close the dropdown — mousedown sometimes
+  // doesn't fire under those circumstances on Safari iOS. Same
+  // change applied to AccountMenu, ContextMenu, TopBar (Widgets+),
+  // and the settings popover.
   useEffect(() => {
-    function onMouseDown(e: MouseEvent) {
+    function onPointerDown(e: PointerEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
   }, []);
 
   return (

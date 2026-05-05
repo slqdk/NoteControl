@@ -6,6 +6,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
  * disabled items render in muted colour and don't fire onClick. Used
  * for "coming soon" items whose backend isn't wired yet — discoverable
  * but inert.
+ *
+ * Ship 85: mobileHidden flags items that don't make sense on a phone
+ * — e.g. "Properties" for a folder (no mobile UI exists for it),
+ * or actions that depend on desktop-only capabilities. The item is
+ * still rendered into the DOM but CSS hides it at ≤768px so the
+ * menu shrinks to just the items that work. The flag stays opt-in;
+ * by default everything renders.
  */
 export interface ContextMenuItem {
   /** Null label means "render a divider here". */
@@ -16,6 +23,9 @@ export interface ContextMenuItem {
   hint?: string;
   /** Optional accelerator hint shown right-aligned (e.g. "Del", "F2"). */
   accelerator?: string;
+  /** Ship 85: hide on mobile (≤768px) via CSS. See class
+      `.nc-context-item-mobile-hidden` in styles.css. */
+  mobileHidden?: boolean;
 }
 
 export interface ContextMenuProps {
@@ -39,16 +49,20 @@ export interface ContextMenuProps {
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside click. We use mousedown so the close fires before
-  // any subsequent click handler on the page (matching native menus).
+  // Close on outside click. Ship 85: pointerdown (not mousedown)
+  // so iOS Safari fires reliably on tap-then-scroll outside —
+  // mousedown sometimes doesn't fire on iOS when a touch turns
+  // into a scroll gesture. pointerdown handles both touch and
+  // mouse start unconditionally. Firing on -down (rather than
+  // -up) matches native context menu dismissal behaviour.
   useEffect(() => {
-    function onMouseDown(e: MouseEvent) {
+    function onPointerDown(e: PointerEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose();
       }
     }
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [onClose]);
 
   // Close on Escape.
@@ -86,11 +100,18 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         if (item.label === null) {
           return <div key={`divider-${idx}`} className="nc-context-divider" role="separator" />;
         }
+        // Ship 85: tack on .nc-context-item-mobile-hidden when the
+        // item has the mobileHidden flag. CSS hides it at ≤768px.
+        // The dividers around it stay visible — minor visual cost
+        // but avoids a more complex hide-the-divider-too rule.
+        const itemClass =
+          'nc-context-item' +
+          (item.mobileHidden ? ' nc-context-item-mobile-hidden' : '');
         return (
           <button
             key={`${item.label}-${idx}`}
             type="button"
-            className="nc-context-item"
+            className={itemClass}
             role="menuitem"
             disabled={item.disabled}
             title={item.hint}

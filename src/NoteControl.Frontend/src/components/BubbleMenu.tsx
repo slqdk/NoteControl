@@ -40,17 +40,49 @@ export interface BubbleMenuProps {
   editor: Editor | null;
 }
 
+/**
+ * Position + placement of the toolbar.
+ *
+ * Ship 83: added `placement`. Originally we always rendered above
+ * the selection (transform: translateY(-100%)). On mobile, when the
+ * selection sits in the upper part of the viewport, "above" lands
+ * the toolbar behind the topbar or off-screen entirely. We now flip
+ * to render BELOW the selection when there isn't enough room above.
+ *
+ * Desktop usually has plenty of room above the selection, but the
+ * same logic applies — picking "below" anywhere it'd otherwise
+ * be hidden is a strict improvement.
+ */
 interface BubblePosition {
   top: number;
   left: number;
+  placement: 'above' | 'below';
 }
 
 const MIN_SELECTION_CHARS = 2;
-// Distance in pixels between the selection's top edge and the
-// toolbar's bottom edge. Keep small so the visual link to the
-// selection is obvious; not 0 because some viewers run text
+// Distance in pixels between the selection's top/bottom edge and
+// the toolbar's adjacent edge. Keep small so the visual link to
+// the selection is obvious; not 0 because some viewers run text
 // underline through the selection's top.
 const VERTICAL_GAP = 8;
+
+// Estimated rendered toolbar height. Used to decide whether
+// "above" placement would clip behind the topbar; not used for
+// rendering (CSS handles that). Bubble menu height is stable
+// (one row of buttons) so a constant is fine. If the menu ever
+// grows multi-row, switch to a measurement-via-ref pattern.
+const TOOLBAR_HEIGHT_ESTIMATE = 36;
+
+// Fallback minimum-top clamp for when no .nc-topbar exists in the
+// DOM (e.g. tests, future embeddings). Slightly inset from the
+// viewport top so the toolbar isn't kissing the screen edge.
+const FALLBACK_TOP_INSET = 8;
+
+// Estimated rendered toolbar width. Used only for clamping the
+// horizontal anchor so the toolbar doesn't slide off-screen on
+// narrow viewports. Bubble menu has 4 buttons + dividers; 200px
+// is a safe upper bound.
+const TOOLBAR_WIDTH_ESTIMATE = 200;
 
 export function BubbleMenu({ editor }: BubbleMenuProps) {
   const [active, setActive] = useState(false);
@@ -116,13 +148,80 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
       // to-end midpoint of the FIRST line — using endCoords.left
       // when the selection wraps would put the toolbar somewhere
       // strange (left edge of the next line).
-      const top = startCoords.top - VERTICAL_GAP;
       const isSingleLine = Math.abs(startCoords.top - endCoords.top) < 4;
       const horizontalAnchor = isSingleLine
         ? (startCoords.left + endCoords.right) / 2
         : startCoords.left + 80;  // arbitrary offset for multi-line
 
-      setPosition({ top, left: horizontalAnchor });
+      // Ship 83: clamp the horizontal anchor so the toolbar can't
+      // slide off-screen on a narrow viewport. The render uses
+      // translateX(-50%) on the anchor, so the toolbar's left edge
+      // ends up at (anchor - width/2). To keep both edges visible
+      // we constrain the anchor to [width/2, viewport - width/2].
+      // On viewports narrower than the toolbar itself this clamp
+      // can make the toolbar slightly extend past one side; that's
+      // accepted (better than being half off-screen).
+      const halfWidth = TOOLBAR_WIDTH_ESTIMATE / 2;
+      const minLeft = halfWidth + 4;
+      const maxLeft = window.innerWidth - halfWidth - 4;
+      const clampedLeft = Math.min(Math.max(horizontalAnchor, minLeft), maxLeft);
+
+      // Ship 83: pick "above" or "below" placement based on whether
+      // the toolbar would clip behind the topbar (or the viewport
+      // top if the topbar isn't in the DOM for some reason).
+      // .nc-topbar is sticky in normal app rendering so this read
+      // is constant-time. If we're in a context without a topbar,
+      // fall back to a small inset.
+      const topbarEl = document.querySelector('.nc-topbar') as HTMLElement | null;
+      const minVisibleTop = topbarEl
+        ? topbarEl.getBoundingClientRect().bottom + 4
+        : FALLBACK_TOP_INSET;
+      const wouldClipAbove =
+        startCoords.top - VERTICAL_GAP - TOOLBAR_HEIGHT_ESTIMATE < minVisibleTop;
+      const placement: 'above' | 'below' = wouldClipAbove ? 'below' : 'above';
+
+      // Anchor depends on placement:
+      //   above: top edge of selection - gap (toolbar bottom-aligns
+      //          here via translateY(-100%) in render)
+      //   below: bottom edge of the FIRST line of selection + gap
+      //          (toolbar top-aligns here, no translateY needed).
+      //          We deliberately use startCoords.bottom not
+      //          endCoords.bottom: for a multi-line selection,
+      //          anchoring to the LAST line's bottom would put the
+      //          toolbar far from the user's interaction point.
+      //          First-line-bottom keeps the toolbar visually
+      //          attached to where the selection began.
+      let top =
+        placement === 'above'
+          ? startCoords.top - VERTICAL_GAP
+          : startCoords.bottom + VERTICAL_GAP;
+
+      // Ship 85: clamp the toolbar's bottom edge to the visualViewport
+      // bottom so the soft keyboard can't hide it.
+      //
+      // The visualViewport on iOS Safari and most Android browsers
+      // shrinks when the keyboard appears; the layout viewport
+      // (where position:fixed anchors) does NOT. Without this
+      // clamp, the toolbar can render in the area covered by the
+      // keyboard and become invisible.
+      //
+      // For 'above' placement, top = toolbar's BOTTOM edge (because
+      // the render uses translateY(-100%)). Clamp directly to the
+      // visible bottom minus a small inset.
+      //
+      // For 'below' placement, top = toolbar's TOP edge. Clamp so
+      // top + estimatedHeight ≤ visible bottom.
+      const vv = window.visualViewport;
+      const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+      const topMax =
+        placement === 'above'
+          ? visibleBottom - 4
+          : visibleBottom - TOOLBAR_HEIGHT_ESTIMATE - 4;
+      if (top > topMax) {
+        top = topMax;
+      }
+
+      setPosition({ top, left: clampedLeft, placement });
       setActive(true);
     }
 
@@ -142,6 +241,18 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
     window.addEventListener('scroll', update, { passive: true, capture: true });
     window.addEventListener('resize', update);
 
+    // Ship 85: visualViewport changes (soft keyboard show/hide,
+    // mobile URL bar collapse, iOS Safari toolbar transitions)
+    // don't fire window.resize on iOS — only visualViewport.resize.
+    // Also subscribe to visualViewport.scroll which fires when the
+    // user pinch-zooms or the viewport shifts. Both feed into the
+    // same update() so the keyboard-aware clamp recomputes.
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', update);
+      vv.addEventListener('scroll', update);
+    }
+
     update();
 
     return () => {
@@ -151,6 +262,10 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
       editor.off('blur', update);
       window.removeEventListener('scroll', update, { capture: true });
       window.removeEventListener('resize', update);
+      if (vv) {
+        vv.removeEventListener('resize', update);
+        vv.removeEventListener('scroll', update);
+      }
     };
   }, [editor]);
 
@@ -207,13 +322,18 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
       className="nc-bubble-menu"
       style={{
         // translateX(-50%) horizontally centers the menu on the
-        // anchor point. translateY(-100%) flips it ABOVE the
-        // anchor so the bottom edge of the menu sits at the
-        // VERTICAL_GAP-offset top of the selection.
+        // anchor point. For 'above' placement, translateY(-100%)
+        // flips it ABOVE the anchor so the menu's BOTTOM edge sits
+        // at the gap-offset top of the selection. For 'below'
+        // placement, translateY(0) leaves the menu's TOP edge at
+        // the gap-offset bottom of the selection.
         position: 'fixed',
         top: `${position.top}px`,
         left: `${position.left}px`,
-        transform: 'translate(-50%, -100%)',
+        transform:
+          position.placement === 'above'
+            ? 'translate(-50%, -100%)'
+            : 'translate(-50%, 0)',
         zIndex: 1000,
       }}
       // Prevent the menu from stealing focus from the editor when
