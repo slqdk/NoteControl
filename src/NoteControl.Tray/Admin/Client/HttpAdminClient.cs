@@ -87,24 +87,62 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
     /// the token is rejected, or the data folder isn't where we
     /// expected. Errors don't throw — the caller should fall back
     /// to the interactive login window.
+    ///
+    /// <para>
+    /// Ship 97: every failure path now writes an INFO line to the
+    /// crash log so future debugging of "tray prompts for password
+    /// every time" doesn't require attaching a debugger. Pre-Ship-97
+    /// the three failure paths (file missing, read denied, server
+    /// rejected) all silently returned false. The most common cause
+    /// historically was a service-mode ACL that locked out the
+    /// un-elevated tray user (fixed server-side in the same ship);
+    /// the new logging means we'll see the next class of failure
+    /// the moment it happens.
+    /// </para>
     /// </summary>
     public async Task<bool> TryLocalTokenLoginAsync(CancellationToken ct = default)
     {
         var path = ResolveTrayTokenPath();
-        if (path is null || !File.Exists(path)) return false;
+        if (path is null)
+        {
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                "ResolveTrayTokenPath returned null (no DataRoot env var and no %ProgramData%). " +
+                "Falling back to interactive login.");
+            return false;
+        }
+        if (!File.Exists(path))
+        {
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"Token file does not exist at {path}. Server may not be running, or " +
+                "this tray is on a different machine than the server. Falling back to " +
+                "interactive login.");
+            return false;
+        }
 
         string token;
         try
         {
             token = (await File.ReadAllTextAsync(path, ct)).Trim();
         }
-        catch
+        catch (Exception ex)
         {
-            // Permissions or transient I/O — silently fall through
-            // to interactive login.
+            // Most common cause historically: ACL on the token file
+            // didn't grant the tray user Read access (server runs as
+            // LocalSystem, tray runs as the interactive user, and
+            // pre-Ship-97 the ACL only granted SYSTEM/Administrators).
+            // If you're seeing this with the Ship 97 server in place,
+            // something else is up -- check Get-Acl on the file.
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"Token file at {path} could not be read: {ex.GetType().Name}: {ex.Message}. " +
+                "Falling back to interactive login.");
             return false;
         }
-        if (string.IsNullOrEmpty(token)) return false;
+        if (string.IsNullOrEmpty(token))
+        {
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"Token file at {path} is empty. Falling back to interactive login.");
+            return false;
+        }
 
         HttpResponseMessage response;
         try
@@ -114,22 +152,37 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
                 new LocalTokenLoginRequest(token),
                 JsonOptions, ct);
         }
-        catch
+        catch (Exception ex)
         {
             // Server unreachable etc. Caller will surface the
             // connectivity problem when they retry.
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"POST /api/auth/local-token threw: {ex.GetType().Name}: {ex.Message}. " +
+                "Falling back to interactive login.");
             return false;
         }
 
         if (!response.IsSuccessStatusCode)
         {
+            // 401 = wrong/expired token (server probably restarted
+            //       since the last cached token).
+            // 403 = not loopback (token endpoint rejects remote callers).
+            // 503 = no admin user available.
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"Server rejected the token: HTTP {(int)response.StatusCode} {response.StatusCode}. " +
+                "Falling back to interactive login.");
             response.Dispose();
             return false;
         }
 
         var login = await response.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions, ct);
         response.Dispose();
-        if (login is null) return false;
+        if (login is null)
+        {
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                "Server returned 200 but the response body was empty. Falling back to interactive login.");
+            return false;
+        }
 
         // Same admin check the password login uses. The local-token
         // endpoint already picks an admin user, but defence-in-depth
@@ -137,6 +190,9 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
         // hand non-admin sessions to the tray.
         if (!string.Equals(login.User.Role, "admin", StringComparison.OrdinalIgnoreCase))
         {
+            NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+                $"Server returned a non-admin user ({login.User.Username}, role={login.User.Role}). " +
+                "Logging out and falling back to interactive login.");
             _csrfToken = login.CsrfToken;
             _currentUser = login.User;
             try { await LogoutAsync(ct); } catch { /* best-effort cleanup */ }
@@ -145,6 +201,8 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
 
         _csrfToken = login.CsrfToken;
         _currentUser = login.User;
+        NoteControl.Tray.CrashLogger.WriteInfo("auth.local-token",
+            $"Local-token login OK as {login.User.Username}.");
         return true;
     }
 
