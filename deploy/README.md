@@ -22,9 +22,14 @@ production. They are not consumed by the build; copy or adapt as needed.
 
 1. **Download Caddy for Windows** from <https://caddyserver.com/download>
    - Pick `Windows / amd64`. Single .exe, no installer.
-   - Save to `C:\Program Files\Caddy\caddy.exe` (create the folder).
+   - Save as `caddy.exe` in this `deploy/` folder, next to
+     `setup-https.ps1`. The script will copy it from here to its
+     install location on every run.
 
 2. **Run setup-https.ps1** as Administrator. This:
+   - Copies `caddy.exe` to `C:\Program Files\Caddy\caddy.exe`
+     (overwrites any existing copy - re-running is also "upgrade
+     Caddy")
    - Installs Caddy as a Windows Service (auto-starts on boot)
    - Opens Windows Firewall for ports 80 + 443
    - Starts the service
@@ -49,6 +54,13 @@ production. They are not consumed by the build; copy or adapt as needed.
 5. **Done**: the server regenerates the Caddyfile, Caddy reloads, the
    first user request to `https://<hostname>` triggers cert provisioning
    (1-2 minutes). Subsequent requests are instant.
+
+## Upgrading Caddy
+
+To upgrade to a newer Caddy: download the new `caddy.exe` from
+caddyserver.com, replace the old one in this `deploy/` folder, commit,
+and re-run `setup-https.ps1` on the server. The script stops the running
+service briefly, copies the new exe over, then restarts the service.
 
 To remove the HTTPS infrastructure:
 
