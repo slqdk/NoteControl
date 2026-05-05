@@ -3516,57 +3516,46 @@ a.nc-rss-item-title:hover {
 
 @media (max-width: 768px) {
 
-  /* Ship 87: bump --nc-topbar-h to fit the 2-row mobile topbar.
-     Desktop's 44px is one row (brand | search | account). On
-     mobile the search box wraps to its own row (see
-     .nc-topbar-center grid-column: 1 / -1 below), making the
-     topbar ~88px tall in practice. The shell's height calc also
-     reads --nc-topbar-h so bumping the variable keeps the shell
-     from starting "inside" the topbar — pre-Ship-87 you saw the
-     wrapped search box visually overlapping the tree strip
-     because the shell started at y=44 while the topbar's content
-     extended to y=~80. */
-  :root {
-    --nc-topbar-h: 88px;
-  }
+  /* Ship 88: keep the topbar on ONE line on mobile — brand +
+     search + 👤 fit in a 3-column grid where search shrinks to
+     fit the leftover space. Pre-Ship-88 (Ship 81/87), search
+     wrapped onto a second row, making the topbar ~88px tall and
+     forcing --nc-topbar-h to be bumped. The user wants a single
+     compact line; --nc-topbar-h stays at the desktop 44px so the
+     shell starts immediately below.
 
-  /* The topbar's explicit `height` was fixed at --nc-topbar-h on
-     desktop. Now that --nc-topbar-h is 88px on mobile we still
-     want the topbar to AT LEAST be that tall, but if it ever
-     wraps further (e.g. larger fonts) it should grow. min-height
-     handles both cases; height: auto cancels the desktop's
-     fixed value. */
-  .nc-topbar {
-    height: auto;
-    min-height: var(--nc-topbar-h);
-  }
+     Why a 3-col grid over flexbox: the desktop rule is already a
+     3-col grid (1fr | minmax(280px,480px) | 1fr) — we mirror its
+     shape with phone-sized constraints rather than fighting the
+     desktop rule with `display: flex !important`. The search col
+     shrinks via minmax(80px, 1fr); below 80px the search input
+     would lose its placeholder text, so 80 is a soft floor. On
+     viewports narrower than ~280px the layout will get tight; we
+     don't try to support sub-320px.
 
-  /* ---- Topbar: compact spacing, drop the centred search column ----
-     The desktop topbar uses a 3-col grid (left | center | right). On
-     phones there's no room for a search column wide enough to be
-     useful AND a vault name AND the account menu. Collapse to two
-     auto cols and let the search box wrap onto its own row.
-     There's an older 780px @media block earlier in this file that
-     does part of this; we re-state at 768px (matching the JS
-     breakpoint) with tighter padding and the brand-text hide. */
+     Note the override of .nc-topbar-center grid-column: there's a
+     pre-existing @media (max-width: 780px) block earlier in this
+     file that pushes the center column onto its own row. We undo
+     that here for the ≤768px range so search stays in column 2. */
   .nc-topbar {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto minmax(80px, 1fr) auto;
     gap: 8px;
     padding: 6px 10px;
+    /* height: var(--nc-topbar-h) inherits from the desktop rule —
+       no override needed since we kept --nc-topbar-h at 44px. */
   }
-  /* Push the search box (center column) onto its own row beneath
-     the brand + right-side icons. Keeps it usable without crowding
-     the brand row. */
   .nc-topbar-center {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
-  /* Hide the brand text on the very narrowest phones to make room
-     for vault name + buttons. The `/` separator and vault link stay. */
+
+  /* Hide the brand text on mobile to make room for vault name +
+     search + 👤. The `/` separator and vault link stay so the
+     user still sees which vault they're in. */
   .nc-brand {
     display: none;
   }
 
-  /* Right side: kill the gap a bit so 4 buttons fit. */
+  /* Right side: kill the gap a bit so the icons fit. */
   .nc-topbar-right {
     gap: 6px;
   }
@@ -3674,16 +3663,17 @@ a.nc-rss-item-title:hover {
     display: none;
   }
 
-  /* When expanded: cap the tree's height so it doesn't push the
-     editor offscreen. 60vh leaves ~40% of the viewport for the
-     editor underneath, which is enough to peek at the content
-     and confirm "yes I picked the right note" before tapping
-     a row. The rail-scroll already has overflow-y: auto so
-     contents inside scroll within this cap. */
-  .nc-shell[data-mobile="true"][data-tree-expanded="true"]
-    .nc-rail-mobile .nc-rail-scroll {
-    max-height: 60vh;
-  }
+  /* Ship 88: removed the max-height: 60vh cap on the expanded
+     mobile tree. Pre-Ship-88 the tree was capped at 60% of the
+     viewport so the editor stayed peeking through. The user
+     wants to see the full tree without scrolling within it —
+     when a note is selected the tree auto-collapses (Ship 88's
+     restored useEffect in VaultLayout) so the cap was useless
+     anyway: the tree only shows when the user is actively
+     navigating, and at that point editor space doesn't matter.
+     The .nc-rail-scroll keeps overflow-y: auto so really long
+     trees still scroll within the rail; we just don't impose an
+     artificial ceiling. */
 
   /* Add a subtle bottom border to the merged row when the tree
      is expanded, separating it from the tree contents below. */

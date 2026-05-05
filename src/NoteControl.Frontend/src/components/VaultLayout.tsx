@@ -90,20 +90,32 @@ export function VaultLayout() {
   // localStorage so flipping back to a wide viewport restores them.
   const isMobile = useIsMobile();
 
-  // Ship 81 — mobile tree strip expanded/collapsed. Ephemeral state
-  // (not persisted) but Ship 87 changed the DEFAULT to true so the
-  // user lands inside an expanded tree on first vault arrival —
-  // which is what they actually need to navigate. They can still
-  // collapse manually via the chevron toggle button. Pre-Ship-87
-  // the strip started collapsed and auto-collapsed on /note
-  // navigation, which felt fiddly on a phone.
-  const [mobileTreeExpanded, setMobileTreeExpanded] = useState(true);
+  // Ship 88: tree expanded by default on vault entry, but auto-
+  // collapses when the URL becomes a note path. The user wants to
+  // see the tree on arrival to navigate, but once they're reading
+  // a note the tree should get out of the way. They can re-expand
+  // manually via the chevron toggle when they want to switch notes.
+  //
+  // This was Ship 81's original behaviour. Ship 87 removed the
+  // auto-collapse to keep the tree always-visible; Ship 88 reverts
+  // that part because the user found "tree always above editor"
+  // ate too much screen space when reading.
+  //
+  // Initial state is derived from the URL so a direct deep-link
+  // to a note (e.g. a bookmarked /note URL opened cold) doesn't
+  // flash the tree open for one paint frame before the effect
+  // collapses it. If the URL is already on a note path on mount,
+  // start collapsed; otherwise start expanded.
+  const [mobileTreeExpanded, setMobileTreeExpanded] = useState(
+    () => !location.pathname.endsWith('/note'),
+  );
 
-  // Ship 87 deliberately removed the auto-collapse-on-/note effect
-  // that Ship 81 had here. The user prefers the tree to stay open
-  // above the editor, both for context and so they don't have to
-  // re-expand it for the next navigation. The toggle button still
-  // lets them collapse manually if they want full editor space.
+  useEffect(() => {
+    if (!isMobile) return;
+    if (location.pathname.endsWith('/note')) {
+      setMobileTreeExpanded(false);
+    }
+  }, [isMobile, location.pathname, searchParams]);
 
   // Ship 80: the variant picker is gone (compact-only) but we keep
   // the variant STATE itself because TreeView still reads it to
@@ -991,17 +1003,17 @@ export function VaultLayout() {
                       {mobileTreeExpanded ? '▾' : '▸'}
                     </span>
                     <span className="nc-mobile-tree-toggle-label">
-                      {selection
-                        ? // Strip .md off note names for the strip label —
-                          // the user knows it's a markdown file. Folder
-                          // names stay as-is.
-                          selection.kind === 'note' &&
-                          selection.name.toLowerCase().endsWith('.md')
-                          ? selection.name.slice(0, -3)
-                          : selection.name
-                        : isOnStartpage
-                          ? 'Startpage'
-                          : 'Tree'}
+                      {/*
+                        Ship 88: always "Tree". Pre-Ship-88 this
+                        switched between selection.name (note or
+                        folder) and "Tree"/"Startpage". The user
+                        explicitly doesn't want the note title
+                        echoed here — it duplicates info already
+                        in the editor + breadcrumb (and on mobile
+                        the breadcrumb is hidden anyway, but the
+                        tree-strip is still wrong place for it).
+                      */}
+                      Tree
                     </span>
                   </button>
                   {actionButtons}
