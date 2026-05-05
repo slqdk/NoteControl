@@ -117,7 +117,13 @@ export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
     dragOriginRef.current = null;
     setDragOverride(null);
     if (final && (final.x !== block.x || final.y !== block.y)) {
-      onChange({ x: final.x, y: final.y });
+      // Ship 90: round to int before sending. The DTO declares int X/Y
+      // and System.Text.Json refuses to convert fractional values
+      // (which the pointer math produces) to int — server returns 400
+      // with "could not be converted to LinkBlockDto. Path: $.links[N].x"
+      // The fix is symmetric across LinksBlock / RssBlock / TaskArea
+      // and across both drag (x/y) and resize (width/height).
+      onChange({ x: Math.round(final.x), y: Math.round(final.y) });
     }
   }, [block.x, block.y, dragOverride, onChange]);
 
@@ -163,7 +169,8 @@ export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
     resizeOriginRef.current = null;
     setResizeOverride(null);
     if (final && (final.width !== block.width || final.height !== block.height)) {
-      onChange({ width: final.width, height: final.height });
+      // Ship 90: round to int (see drag handler above for rationale).
+      onChange({ width: Math.round(final.width), height: Math.round(final.height) });
     }
   }, [block.width, block.height, resizeOverride, onChange]);
 

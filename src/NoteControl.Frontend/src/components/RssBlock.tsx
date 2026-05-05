@@ -161,7 +161,10 @@ export function RssBlock({ vaultId, block, onChange, onDelete }: RssBlockProps) 
     dragOriginRef.current = null;
     setDragOverride(null);
     if (final && (final.x !== block.x || final.y !== block.y)) {
-      onChange({ x: final.x, y: final.y });
+      // Ship 90: round to int — DTO is `int X/Y`, fractional values
+      // fail server-side deserialisation. See LinksBlock for the
+      // shared rationale.
+      onChange({ x: Math.round(final.x), y: Math.round(final.y) });
     }
   }, [block.x, block.y, dragOverride, onChange]);
 
@@ -211,7 +214,8 @@ export function RssBlock({ vaultId, block, onChange, onDelete }: RssBlockProps) 
     resizeOriginRef.current = null;
     setResizeOverride(null);
     if (final && (final.width !== block.width || final.height !== block.height)) {
-      onChange({ width: final.width, height: final.height });
+      // Ship 90: round to int (DTO requirement).
+      onChange({ width: Math.round(final.width), height: Math.round(final.height) });
     }
   }, [block.width, block.height, resizeOverride, onChange]);
 

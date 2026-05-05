@@ -116,7 +116,10 @@ export function TaskArea({ area, onChange, onDelete }: TaskAreaProps) {
     dragOriginRef.current = null;
     setDragOverride(null);
     if (final && (final.x !== area.x || final.y !== area.y)) {
-      onChange({ x: final.x, y: final.y });
+      // Ship 90: round to int — DTO is `int X/Y`, fractional values
+      // fail server-side deserialisation. See LinksBlock for the
+      // shared rationale.
+      onChange({ x: Math.round(final.x), y: Math.round(final.y) });
     }
   }, [area.x, area.y, dragOverride, onChange]);
 
@@ -162,7 +165,8 @@ export function TaskArea({ area, onChange, onDelete }: TaskAreaProps) {
     resizeOriginRef.current = null;
     setResizeOverride(null);
     if (final && (final.width !== area.width || final.height !== area.height)) {
-      onChange({ width: final.width, height: final.height });
+      // Ship 90: round to int (DTO requirement).
+      onChange({ width: Math.round(final.width), height: Math.round(final.height) });
     }
   }, [area.width, area.height, resizeOverride, onChange]);
 

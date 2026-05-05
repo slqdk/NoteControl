@@ -65,17 +65,21 @@ public static class StartpageEndpoints
     }
 
     /// <summary>
-    /// Ship 77: instrumented version. Reads the body as a raw stream,
-    /// logs it to the server log, then deserializes manually with a
-    /// try/catch so any binding exception ends up in the log too.
-    /// Pre-Ship-77 the framework's automatic body-binding was failing
-    /// with a 400 + empty body and there was no logged exception
-    /// because the failure was happening before our endpoint code ran.
+    /// PUT /startpage/config: replace the saved config for a vault.
     ///
-    /// Once we identify the cause from the streaming log, this can
-    /// be reverted to the simpler `StartpageConfigDto config` body
-    /// parameter — the manual binding has the same end result, just
-    /// noisier on the wire.
+    /// Reads the body manually so JSON deserialisation errors land
+    /// in our handler with full context. The default minimal-API
+    /// body binding turns failures into 400 + empty body BEFORE the
+    /// handler runs, so we never see why. Manual binding preserves
+    /// the exception detail for the response (useful for the user's
+    /// in-app error banner) and for the log.
+    ///
+    /// Ship 77 introduced this path with very loud Information-level
+    /// logging on every save (the body, the byte count). Ship 90
+    /// identified the bug as fractional pixel values failing
+    /// `int Width` deserialisation (fixed client-side), and toned
+    /// the success-path logs down to Debug. Errors stay at Error
+    /// level — those are still rare and worth seeing.
     /// </summary>
     private static async Task<IResult> SaveConfigAsync(
         Guid vaultId,
@@ -84,21 +88,16 @@ public static class StartpageEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var log = loggerFactory.CreateLogger("StartpageSaveDiag");
+        var log = loggerFactory.CreateLogger("StartpageSave");
 
-        // Read the body manually so we can log it. The default minimal-API
-        // body binding turns failures into 400+empty-body responses BEFORE
-        // our handler runs, so we never see why.
+        // Read the body manually so we can include it in any error
+        // log/response. See class comment for why automatic binding
+        // would lose this context.
         string raw;
         using (var reader = new StreamReader(http.Request.Body))
         {
             raw = await reader.ReadToEndAsync(ct);
         }
-        log.LogInformation(
-            "[Ship77 diag] Received PUT /startpage/config body ({Bytes} bytes) for vault {VaultId}: {Body}",
-            raw.Length,
-            vaultId,
-            raw);
 
         StartpageConfigDto? config;
         try
@@ -111,7 +110,7 @@ public static class StartpageEndpoints
         catch (JsonException ex)
         {
             log.LogError(ex,
-                "[Ship77 diag] JsonException deserializing PUT /startpage/config body for vault {VaultId}. Body was: {Body}",
+                "JsonException deserializing PUT /startpage/config body for vault {VaultId}. Body was: {Body}",
                 vaultId, raw);
             return Results.Problem(
                 statusCode: 400,
@@ -121,7 +120,7 @@ public static class StartpageEndpoints
         catch (NotSupportedException ex)
         {
             log.LogError(ex,
-                "[Ship77 diag] NotSupportedException deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
+                "NotSupportedException deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
                 vaultId, raw);
             return Results.Problem(
                 statusCode: 400,
@@ -131,7 +130,7 @@ public static class StartpageEndpoints
         catch (Exception ex)
         {
             log.LogError(ex,
-                "[Ship77 diag] Unexpected exception deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
+                "Unexpected exception deserializing PUT /startpage/config for vault {VaultId}. Body was: {Body}",
                 vaultId, raw);
             return Results.Problem(
                 statusCode: 500,
@@ -142,22 +141,25 @@ public static class StartpageEndpoints
         if (config is null)
         {
             log.LogWarning(
-                "[Ship77 diag] Body deserialized to null for vault {VaultId}. Raw body: {Body}",
+                "Body deserialized to null for vault {VaultId}. Raw body: {Body}",
                 vaultId, raw);
             return Results.Problem(statusCode: 400, title: "Body required.");
         }
         try
         {
             await configs.SaveAsync(vaultId, config, ct);
-            log.LogInformation(
-                "[Ship77 diag] Save succeeded for vault {VaultId} (blocks={Blocks}, taskAreas={TaskAreas}, links={Links})",
+            // Debug-level: the user is debounce-saving every ~500ms while
+            // dragging blocks, so this fires often. Information would
+            // drown the log in routine activity.
+            log.LogDebug(
+                "Save succeeded for vault {VaultId} (blocks={Blocks}, taskAreas={TaskAreas}, links={Links})",
                 vaultId, config.Blocks?.Count, config.TaskAreas?.Count, config.Links?.Count);
             return Results.NoContent();
         }
         catch (StartpageException ex)
         {
             log.LogError(ex,
-                "[Ship77 diag] StartpageException during save for vault {VaultId}",
+                "StartpageException during save for vault {VaultId}",
                 vaultId);
             return Results.Problem(
                 title: "Could not save startpage config",
