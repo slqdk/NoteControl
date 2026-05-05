@@ -395,6 +395,51 @@ if (Test-Path -LiteralPath $uninstallSrc) {
 }
 
 # ---------------------------------------------------------------
+# Tray autostart (HKLM Run)
+# ---------------------------------------------------------------
+# Ship 96: moved earlier in the script. Was previously at the end,
+# AFTER service-config + DACL + start-service + health-probe. Any
+# failure in those steps left HKLM\Run untouched -- which is fine
+# the FIRST time you install, but on an upgrade meant the existing
+# entry kept pointing at the previous tray.exe even if the upgrade
+# moved the install. Worse: when an upgrade installs to a fresh
+# location and a later step throws, HKLM\Run still pointed at the
+# OLD path that the upgrade just deleted. On next sign-in,
+# Windows tried to launch a non-existent exe and silently dropped
+# the autostart. The user reported "tray never starts up again
+# without PC reboot" -- in fact next-sign-in didn't work because
+# the registry pointed at a missing file.
+#
+# Now: write HKLM\Run as soon as both binaries are confirmed
+# on disk. This way every later failure (service registration,
+# DACL update, service start, health probe, tray launch) leaves
+# autostart in a working state. On the next sign-in / reboot the
+# tray launches from the freshly-installed exe.
+Write-Section "Registering tray autostart"
+
+$runKey   = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+$runValue = 'NoteControlTray'
+$trayExe  = Join-Path $InstallDir "tray\NoteControl.Tray.exe"
+# Quote the path because Program Files contains a space.
+$trayCmd  = '"' + $trayExe + '"'
+
+# Verify the exe is actually on disk before writing the registry
+# entry. If it isn't, something went wrong above; we'd rather
+# surface that here than write a broken HKLM\Run value.
+if (-not (Test-Path -LiteralPath $trayExe)) {
+    Write-Step "  ERROR: $trayExe is missing after copy. Aborting." Red
+    Flush-Log
+    throw "Tray executable not found at expected path: $trayExe"
+}
+
+if (-not (Test-Path -LiteralPath $runKey)) {
+    # Should always exist on a sane Windows install; create defensively.
+    New-Item -Path $runKey -Force | Out-Null
+}
+Set-ItemProperty -Path $runKey -Name $runValue -Value $trayCmd -Type String
+Write-Step "  HKLM\...\Run\$runValue = $trayCmd" Green
+
+# ---------------------------------------------------------------
 # Ensure data root exists
 # ---------------------------------------------------------------
 Write-Section "Preparing data root"
@@ -636,22 +681,11 @@ if ($healthy) {
 }
 
 # ---------------------------------------------------------------
-# Tray autostart (HKLM Run)
+# Tray autostart -- registration happens earlier (right after
+# file copy succeeds) so that a failure in service-registration /
+# DACL / health-probe doesn't leave HKLM\Run pointing at a stale
+# path. See "Registering tray autostart" above.
 # ---------------------------------------------------------------
-Write-Section "Registering tray autostart"
-
-$runKey   = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-$runValue = 'NoteControlTray'
-$trayExe  = Join-Path $InstallDir "tray\NoteControl.Tray.exe"
-# Quote the path because Program Files contains a space.
-$trayCmd  = '"' + $trayExe + '"'
-
-if (-not (Test-Path -LiteralPath $runKey)) {
-    # Should always exist on a sane Windows install; create defensively.
-    New-Item -Path $runKey -Force | Out-Null
-}
-Set-ItemProperty -Path $runKey -Name $runValue -Value $trayCmd -Type String
-Write-Step "  HKLM\...\Run\$runValue = $trayCmd" Green
 
 # ---------------------------------------------------------------
 # Add/Remove Programs entry
@@ -779,9 +813,67 @@ if (-not $NoTrayLaunch) {
     }
 
     if (-not $launched) {
-        Write-Step "  Could not auto-launch the tray." Yellow
-        Write-Step "  Sign out and back in (HKLM Run entry will launch it)," Yellow
-        Write-Step "  or double-click $trayExe manually." Yellow
+        # Ship 96: when auto-launch fails, log enough detail that
+        # the user (or whoever debugs this) can tell whether to
+        # sign out, run the tray manually, or open a crash log.
+        # Pre-Ship-96 the message was just "Could not auto-launch"
+        # with no hint at WHY -- which left the user reporting
+        # "tray never starts up again, had to reboot" without any
+        # evidence trail.
+        Write-Step "  Could not auto-launch the tray. Diagnostic check:" Yellow
+
+        # Was the tray exe actually copied to disk?
+        if (Test-Path -LiteralPath $trayExe) {
+            Write-Step "    [OK]   tray.exe is on disk: $trayExe" Yellow
+        } else {
+            Write-Step "    [BAD]  tray.exe is MISSING at $trayExe" Red
+            Write-Step "           Re-run install.ps1 to recover." Red
+        }
+
+        # Was the HKLM Run entry written? (Was done much earlier
+        # in the script in Ship 96.)
+        try {
+            $runVal = Get-ItemProperty -Path $runKey -Name $runValue -ErrorAction Stop
+            if ($runVal.$runValue -eq $trayCmd) {
+                Write-Step "    [OK]   HKLM\...\Run\$runValue points at the new tray." Yellow
+                Write-Step "           Next sign-in / reboot WILL launch the tray." Yellow
+            } else {
+                Write-Step "    [WARN] HKLM\...\Run\$runValue exists but points at: $($runVal.$runValue)" Yellow
+                Write-Step "           Expected:                                       $trayCmd" Yellow
+            }
+        } catch {
+            Write-Step "    [BAD]  HKLM\...\Run\$runValue is missing." Red
+            Write-Step "           Tray will NOT launch on next sign-in. Re-run install.ps1." Red
+        }
+
+        # Did the tray maybe launch but crash immediately? Check
+        # the crash log directory we know the tray writes to. If
+        # there's a tray-crash-*.log file modified in the last 60
+        # seconds, that's almost certainly what happened.
+        #
+        # Caveat: $env:LOCALAPPDATA inside this elevated context
+        # is the ELEVATED user's profile. On a typical solo-dev
+        # box that's the same person who runs the tray, so the
+        # path matches. If install.ps1 was run by a different
+        # admin via "Run as different user", we'd miss the
+        # interactive user's crash dir -- not a regression
+        # (pre-Ship-96 there was no crash log lookup at all),
+        # just a known limitation of running elevated.
+        $crashDir = Join-Path $env:LOCALAPPDATA 'NoteControl'
+        if (Test-Path -LiteralPath $crashDir) {
+            $recent = Get-ChildItem -LiteralPath $crashDir -Filter 'tray-crash-*.log' -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -gt (Get-Date).AddSeconds(-60) } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+            if ($recent) {
+                Write-Step "    [INFO] Recent tray crash log found:" Yellow
+                Write-Step "           $($recent.FullName)" Yellow
+                Write-Step "           The tray launched but crashed -- read the log for details." Yellow
+            }
+        }
+
+        Write-Step "  To recover: sign out and back in, or double-click:" Yellow
+        Write-Step "    $trayExe" Yellow
     }
 } else {
     Write-Step "Skipping tray launch (-NoTrayLaunch). HKLM Run entry will launch on next login." Yellow

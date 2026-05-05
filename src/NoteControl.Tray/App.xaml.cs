@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
@@ -44,6 +46,28 @@ public partial class App : Application
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
+        // Ship 96: crash logging. Wire global exception handlers FIRST,
+        // before anything else can throw. Pre-Ship-96 a startup failure
+        // (anywhere in OnStartup, or any unhandled exception in any
+        // async handler later) killed the tray process silently with
+        // no log on disk and no UI: the user just saw "no tray icon"
+        // and had to reboot to recover. The handlers below write a
+        // crash file to %LOCALAPPDATA%\NoteControl\tray-crash-{date}.log
+        // so a future failure leaves a usable diagnostic trail.
+        //
+        // We register handlers here (not in App.xaml or a static
+        // constructor) because:
+        //   - DispatcherUnhandledException needs the Dispatcher to exist,
+        //     which it does by the time OnStartup is called.
+        //   - Static ctors run before WPF infrastructure is initialised
+        //     and can't safely interact with Application.Current.
+        // Hooks must be set before any code that might throw runs;
+        // hence "first thing in OnStartup" is the right anchor.
+        CrashLogger.Initialise();
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
         // Ship 66: elevated re-entry hook. When the un-elevated tray
         // hits exit-5 on `sc start/stop`, it relaunches itself with
         // `--service-action <verb>` via Verb=runas. That relaunched
@@ -61,6 +85,35 @@ public partial class App : Application
             return;
         }
 
+        // Ship 96: wrap the rest of startup in a try/catch so any
+        // exception during tray initialisation surfaces as a crash
+        // log + visible error dialog instead of a silent process
+        // death. Without this, an unhandled exception during tray
+        // init landed in OnDispatcherUnhandledException -- but the
+        // handler runs INSIDE the Dispatcher pump, which hasn't
+        // been started yet during OnStartup, so the handler's
+        // log-write happened but the user-visible MessageBox in
+        // it never displayed. Catching here lets us show the
+        // dialog directly off the startup thread.
+        try
+        {
+            BootstrapTray();
+        }
+        catch (Exception ex)
+        {
+            CrashLogger.WriteCrash("OnStartup", ex);
+            ShowFatalErrorAndShutdown(ex);
+        }
+    }
+
+    /// <summary>
+    /// Ship 96: factored out of OnStartup so the try/catch wrapping
+    /// the body is shallow. Everything that creates UI or holds
+    /// disposable resources lives here; OnStartup itself only does
+    /// the wire-up + dispatch.
+    /// </summary>
+    private void BootstrapTray()
+    {
         _admin = new AdminWorkflow(_serverUrls.TrayUrl);
 
         _trayIcon = new TaskbarIcon
@@ -76,14 +129,24 @@ public partial class App : Application
 
         // Surface non-fatal resolver fallbacks to the debug stream
         // so a missing/corrupt server.url is at least visible to
-        // someone running the tray under a debugger.
+        // someone running the tray under a debugger. Also write a
+        // line to the crash log's "info" channel so the same
+        // information shows up in the on-disk diagnostics if the
+        // tray later dies and we go hunting.
         if (_serverUrls.FallbackReason != FallbackReason.None)
         {
-            Debug.WriteLine(
-                $"[NoteControl.Tray] server.url fallback: " +
-                $"{_serverUrls.FallbackReason} ({_serverUrls.Detail ?? "no detail"}). " +
-                $"Using {_serverUrls.TrayUrl}.");
+            var msg =
+                $"server.url fallback: {_serverUrls.FallbackReason} " +
+                $"({_serverUrls.Detail ?? "no detail"}). Using {_serverUrls.TrayUrl}.";
+            Debug.WriteLine($"[NoteControl.Tray] {msg}");
+            CrashLogger.WriteInfo("startup", msg);
         }
+
+        // Ship 96: log a startup-OK marker. If the tray dies later
+        // we can quickly see the last successful start vs the
+        // crash time and rule out "never made it past init".
+        CrashLogger.WriteInfo("startup",
+            $"Tray started OK. Version={GetTrayVersion()}, TrayUrl={_serverUrls.TrayUrl}");
 
         // Step 49: kick off the first update check shortly after
         // startup so the tray menu is ready quickly without
@@ -98,6 +161,129 @@ public partial class App : Application
         _admin?.Dispose();
         _trayIcon?.Dispose();
         base.OnExit(e);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ship 96: global exception handlers
+    //
+    // Three channels, three handlers, all routing to the same
+    // CrashLogger.WriteCrash. Each channel catches a different class
+    // of failure:
+    //
+    //   - DispatcherUnhandledException: exceptions on the WPF UI
+    //     thread (button clicks, paint, dispatcher-marshalled
+    //     callbacks). Setting Handled=true keeps the app alive
+    //     after a non-fatal blip; we still log it.
+    //
+    //   - AppDomain.UnhandledException: exceptions on background
+    //     threads that nobody catches. By the time this fires the
+    //     CLR is already terminating; we can write a log but can't
+    //     keep the app alive. e.IsTerminating is virtually always
+    //     true on .NET Core / .NET 5+.
+    //
+    //   - TaskScheduler.UnobservedTaskException: faults on Task
+    //     instances that were never awaited and got GC'd. By
+    //     observing them here we mark them Observed (preventing
+    //     the crash that would otherwise come on the next GC) and
+    //     get a log entry to investigate later.
+    // -----------------------------------------------------------------------
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        CrashLogger.WriteCrash("DispatcherUnhandledException", e.Exception);
+
+        // Show a user-visible dialog so they see *something* when
+        // the tray hits an issue. We don't keep the app alive
+        // (Handled=false) because the exception escaped a normal
+        // try/catch in our code, meaning we're in unknown state.
+        // Letting the process exit + the next launch start fresh
+        // is safer than soldiering on with a possibly-corrupt UI.
+        try
+        {
+            MessageBox.Show(
+                "NoteControl ran into an unexpected problem and will close.\n\n" +
+                "Details have been written to:\n" +
+                CrashLogger.LogPath + "\n\n" +
+                "Error: " + e.Exception.Message,
+                "NoteControl — Unexpected error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch
+        {
+            // If we can't even show a MessageBox (rare; e.g. the
+            // dispatcher is in a really bad state), let it go --
+            // the log on disk is the main goal.
+        }
+
+        // Handled=false lets the runtime terminate the process.
+        // We tried marking it true in an earlier draft to "keep
+        // the tray alive" but discovered that any exception leaking
+        // this far means our internal state is suspect; better to
+        // exit cleanly and rely on the OS to relaunch via HKLM Run
+        // on next sign-in, or the user to relaunch manually.
+        e.Handled = false;
+    }
+
+    private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        // ExceptionObject is typed object because the CLR's contract
+        // doesn't constrain what gets thrown (you can throw any
+        // object in IL, though C# normalises to Exception). Almost
+        // always Exception in practice; we cast defensively.
+        var ex = e.ExceptionObject as Exception
+              ?? new Exception("Non-Exception object thrown: " + e.ExceptionObject);
+        CrashLogger.WriteCrash("AppDomain.UnhandledException", ex);
+        // No MessageBox here -- by the time this fires the dispatch
+        // loop may already be torn down. Disk log is the goal.
+    }
+
+    private static void OnUnobservedTaskException(object? sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
+    {
+        CrashLogger.WriteCrash("UnobservedTaskException", e.Exception);
+        // Mark observed so the runtime doesn't escalate to an
+        // unhandled exception on the next GC. We've logged it;
+        // throwing it again would just be loud and unrecoverable.
+        e.SetObserved();
+    }
+
+    /// <summary>
+    /// Ship 96: last-resort error path. Called from the OnStartup
+    /// catch when bootstrap fails before the tray icon could be
+    /// shown. Displays the error to the user and exits cleanly.
+    /// </summary>
+    private void ShowFatalErrorAndShutdown(Exception ex)
+    {
+        try
+        {
+            MessageBox.Show(
+                "NoteControl could not start.\n\n" +
+                "A diagnostic log has been written to:\n" +
+                CrashLogger.LogPath + "\n\n" +
+                "Error: " + ex.Message + "\n\n" +
+                "Try signing out and back in (Windows will relaunch the tray), " +
+                "or run NoteControl.Tray.exe manually after checking the log.",
+                "NoteControl — Startup failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch
+        {
+            // MessageBox itself failed -- nothing more we can do.
+        }
+        Shutdown(1);
+    }
+
+    private static string GetTrayVersion()
+    {
+        try
+        {
+            return Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "(unknown)";
+        }
+        catch
+        {
+            return "(unknown)";
+        }
     }
 
     private ContextMenu BuildContextMenu()
@@ -598,4 +784,147 @@ internal sealed class RelayCommand : System.Windows.Input.ICommand
     public event EventHandler? CanExecuteChanged { add { } remove { } }
     public bool CanExecute(object? parameter) => true;
     public void Execute(object? parameter) => _action();
+}
+
+/// <summary>
+/// Ship 96: dead-simple crash logger for the tray.
+///
+/// Why a hand-rolled logger instead of Serilog: the tray currently
+/// has zero logging dependencies and adding Serilog for a single
+/// crash file is overkill. The whole point of this is to be the
+/// last line of defence -- we can't depend on a richer logger
+/// because the failures we're trying to log might happen during
+/// that logger's own initialisation.
+///
+/// Storage: %LOCALAPPDATA%\NoteControl\tray-crash-{yyyyMMdd}.log
+/// Per-day rolling so a chatty day doesn't grow unbounded; we keep
+/// 7 days' worth, deleted on Initialise().
+///
+/// Thread safety: all writes go through a private lock. Throughput
+/// isn't a concern (a handful of lines per day at worst), and the
+/// alternative (per-thread buffers, lock-free queue) would defeat
+/// the goal of "as simple as possible so we trust it under stress".
+///
+/// Failure handling: every public method catches its own
+/// exceptions. A logger that throws when the disk is full or the
+/// folder is locked just makes things worse.
+/// </summary>
+internal static class CrashLogger
+{
+    private static readonly object _lock = new();
+    private static string _path = ""; // resolved in Initialise; empty until then
+    private static bool _initialised;
+
+    public static string LogPath => _path;
+
+    /// <summary>
+    /// Resolve the log path, ensure the folder exists, and prune
+    /// old logs. Idempotent; safe to call more than once. If
+    /// anything fails (e.g. LOCALAPPDATA not set, disk full, ACLs)
+    /// the logger silently degrades to a no-op.
+    /// </summary>
+    public static void Initialise()
+    {
+        try
+        {
+            if (_initialised) return;
+
+            // %LOCALAPPDATA% on Windows == per-user, not roaming.
+            // Right place for diagnostics: machine-local, no need
+            // for elevation, survives logoff/reboot, doesn't bloat
+            // the roaming profile. Falls back to %TEMP% in the
+            // exotic case where LocalApplicationData is empty.
+            var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrWhiteSpace(baseDir))
+            {
+                baseDir = Path.GetTempPath();
+            }
+            var dir = Path.Combine(baseDir, "NoteControl");
+            Directory.CreateDirectory(dir);
+
+            var today = DateTime.Now.ToString("yyyyMMdd");
+            _path = Path.Combine(dir, $"tray-crash-{today}.log");
+
+            // Keep ~7 days of crash logs. Anything older gets
+            // deleted to bound disk use. The pattern below matches
+            // any tray-crash-*.log; we parse the date out of each.
+            try
+            {
+                var cutoff = DateTime.Now.AddDays(-7);
+                foreach (var f in Directory.EnumerateFiles(dir, "tray-crash-*.log"))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(f);
+                        if (fi.LastWriteTime < cutoff)
+                        {
+                            fi.Delete();
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort prune; a locked old log is
+                        // not worth aborting initialisation over.
+                    }
+                }
+            }
+            catch
+            {
+                // Pruning is housekeeping; failure here doesn't
+                // affect our ability to log new crashes.
+            }
+
+            _initialised = true;
+        }
+        catch
+        {
+            // No log path means later Write* calls become no-ops.
+            // Whatever broke, it's not worth crashing the crash
+            // logger over.
+            _initialised = false;
+            _path = "";
+        }
+    }
+
+    /// <summary>
+    /// Append a crash entry. Channel is a free-form label
+    /// describing where the exception came from
+    /// (e.g. "DispatcherUnhandledException", "OnStartup").
+    /// </summary>
+    public static void WriteCrash(string channel, Exception ex)
+    {
+        Write(channel, "CRASH", ex.ToString());
+    }
+
+    /// <summary>
+    /// Append an info entry. Used for non-fatal context that's
+    /// useful when reading a crash log later (last successful
+    /// startup, fallback URL reasons, etc.).
+    /// </summary>
+    public static void WriteInfo(string channel, string message)
+    {
+        Write(channel, "INFO", message);
+    }
+
+    private static void Write(string channel, string level, string body)
+    {
+        if (!_initialised || string.IsNullOrEmpty(_path)) return;
+        try
+        {
+            // ISO-8601 with millis + offset so log times sort
+            // correctly even across DST transitions and UTC offset
+            // changes.
+            var stamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz");
+            var line = $"[{stamp}] [{level}] [{channel}] {body}{Environment.NewLine}";
+            lock (_lock)
+            {
+                File.AppendAllText(_path, line);
+            }
+        }
+        catch
+        {
+            // We are the last line of defence; if appending fails,
+            // there's nothing useful left to do but swallow.
+        }
+    }
 }
