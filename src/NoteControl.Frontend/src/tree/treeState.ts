@@ -139,6 +139,26 @@ export function useTreeData(vaultId: string): TreeData {
   );
 
   // Always load the root listing on mount / vault change.
+  //
+  // Ship 92 bugfix: includes `childrenByPath` in the dep list so the
+  // effect refires AFTER the reset effect (above) clears the cache.
+  // Pre-Ship-92 the deps were `[vaultId]` only. When vaultId changed:
+  //   - Render 2 ran with vault A's stale cache — the .has('') check
+  //     was true, so we SKIPPED the load.
+  //   - The reset effect then queued setChildrenByPath(new Map()),
+  //     and on render 3 the cache was empty — but vaultId hadn't
+  //     changed since render 2, so the [vaultId]-only dep didn't
+  //     fire the effect again.
+  //   - Result: empty tree, no in-flight load. The user saw "tree
+  //     not showing" until they navigated away and back.
+  // Adding childrenByPath to the deps means render 3 (with the empty
+  // map) DOES re-fire the effect; the .has('') check is now false,
+  // and the load kicks off correctly.
+  //
+  // The internal `loadingByPath.has('')` guard prevents double-fires
+  // during normal operation — when a load is already in flight,
+  // additional cache-shape changes (e.g. a sibling folder finishing
+  // its load) won't trigger a second root fetch.
   useEffect(() => {
     if (!childrenByPath.has('') && !loadingByPath.has('')) {
       void loadFolder('');
@@ -147,11 +167,24 @@ export function useTreeData(vaultId: string): TreeData {
     // re-fire whenever loadingByPath changes (because loadFolder closes
     // over it), causing extra root reloads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultId]);
+  }, [vaultId, childrenByPath]);
 
   // Restore previously-expanded folders by lazily fetching their children
   // on mount. We do this serially-but-async so a deeply-nested expanded
   // state doesn't blast the API with parallel calls.
+  //
+  // Ship 92 bugfix: includes `expanded` in the dep list so the effect
+  // refires after the reset effect swaps in the new vault's expanded
+  // set. Pre-Ship-92 the deps were [vaultId] only, which had the same
+  // stale-closure bug as the root-load effect: render 2 ran with vault
+  // A's expanded set still in scope, render 3 had the new set but the
+  // [vaultId]-only dep didn't re-fire.
+  //
+  // Adding `expanded` to deps means the effect ALSO refires on user-
+  // initiated toggle (every expand/collapse mutates the set). That's
+  // OK because `loadFolder` is internally idempotent — it skips when
+  // the path is already loaded/loading. The extra runs are tiny: an
+  // O(expanded.size) loop with all-skip on every toggle. Cheap.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -165,10 +198,8 @@ export function useTreeData(vaultId: string): TreeData {
     return () => {
       cancelled = true;
     };
-    // Only rerun on vault change, not on every expanded mutation —
-    // user-initiated toggles handle their own loading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultId]);
+  }, [vaultId, expanded]);
 
   const toggle = useCallback(
     (folderPath: string) => {
