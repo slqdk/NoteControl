@@ -5,6 +5,10 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
 import './styles.css';
+// runtime.css is loaded after styles.css so its rules can refine
+// existing code-block-header styling without editing styles.css.
+// See runtime.css for the comment explaining the cascade trick.
+import './runtime.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

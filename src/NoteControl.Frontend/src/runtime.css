@@ -1,0 +1,323 @@
+/* ----------------------------------------------------------------
+ * Runtime sandbox styling.
+ *
+ * Imported once from main.tsx after styles.css, so any rule in
+ * here that re-targets a class from styles.css (currently:
+ * .nc-codeblock-title) wins by source order.
+ * ---------------------------------------------------------------- */
+
+/* When a Run button is present in the code-block header, let the
+ * title shrink to fit instead of pushing the button off the right
+ * edge. The original rule sets the title to `width: 100%` which
+ * was fine when the header had only one child. */
+.nc-codeblock-header .nc-codeblock-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.nc-codeblock-run {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-accent-fg);
+  background: var(--nc-accent);
+  border: 1px solid var(--nc-accent);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: filter 0.1s ease;
+}
+.nc-codeblock-run:hover {
+  filter: brightness(1.1);
+}
+.nc-codeblock-run:active {
+  filter: brightness(0.95);
+}
+
+/* ----------------------------------------------------------------
+ * Modal scrim and shell.
+ *
+ * Layered above the editor (z-index 1500 — above .nc-import-modal-
+ * backdrop's 1000 so a runtime modal opened ON TOP of an import
+ * dialog wins, though that combination shouldn't actually happen
+ * in normal use). The shell is wider than the import modal so the
+ * declaration / implementation panes have room to breathe.
+ * ---------------------------------------------------------------- */
+.nc-runtime-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.nc-runtime-modal {
+  width: min(1100px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.nc-runtime-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg-elev);
+}
+
+.nc-runtime-modal-title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nc-fg);
+}
+
+.nc-runtime-modal-summary {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-runtime-modal-close {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  padding: 4px 8px;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+}
+.nc-runtime-modal-close:hover {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+}
+
+.nc-runtime-modal-error {
+  margin: 12px 16px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.32);
+  border-radius: var(--nc-radius-sm);
+  white-space: pre-wrap;
+}
+
+/* ----------------------------------------------------------------
+ * Toolbar — Run / Step / Stop / Reset / cycle / scan.
+ * ---------------------------------------------------------------- */
+.nc-runtime-modal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg);
+}
+.nc-runtime-modal-toolbar button {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-runtime-modal-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.nc-runtime-modal-toolbar button:not(:disabled):hover {
+  background: var(--nc-bg-elev-2);
+}
+
+.nc-runtime-modal-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.nc-runtime-modal-cycle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-runtime-modal-cycle select {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+}
+.nc-runtime-modal-cycle select:disabled {
+  opacity: 0.5;
+}
+
+.nc-runtime-modal-status {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  padding: 0 4px;
+}
+
+/* ----------------------------------------------------------------
+ * Body grid — code panes on the left, watch panel on the right.
+ * Vertical layout on narrow viewports (the modal stays usable on
+ * a sub-1000px monitor).
+ * ---------------------------------------------------------------- */
+.nc-runtime-modal-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 12px;
+  padding: 12px 16px;
+  overflow: hidden;
+  min-height: 300px;
+}
+@media (max-width: 800px) {
+  .nc-runtime-modal-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nc-runtime-modal-code {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.nc-runtime-modal-pane {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  overflow: hidden;
+  background: var(--nc-bg-elev);
+}
+
+.nc-runtime-modal-pane-title {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+}
+
+.nc-runtime-modal-source {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  white-space: pre;
+  overflow-x: auto;
+}
+.nc-runtime-modal-source code {
+  font: inherit;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* ----------------------------------------------------------------
+ * Watch panel — variable list with type and value.
+ * ---------------------------------------------------------------- */
+.nc-runtime-modal-watch {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  overflow: hidden;
+  background: var(--nc-bg-elev);
+  min-height: 0;
+}
+.nc-runtime-modal-watch-table {
+  flex: 1 1 auto;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  overflow-y: auto;
+}
+.nc-runtime-modal-watch-table th,
+.nc-runtime-modal-watch-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--nc-border);
+  vertical-align: top;
+}
+.nc-runtime-modal-watch-table th {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev);
+  position: sticky;
+  top: 0;
+}
+.nc-runtime-modal-watch-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--nc-fg);
+}
+.nc-runtime-modal-watch-type {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--nc-fg-muted);
+  font-size: 11px;
+}
+.nc-runtime-modal-watch-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--nc-accent);
+}
+.nc-runtime-modal-watch-marker {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+  border-radius: 3px;
+}
+.nc-runtime-modal-watch-empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+}
+
+/* ----------------------------------------------------------------
+ * Footer — note about Ship A scope.
+ * ---------------------------------------------------------------- */
+.nc-runtime-modal-footer {
+  padding: 8px 16px;
+  border-top: 1px solid var(--nc-border);
+  background: var(--nc-bg-elev);
+}
+.nc-runtime-modal-foot-note {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-style: italic;
+}
