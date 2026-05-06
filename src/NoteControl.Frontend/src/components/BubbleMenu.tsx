@@ -108,6 +108,19 @@ export function BubbleMenu({ editor, vaultId, getNotePath }: BubbleMenuProps) {
   const [active, setActive] = useState(false);
   const [position, setPosition] = useState<BubblePosition | null>(null);
 
+  // Ship 98b: busy state for "save selection as template". Hoisted
+  // up here (alongside the other useState calls) and BEFORE any
+  // conditional early returns so the hook is always called in the
+  // same order on every render — React's rules of hooks. An earlier
+  // version of this file declared this useState lower down, after
+  // the `if (!editor || !active || !position) return null;` guard,
+  // which meant the hook was conditionally invoked depending on
+  // selection state. Result: as soon as the user selected text the
+  // hook count jumped from N to N+1, React threw "rendered more
+  // hooks than during the previous render", and the editor went
+  // blank until F5.
+  const [savingAsTemplate, setSavingAsTemplate] = useState(false);
+
   // Recompute visibility + position from the editor's current state
   // and the selection's bounding rect. Called on every selection
   // change AND on window scroll/resize so the toolbar stays
@@ -345,8 +358,12 @@ export function BubbleMenu({ editor, vaultId, getNotePath }: BubbleMenuProps) {
    * State: a busy flag prevents double-submit if the user
    * impatiently double-clicks. The toast acknowledges success;
    * errors get their own (longer) toast.
+   *
+   * Note: the `savingAsTemplate` useState is declared at the top
+   * of the component, NOT here — it must be called unconditionally
+   * on every render (React rules of hooks). `showSaveAsTemplate` is
+   * a derived value, safe to compute here since it's not a hook.
    */
-  const [savingAsTemplate, setSavingAsTemplate] = useState(false);
   const showSaveAsTemplate = !!vaultId && !!getNotePath;
 
   const handleSaveAsTemplate = async () => {
