@@ -15,10 +15,19 @@ namespace NoteControl.Server.Templates.Endpoints;
 ///                                              an in-note selection,
 ///                                              auto-named, with image
 ///                                              copy + path rewrite
+///   <c>POST   /templates/{name}/render</c>  — Ship 98c: render the
+///                                              template for insertion
+///                                              into a target note.
+///                                              Copies images into the
+///                                              target's asset folder,
+///                                              returns rewritten body
 ///   <c>PUT    /templates/{name}</c>         — update body, optionally rename
 ///   <c>DELETE /templates/{name}</c>         — remove
 ///
 /// Auth: viewers can list and read, editors can write/delete.
+/// The render route is editor-only because it WRITES to the target
+/// note's asset folder, even though it doesn't change the template
+/// itself.
 /// </summary>
 public static class TemplateEndpoints
 {
@@ -46,6 +55,14 @@ public static class TemplateEndpoints
         // automatically. Listing it after the other POST is fine.
         group.MapPost("/templates/from-selection", CreateFromSelectionAsync)
             .WithName("CreateTemplateFromSelection")
+            .RequireVault("editor");
+
+        // Ship 98c: render a template for insertion into a target
+        // note. POST (not GET) because the call has side effects —
+        // it writes copies of any images into the target note's
+        // asset folder.
+        group.MapPost("/templates/{name}/render", RenderForInsertAsync)
+            .WithName("RenderTemplateForInsert")
             .RequireVault("editor");
 
         group.MapPut("/templates/{name}", UpdateAsync)
@@ -141,6 +158,42 @@ public static class TemplateEndpoints
         {
             return Results.Problem(
                 title: "Could not create template from selection",
+                detail: ex.Message,
+                statusCode: ex.StatusCode);
+        }
+    }
+
+    /// <summary>
+    /// Ship 98c: render a template's body for insertion into a
+    /// specific target note.
+    ///
+    /// <c>targetNotePath</c> is a query string parameter rather than
+    /// a request body so the URL alone fully describes the operation
+    /// — easier to debug from access logs and curl.
+    /// </summary>
+    private static async Task<IResult> RenderForInsertAsync(
+        Guid vaultId,
+        string name,
+        string? targetNotePath,
+        ITemplateService templates,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(targetNotePath))
+        {
+            return Results.Problem(
+                statusCode: 400,
+                title: "?targetNotePath= is required.");
+        }
+        try
+        {
+            var resp = await templates.RenderForInsertAsync(
+                vaultId, name, targetNotePath, ct);
+            return Results.Ok(resp);
+        }
+        catch (TemplateException ex)
+        {
+            return Results.Problem(
+                title: "Could not render template for insert",
                 detail: ex.Message,
                 statusCode: ex.StatusCode);
         }

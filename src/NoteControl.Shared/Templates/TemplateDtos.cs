@@ -50,3 +50,22 @@ public sealed record TemplateUpsertRequest(
 public sealed record TemplateFromSelectionRequest(
     string SourceNotePath,
     string Markdown);
+
+/// <summary>
+/// Response from <c>POST /templates/{name}/render</c> (Ship 98c).
+///
+/// The server renders a template for insertion into a specific
+/// target note: it copies any images the template references from
+/// <c>.notesapp/templates/&lt;name&gt;.assets/</c> into the target
+/// note's <c>&lt;targetBasename&gt;.assets/</c> folder, and rewrites
+/// the markdown image paths so the target note ends up self-
+/// contained. The client inserts the returned <see cref="Body"/>
+/// at the cursor.
+///
+/// Image duplication is intentional — per the Ship 98 design
+/// (templates Option B), a target note carrying its own copies
+/// of any template images means deleting/renaming the template
+/// later doesn't break the inserted content.
+/// </summary>
+public sealed record TemplateRenderResponse(
+    string Body);

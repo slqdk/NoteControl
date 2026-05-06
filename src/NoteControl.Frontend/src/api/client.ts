@@ -533,6 +533,28 @@ export const templatesApi = {
         body: { sourceNotePath, markdown },
       },
     ),
+
+  /**
+   * POST /api/vaults/{id}/templates/{name}/render?targetNotePath=...
+   *
+   * Ship 98c: render a template for insertion into a specific
+   * target note. The server reads the template's body, copies any
+   * referenced images from .notesapp/templates/<name>.assets/ into
+   * the target note's <basename>.assets/ folder (collision-safe),
+   * and returns the markdown with image refs rewritten to point at
+   * the new location.
+   *
+   * The slash-menu submenu calls this on every template pick (even
+   * for text-only templates — the cost is negligible and one code
+   * path is easier to reason about).
+   */
+  render: (vaultId: string, templateName: string, targetNotePath: string) => {
+    const qs = new URLSearchParams({ targetNotePath }).toString();
+    return request<{ body: string }>(
+      `/api/vaults/${vaultId}/templates/${encodeURIComponent(templateName)}/render?${qs}`,
+      { method: 'POST' },
+    );
+  },
 };
 
 // ============================================================== DAILY NOTES

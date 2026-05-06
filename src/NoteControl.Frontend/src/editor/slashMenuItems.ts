@@ -466,16 +466,52 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
             icon: '📋',
             keywords: [tpl.name.toLowerCase()],
             command: async ({ editor, range }) => {
+              // Ship 98c: route inserts through the server-side
+              // render endpoint so any images referenced by the
+              // template get copied into the target note's asset
+              // folder and the markdown is rewritten to point at
+              // the new location. This means an inserted template
+              // survives the source template being later deleted
+              // or renamed.
+              //
+              // We always go through render — even for text-only
+              // templates. The roundtrip cost is negligible and the
+              // alternative (branching on "does this template have
+              // images") would add cache state we don't need.
+              //
+              // Asset paths are computed against the TARGET note's
+              // location, so the slash-menu context's getNotePath
+              // is required. If it returns empty (an editor that
+              // somehow doesn't have a note path bound), we fall
+              // back to the pre-Ship-98c behaviour: insert the raw
+              // body. Any images in it will render broken — same
+              // failure mode as before this ship — but at least the
+              // user gets the text content.
+              const notePath = ctx.getNotePath();
               try {
-                const full = await templatesApi.get(ctx.vaultId, tpl.name);
+                let bodyToInsert: string;
+                if (notePath) {
+                  const rendered = await templatesApi.render(
+                    ctx.vaultId,
+                    tpl.name,
+                    notePath,
+                  );
+                  bodyToInsert = rendered.body;
+                } else {
+                  const full = await templatesApi.get(ctx.vaultId, tpl.name);
+                  bodyToInsert = full.body;
+                }
                 editor
                   .chain()
                   .focus()
                   .deleteRange(range)
-                  .insertContent(full.body)
+                  .insertContent(bodyToInsert)
                   .run();
               } catch (e) {
                 if (e instanceof ApiError) {
+                  // Clean up the slash range so the editor isn't
+                  // left with a stranded "/" — the original
+                  // pre-Ship-98c behaviour.
                   editor.chain().focus().deleteRange(range).run();
                 }
               }

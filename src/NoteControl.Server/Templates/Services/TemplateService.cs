@@ -196,11 +196,12 @@ public sealed class TemplateService : ITemplateService
 
         // Walk the markdown for image refs and copy each into the
         // template's asset folder, rewriting the path.
-        var (rewrittenBody, copiedAny) = await CopyAssetsForSelectionAsync(
+        var (rewrittenBody, copiedAny) = await CopyAssetsAndRewriteAsync(
             originalBody: request.Markdown ?? string.Empty,
-            templateName: name,
-            templatesFolder: folder,
-            sourceNoteParent: sourceNoteParent,
+            destBasename: name,
+            destAssetsParent: folder,
+            srcResolveFolder: sourceNoteParent,
+            logContext: $"saving template '{name}' from selection",
             ct: ct);
 
         var file = Path.Combine(folder, name + ".md");
@@ -224,6 +225,88 @@ public sealed class TemplateService : ITemplateService
             name,
             rewrittenBody,
             new DateTimeOffset(lastModified, TimeSpan.Zero));
+    }
+
+    // ============================================================== RenderForInsert
+
+    public async Task<TemplateRenderResponse> RenderForInsertAsync(
+        Guid vaultId,
+        string templateName,
+        string targetNotePath,
+        CancellationToken ct = default)
+    {
+        ValidateName(templateName);
+        if (string.IsNullOrWhiteSpace(targetNotePath))
+        {
+            throw new TemplateException("targetNotePath is required.");
+        }
+
+        // Resolve target note up-front so we fail fast on bad paths.
+        string canonicalTarget;
+        try
+        {
+            canonicalTarget = _notePaths.CanonicalizeNote(targetNotePath);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new TemplateException(ex.Message, statusCode: 400);
+        }
+
+        var templatesFolder = await ResolveTemplatesFolderAsync(vaultId, ct);
+        var templateFile = Path.Combine(templatesFolder, templateName + ".md");
+        if (!File.Exists(templateFile))
+        {
+            throw new TemplateException("Template not found.", statusCode: 404);
+        }
+
+        // Resolve target note's location on disk to find its parent
+        // folder + basename — that's where assets get copied to.
+        var vault = await _db.Vaults
+            .Where(v => v.Id == vaultId)
+            .Select(v => new { v.Path })
+            .FirstOrDefaultAsync(ct)
+            ?? throw new TemplateException("Vault not found.", statusCode: 404);
+        var vaultRoot = _vaultPaths.Resolve(vault.Path);
+        var targetNoteAbsolute = _notePaths.Resolve(vaultRoot, canonicalTarget);
+        if (!File.Exists(targetNoteAbsolute))
+        {
+            // It's the CALLER's note — not having it on disk is a
+            // 404, not a server error. The frontend will see this
+            // when the user tries to insert a template into a note
+            // that was deleted in another tab between mounting the
+            // editor and clicking the slash menu item.
+            throw new TemplateException("Target note not found.", statusCode: 404);
+        }
+        var targetNoteFileName = Path.GetFileName(targetNoteAbsolute);
+        var targetBasename = targetNoteFileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            ? targetNoteFileName[..^3]
+            : targetNoteFileName;
+        var targetNoteParent = Path.GetDirectoryName(targetNoteAbsolute)!;
+
+        // Read the template body. Image refs in this body are
+        // relative to the template file's location — i.e. relative
+        // to the templates folder. So srcResolveFolder is
+        // templatesFolder, NOT the vault root.
+        var body = await File.ReadAllTextAsync(templateFile, ct);
+
+        var (rewritten, copiedAny) = await CopyAssetsAndRewriteAsync(
+            originalBody: body,
+            destBasename: targetBasename,
+            destAssetsParent: targetNoteParent,
+            srcResolveFolder: templatesFolder,
+            logContext: $"rendering template '{templateName}' for insert into '{canonicalTarget}'",
+            ct: ct);
+
+        if (copiedAny)
+        {
+            _log.LogInformation(
+                "Rendered template '{TemplateName}' for insert into '{TargetNote}' (vault {VaultId}); copied images.",
+                templateName, canonicalTarget, vaultId);
+        }
+        // No log entry for the no-images case — that's the common
+        // path and the access log already records the endpoint hit.
+
+        return new TemplateRenderResponse(rewritten);
     }
 
     // ============================================================== Update
@@ -385,33 +468,56 @@ public sealed class TemplateService : ITemplateService
 
     /// <summary>
     /// Walk the markdown for image references, copy each referenced
-    /// image from the source note's asset folder into the new
-    /// template's asset folder, and rewrite the markdown image
-    /// paths to point at the new location.
+    /// image from the source folder into the destination
+    /// <c>&lt;destBasename&gt;.assets/</c> folder under
+    /// <see cref="destAssetsParent"/>, and rewrite the markdown
+    /// image paths to point at the new location.
     ///
-    /// Image refs supported: <c>![alt](path)</c> and
-    /// <c>![alt](path "title")</c>. Both standard CommonMark image
-    /// syntax forms. Raw <c>&lt;img src="..."&gt;</c> tags (which
-    /// tiptap-markdown will emit for some HTML round-trip cases)
-    /// are also handled.
+    /// Used by both Ship 98b ("save selection as template" — source
+    /// is the source note's folder, destination is the new
+    /// template's asset folder) and Ship 98c ("render template for
+    /// insert" — source is the templates folder, destination is the
+    /// target note's asset folder).
     ///
-    /// Images that can't be resolved on disk (file missing,
-    /// path-traversal attempt, absolute URL) are HANDLED PER CASE:
+    /// Image refs supported: <c>![alt](src)</c> and
+    /// <c>![alt](src "title")</c>. Both standard CommonMark image
+    /// syntax forms.
+    ///
+    /// Per-image disposition:
     ///   - Absolute URLs (http://, https://, data:, blob:) are
-    ///     preserved as-is — the template will reference the
-    ///     remote/inline source unchanged.
-    ///   - Relative paths that don't resolve to an actual file are
-    ///     dropped from the saved markdown (the entire
-    ///     <c>![alt](path)</c> reference) and a warning is logged.
-    ///     We deliberately don't keep the broken ref because a
-    ///     template with broken images is more confusing than a
-    ///     template that's missing them.
+    ///     preserved as-is.
+    ///   - Relative paths that don't resolve to a file on disk,
+    ///     or that try to traverse outside <see cref="srcResolveFolder"/>,
+    ///     are dropped from the body (the entire <c>![alt](src)</c>
+    ///     reference) and a warning is logged. We deliberately don't
+    ///     keep the broken ref because a body with broken images is
+    ///     more confusing than one missing them.
     /// </summary>
-    private async Task<(string body, bool copiedAny)> CopyAssetsForSelectionAsync(
+    /// <param name="originalBody">The markdown to walk.</param>
+    /// <param name="destBasename">The basename of the destination
+    /// "owner" — for Ship B this is the new template's name; for
+    /// Ship C it's the target note's basename. Determines the
+    /// rewritten path's <c>&lt;basename&gt;.assets/</c> prefix.</param>
+    /// <param name="destAssetsParent">The folder under which the
+    /// destination <c>.assets/</c> folder lives. For Ship B this is
+    /// the templates folder; for Ship C it's the target note's
+    /// parent folder.</param>
+    /// <param name="srcResolveFolder">The folder against which
+    /// image refs in <paramref name="originalBody"/> are resolved.
+    /// For Ship B this is the source note's parent folder; for
+    /// Ship C it's the templates folder (since template refs are
+    /// relative to the template file itself).</param>
+    /// <param name="logContext">Free-text description of the
+    /// operation for log messages — e.g. "saving template 'Foo'"
+    /// or "rendering template 'Foo' for insert". Folded into the
+    /// warning lines so the operator can tell which call site
+    /// generated which warning.</param>
+    private async Task<(string body, bool copiedAny)> CopyAssetsAndRewriteAsync(
         string originalBody,
-        string templateName,
-        string templatesFolder,
-        string sourceNoteParent,
+        string destBasename,
+        string destAssetsParent,
+        string srcResolveFolder,
+        string logContext,
         CancellationToken ct)
     {
         if (string.IsNullOrEmpty(originalBody))
@@ -419,12 +525,12 @@ public sealed class TemplateService : ITemplateService
             return (originalBody, false);
         }
 
-        var assetsFolderName = templateName + AssetsFolderSuffix;
-        var assetsAbsolute = Path.Combine(templatesFolder, assetsFolderName);
+        var assetsFolderName = destBasename + AssetsFolderSuffix;
+        var assetsAbsolute = Path.Combine(destAssetsParent, assetsFolderName);
         // Don't pre-create the folder — only do it lazily inside
         // the loop below if we actually find an image to copy.
-        // This keeps templates that have no images from leaving
-        // an empty .assets folder lying around.
+        // This keeps no-image bodies from leaving an empty .assets
+        // folder lying around.
 
         var copiedAny = false;
         var rewritten = originalBody;
@@ -453,9 +559,7 @@ public sealed class TemplateService : ITemplateService
             var alt = match.Groups["alt"].Value;
             var title = match.Groups["title"].Value;
 
-            // Absolute URL or data URL — leave untouched. The
-            // template will reference the same remote/inline
-            // source the original note did.
+            // Absolute URL or data URL — leave untouched.
             if (IsAbsoluteOrDataUrl(src))
             {
                 continue;
@@ -475,27 +579,26 @@ public sealed class TemplateService : ITemplateService
             string sourceAbsolute;
             try
             {
-                var combined = Path.Combine(sourceNoteParent,
+                var combined = Path.Combine(srcResolveFolder,
                     decodedSrc.Replace('/', Path.DirectorySeparatorChar));
                 sourceAbsolute = Path.GetFullPath(combined);
             }
             catch
             {
                 _log.LogWarning(
-                    "Could not resolve image src '{Src}' while saving template '{Name}' from selection; dropping.",
-                    src, templateName);
+                    "Could not resolve image src '{Src}' while {Op}; dropping.",
+                    src, logContext);
                 rewritten = rewritten.Remove(match.Index, match.Length);
                 continue;
             }
 
             // Anti-traversal: source path must remain under the
-            // source note's parent (absolute paths or escaping
-            // .. sequences would have gone past it).
-            if (!sourceAbsolute.StartsWith(sourceNoteParent, StringComparison.OrdinalIgnoreCase))
+            // configured resolve folder.
+            if (!sourceAbsolute.StartsWith(srcResolveFolder, StringComparison.OrdinalIgnoreCase))
             {
                 _log.LogWarning(
-                    "Image src '{Src}' resolves outside source note's folder; dropping.",
-                    src);
+                    "Image src '{Src}' resolves outside resolve folder while {Op}; dropping.",
+                    src, logContext);
                 rewritten = rewritten.Remove(match.Index, match.Length);
                 continue;
             }
@@ -503,15 +606,14 @@ public sealed class TemplateService : ITemplateService
             if (!File.Exists(sourceAbsolute))
             {
                 _log.LogWarning(
-                    "Image src '{Src}' (resolved to '{Absolute}') does not exist on disk; dropping from template '{Name}'.",
-                    src, sourceAbsolute, templateName);
+                    "Image src '{Src}' (resolved to '{Absolute}') does not exist on disk while {Op}; dropping.",
+                    src, sourceAbsolute, logContext);
                 rewritten = rewritten.Remove(match.Index, match.Length);
                 continue;
             }
 
-            // Lazily create the asset folder on first successful
-            // resolve. Keeps no-image templates from leaving an
-            // empty folder (see comment above the loop).
+            // Lazily create the destination asset folder on first
+            // successful resolve.
             Directory.CreateDirectory(assetsAbsolute);
 
             var originalFileName = Path.GetFileName(sourceAbsolute);
@@ -522,24 +624,19 @@ public sealed class TemplateService : ITemplateService
 
             try
             {
-                // Use FileStream copy for symmetry with the rest of
-                // the asset code (and to handle large files without
-                // doubling memory). overwrite: false because we
-                // already picked a non-colliding name.
                 File.Copy(sourceAbsolute, destAbsolute, overwrite: false);
             }
             catch (Exception ex)
             {
                 _log.LogWarning(ex,
-                    "Failed to copy image '{Source}' → '{Dest}' while saving template; dropping ref.",
-                    sourceAbsolute, destAbsolute);
+                    "Failed to copy image '{Source}' → '{Dest}' while {Op}; dropping ref.",
+                    sourceAbsolute, destAbsolute, logContext);
                 rewritten = rewritten.Remove(match.Index, match.Length);
                 continue;
             }
 
-            // Build the new markdown image ref pointing at the
-            // template's asset folder. URL-encode segments to
-            // match the convention AssetService uses for its
+            // Build the new markdown image ref. URL-encode segments
+            // to match the convention AssetService uses for its
             // markdown emit.
             var newSrc = $"{AssetFileHelpers.UrlEncodeSegment(assetsFolderName)}/{AssetFileHelpers.UrlEncodeSegment(storedName)}";
             var newImg = string.IsNullOrEmpty(title)

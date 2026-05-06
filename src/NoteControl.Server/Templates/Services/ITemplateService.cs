@@ -40,6 +40,32 @@ public interface ITemplateService
         Guid vaultId,
         TemplateFromSelectionRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Ship 98c: render a template's body for insertion into a
+    /// specific target note. The template's markdown is loaded;
+    /// any image refs pointing at the template's own
+    /// <c>&lt;name&gt;.assets/</c> folder are resolved on disk,
+    /// copied into the target note's <c>&lt;targetBasename&gt;.assets/</c>
+    /// folder (collision-safe), and rewritten to point at the new
+    /// location. The returned body is what the client should
+    /// insert at the cursor.
+    ///
+    /// Images that can't be resolved on disk are dropped from the
+    /// returned body with a logged warning — the user gets the
+    /// rest of the template content.
+    ///
+    /// Image duplication is intentional: per the Ship 98 design,
+    /// templates are self-contained AND target notes are self-
+    /// contained, so a template inserted into N notes results in
+    /// N copies of any image. This is the cost of "deleting a
+    /// template doesn't break previously-inserted content."
+    /// </summary>
+    Task<TemplateRenderResponse> RenderForInsertAsync(
+        Guid vaultId,
+        string templateName,
+        string targetNotePath,
+        CancellationToken ct = default);
 }
 
 /// <summary>
