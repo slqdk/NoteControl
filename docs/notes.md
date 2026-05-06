@@ -109,7 +109,13 @@ The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
 
 - **Ctrl+S** — force-save (debounced auto-save runs anyway).
 - **Tab / Shift-Tab** in lists — indent / outdent.
+- **Tab / Shift-Tab** in code blocks — insert four spaces /
+  remove up to four leading spaces from the current line. Works
+  in code blocks of any language. The four-space width matches
+  TwinCAT 3's default ST indent.
 - **/** at the start of a paragraph — open the slash menu.
+- **F2** inside a Structured Text code block — open the
+  autocomplete popup (see below).
 - **Ctrl+Backspace** in a table cell — delete the cell's row
   if at start, otherwise delete word (TipTap default). The
   table delete shortcut also handles cleaning up empty tables.
@@ -144,6 +150,48 @@ block-insertion shortcuts. Items shown in order:
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
+
+### F2 autocomplete (Structured Text)
+
+Press F2 with the cursor inside a code block whose language is
+`st` (the default for new blocks) to open an autocomplete popup.
+The popup runs in one of two modes, picked automatically from the
+surrounding document:
+
+- **Declaration mode** — when the active block's title is
+  `Declaration` (case-insensitive), or when the block isn't
+  paired with a Declaration sibling. The popup lists built-in
+  scalar types (BOOL, BYTE, WORD, DWORD, LWORD, SINT, USINT,
+  INT, UINT, DINT, UDINT, LINT, ULINT, REAL, LREAL, STRING,
+  TIME) and common function-block types (TON, TOF, TP, R_TRIG,
+  F_TRIG, CTU, CTD, CTUD, RS, SR). Picking an item inserts the
+  type/FB name at the cursor.
+
+- **Implementation mode** — when the active block's title is
+  `Implementation` AND the immediately-preceding sibling block
+  is an `st` code block titled `Declaration` (the shape the
+  PLCOpen XML import produces; same rule the Run button uses).
+  The popup lists every variable scanned out of that Declaration
+  block, with its type as a subtitle. Picking a scalar variable
+  inserts its name. Picking a variable whose type is a known FB
+  inserts a full call signature with the formal parameters in
+  source order — for example `Timer01(IN := , PT := , Q => , ET
+  => )` for a `Timer01 : TON` instance — and places the caret
+  right after the first input's `:= ` so the user can type the
+  value immediately.
+
+The declaration scanner is deliberately lenient: it survives
+mid-typing (missing semicolons, no `END_VAR` yet), comments,
+TwinCAT pragmas, `AT %ADDR` direct addresses, multi-name
+declarations (`a, b, c : INT;`), and `POINTER TO` / `REFERENCE
+TO` wrappers. Variables whose type isn't recognisable are
+silently skipped rather than failing the whole popup.
+
+Inside the popup: type letters/digits/underscore to filter
+(prefix-then-infix scoring against the title and keywords),
+ArrowUp/ArrowDown to navigate, Enter or Tab to insert the
+highlighted item, Escape or click-outside to dismiss without
+inserting. Backspace shrinks the filter query.
 
 ### Bubble menu
 
