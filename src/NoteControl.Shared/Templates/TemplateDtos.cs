@@ -28,3 +28,25 @@ public sealed record TemplateDto(
 public sealed record TemplateUpsertRequest(
     string Name,
     string Body);
+
+/// <summary>
+/// Body for <c>POST /templates/from-selection</c> (Ship 98b).
+///
+/// The user selected some content in <see cref="SourceNotePath"/>
+/// and clicked "Save as template" in the bubble menu; the client
+/// serialised the selection to markdown and posts it here.
+///
+/// The server picks an auto-name (<c>Template YYYY-MM-DD HHmm</c>,
+/// suffixed if it collides) — the user renames after the fact in
+/// the templates page if they want.
+///
+/// SourceNotePath is required because the markdown may contain
+/// image refs like <c>SomeNote.assets/foo.png</c> which are
+/// relative to that note's location; the server resolves and
+/// copies each image into the new template's asset folder so
+/// the template stays self-contained even if the source note is
+/// later deleted.
+/// </summary>
+public sealed record TemplateFromSelectionRequest(
+    string SourceNotePath,
+    string Markdown);

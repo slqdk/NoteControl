@@ -650,7 +650,11 @@ export function NoteEditor({
           Independent of TableToolbar — both can be visible at once
           when text is selected inside a table cell.
         */}
-        <BubbleMenu editor={editor} />
+        <BubbleMenu
+          editor={editor}
+          vaultId={vaultId}
+          getNotePath={() => noteForUploadRef.current}
+        />
       </div>
       {/*
         Ship 84: mobile-only properties section. Rendered AFTER the

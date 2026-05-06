@@ -4369,3 +4369,38 @@ a.nc-rss-item-title:hover {
     display: none;
   }
 }
+
+/* ============================================================== */
+/* Toast (Ship 98b: silent feedback for "save selection as         */
+/* template" and other transient actions). Imperatively appended   */
+/* to body via utils/toast.ts; sits in the bottom-right.           */
+/* ============================================================== */
+.nc-toast {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  user-select: none;
+  max-width: 320px;
+  /* Slide up + fade in. The CSS animation runs once on mount.  */
+  animation: nc-toast-in 180ms ease-out;
+  /* The leaving class triggers a fade-out matching the JS       */
+  /* timeout in toast.ts (150ms). Keep the two in lockstep so    */
+  /* the element finishes fading before it's removed from DOM.  */
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+.nc-toast:hover {
+  background: var(--nc-bg-elev-3);
+}
+.nc-toast-leaving {
+  opacity: 0;
+  transform: translateY(8px);
+}
+@keyframes nc-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

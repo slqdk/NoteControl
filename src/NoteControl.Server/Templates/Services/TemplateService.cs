@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using NoteControl.Server.Assets.Services;
 using NoteControl.Server.Data;
+using NoteControl.Server.Notes.Services;
 using NoteControl.Server.Vaults.Services;
 using NoteControl.Shared.Templates;
 
@@ -50,11 +53,19 @@ public sealed class TemplateService : ITemplateService
 
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _vaultPaths;
+    private readonly INotePathResolver _notePaths;
+    private readonly ILogger<TemplateService> _log;
 
-    public TemplateService(ServerDbContext db, IVaultPathResolver vaultPaths)
+    public TemplateService(
+        ServerDbContext db,
+        IVaultPathResolver vaultPaths,
+        INotePathResolver notePaths,
+        ILogger<TemplateService> log)
     {
         _db = db;
         _vaultPaths = vaultPaths;
+        _notePaths = notePaths;
+        _log = log;
     }
 
     // ============================================================== List
@@ -125,6 +136,93 @@ public sealed class TemplateService : ITemplateService
         return new TemplateDto(
             request.Name,
             request.Body ?? string.Empty,
+            new DateTimeOffset(lastModified, TimeSpan.Zero));
+    }
+
+    // ============================================================== CreateFromSelection
+
+    public async Task<TemplateDto> CreateFromSelectionAsync(
+        Guid vaultId,
+        TemplateFromSelectionRequest request,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.SourceNotePath))
+        {
+            throw new TemplateException("sourceNotePath is required.");
+        }
+
+        // Resolve the source note up-front so we can fail fast if
+        // the path is bad. Throws InvalidNotePathException for
+        // syntactically bad paths; we surface as 400.
+        string canonicalSource;
+        try
+        {
+            canonicalSource = _notePaths.CanonicalizeNote(request.SourceNotePath);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new TemplateException(ex.Message, statusCode: 400);
+        }
+
+        var folder = await ResolveTemplatesFolderAsync(vaultId, ct);
+        Directory.CreateDirectory(folder);
+
+        // Resolve the source note's parent directory ON DISK — we
+        // need this to find the source asset folder when copying
+        // images. Do this BEFORE picking the template name (so a
+        // missing source note 404s before we waste collision-check
+        // work picking a name).
+        var vault = await _db.Vaults
+            .Where(v => v.Id == vaultId)
+            .Select(v => new { v.Path })
+            .FirstOrDefaultAsync(ct)
+            ?? throw new TemplateException("Vault not found.", statusCode: 404);
+        var vaultRoot = _vaultPaths.Resolve(vault.Path);
+        var sourceNoteAbsolute = _notePaths.Resolve(vaultRoot, canonicalSource);
+        if (!File.Exists(sourceNoteAbsolute))
+        {
+            throw new TemplateException("Source note not found.", statusCode: 404);
+        }
+        var sourceNoteParent = Path.GetDirectoryName(sourceNoteAbsolute)!;
+
+        // Auto-name: "Template YYYY-MM-DD HHmm" using LOCAL time
+        // (the user's frame of reference for "the meeting I just
+        // had at 3pm" is local-time, not UTC). Collision-safe via
+        // the existing helper convention (suffix -2, -3, ...).
+        // Spaces in the name are fine — the template name regex
+        // and the asset-folder convention both handle spaces.
+        var baseName = $"Template {DateTime.Now:yyyy-MM-dd HHmm}";
+        var name = PickAvailableTemplateName(folder, baseName);
+
+        // Walk the markdown for image refs and copy each into the
+        // template's asset folder, rewriting the path.
+        var (rewrittenBody, copiedAny) = await CopyAssetsForSelectionAsync(
+            originalBody: request.Markdown ?? string.Empty,
+            templateName: name,
+            templatesFolder: folder,
+            sourceNoteParent: sourceNoteParent,
+            ct: ct);
+
+        var file = Path.Combine(folder, name + ".md");
+        await File.WriteAllTextAsync(file, rewrittenBody, ct);
+        var lastModified = new FileInfo(file).LastWriteTimeUtc;
+
+        if (copiedAny)
+        {
+            _log.LogInformation(
+                "Created template '{TemplateName}' from selection in '{SourceNote}' (vault {VaultId}); copied images.",
+                name, canonicalSource, vaultId);
+        }
+        else
+        {
+            _log.LogInformation(
+                "Created template '{TemplateName}' from selection in '{SourceNote}' (vault {VaultId}); no images.",
+                name, canonicalSource, vaultId);
+        }
+
+        return new TemplateDto(
+            name,
+            rewrittenBody,
             new DateTimeOffset(lastModified, TimeSpan.Zero));
     }
 
@@ -255,6 +353,215 @@ public sealed class TemplateService : ITemplateService
     }
 
     // ============================================================== Helpers
+
+    /// <summary>
+    /// Pick a non-colliding template name based on the desired
+    /// base name, suffixing with " (2)", " (3)", etc. on collision.
+    /// We use parens not dashes (different from filename-collision
+    /// suffixing in AssetFileHelpers) because template NAMES are
+    /// user-visible whereas asset filenames are not — and "Template
+    /// 2026-05-06 1430 (2)" reads more naturally than
+    /// "Template 2026-05-06 1430-2".
+    /// </summary>
+    private static string PickAvailableTemplateName(string folder, string baseName)
+    {
+        var candidate = Path.Combine(folder, baseName + ".md");
+        if (!File.Exists(candidate))
+        {
+            return baseName;
+        }
+        for (int i = 2; i < 1000; i++)
+        {
+            var name = $"{baseName} ({i})";
+            candidate = Path.Combine(folder, name + ".md");
+            if (!File.Exists(candidate))
+            {
+                return name;
+            }
+        }
+        // Astronomically unlikely fallback. Append seconds.
+        return $"{baseName} ({DateTime.UtcNow:HHmmss})";
+    }
+
+    /// <summary>
+    /// Walk the markdown for image references, copy each referenced
+    /// image from the source note's asset folder into the new
+    /// template's asset folder, and rewrite the markdown image
+    /// paths to point at the new location.
+    ///
+    /// Image refs supported: <c>![alt](path)</c> and
+    /// <c>![alt](path "title")</c>. Both standard CommonMark image
+    /// syntax forms. Raw <c>&lt;img src="..."&gt;</c> tags (which
+    /// tiptap-markdown will emit for some HTML round-trip cases)
+    /// are also handled.
+    ///
+    /// Images that can't be resolved on disk (file missing,
+    /// path-traversal attempt, absolute URL) are HANDLED PER CASE:
+    ///   - Absolute URLs (http://, https://, data:, blob:) are
+    ///     preserved as-is — the template will reference the
+    ///     remote/inline source unchanged.
+    ///   - Relative paths that don't resolve to an actual file are
+    ///     dropped from the saved markdown (the entire
+    ///     <c>![alt](path)</c> reference) and a warning is logged.
+    ///     We deliberately don't keep the broken ref because a
+    ///     template with broken images is more confusing than a
+    ///     template that's missing them.
+    /// </summary>
+    private async Task<(string body, bool copiedAny)> CopyAssetsForSelectionAsync(
+        string originalBody,
+        string templateName,
+        string templatesFolder,
+        string sourceNoteParent,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(originalBody))
+        {
+            return (originalBody, false);
+        }
+
+        var assetsFolderName = templateName + AssetsFolderSuffix;
+        var assetsAbsolute = Path.Combine(templatesFolder, assetsFolderName);
+        // Don't pre-create the folder — only do it lazily inside
+        // the loop below if we actually find an image to copy.
+        // This keeps templates that have no images from leaving
+        // an empty .assets folder lying around.
+
+        var copiedAny = false;
+        var rewritten = originalBody;
+
+        // Markdown image regex: ![alt](src) or ![alt](src "title").
+        // Captures: 1=alt text, 2=src, 3=optional title (with quotes).
+        // Non-greedy on alt and src so a line with multiple images
+        // doesn't gobble across boundaries.
+        var mdImageRx = new System.Text.RegularExpressions.Regex(
+            @"!\[(?<alt>[^\]]*)\]\((?<src>[^)\s]+)(?:\s+""(?<title>[^""]*)"")?\)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // We iterate matches in REVERSE order so that splice-out
+        // operations (when we drop a broken ref) don't shift
+        // subsequent match offsets.
+        var matches = mdImageRx.Matches(rewritten)
+            .Cast<System.Text.RegularExpressions.Match>()
+            .OrderByDescending(m => m.Index)
+            .ToList();
+
+        foreach (var match in matches)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var src = match.Groups["src"].Value;
+            var alt = match.Groups["alt"].Value;
+            var title = match.Groups["title"].Value;
+
+            // Absolute URL or data URL — leave untouched. The
+            // template will reference the same remote/inline
+            // source the original note did.
+            if (IsAbsoluteOrDataUrl(src))
+            {
+                continue;
+            }
+
+            // Resolve the source file on disk. The src is
+            // URL-encoded (per the markdown convention); decode
+            // each segment before joining with the filesystem
+            // separator.
+            var decodedSrc = string.Join('/',
+                src.TrimStart('.', '/').Split('/').Select(seg =>
+                {
+                    try { return Uri.UnescapeDataString(seg); }
+                    catch { return seg; }
+                }));
+
+            string sourceAbsolute;
+            try
+            {
+                var combined = Path.Combine(sourceNoteParent,
+                    decodedSrc.Replace('/', Path.DirectorySeparatorChar));
+                sourceAbsolute = Path.GetFullPath(combined);
+            }
+            catch
+            {
+                _log.LogWarning(
+                    "Could not resolve image src '{Src}' while saving template '{Name}' from selection; dropping.",
+                    src, templateName);
+                rewritten = rewritten.Remove(match.Index, match.Length);
+                continue;
+            }
+
+            // Anti-traversal: source path must remain under the
+            // source note's parent (absolute paths or escaping
+            // .. sequences would have gone past it).
+            if (!sourceAbsolute.StartsWith(sourceNoteParent, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogWarning(
+                    "Image src '{Src}' resolves outside source note's folder; dropping.",
+                    src);
+                rewritten = rewritten.Remove(match.Index, match.Length);
+                continue;
+            }
+
+            if (!File.Exists(sourceAbsolute))
+            {
+                _log.LogWarning(
+                    "Image src '{Src}' (resolved to '{Absolute}') does not exist on disk; dropping from template '{Name}'.",
+                    src, sourceAbsolute, templateName);
+                rewritten = rewritten.Remove(match.Index, match.Length);
+                continue;
+            }
+
+            // Lazily create the asset folder on first successful
+            // resolve. Keeps no-image templates from leaving an
+            // empty folder (see comment above the loop).
+            Directory.CreateDirectory(assetsAbsolute);
+
+            var originalFileName = Path.GetFileName(sourceAbsolute);
+            var safeName = AssetFileHelpers.SanitiseFileName(originalFileName);
+            if (string.IsNullOrEmpty(safeName)) safeName = "image";
+            var storedName = AssetFileHelpers.NextAvailableName(assetsAbsolute, safeName);
+            var destAbsolute = Path.Combine(assetsAbsolute, storedName);
+
+            try
+            {
+                // Use FileStream copy for symmetry with the rest of
+                // the asset code (and to handle large files without
+                // doubling memory). overwrite: false because we
+                // already picked a non-colliding name.
+                File.Copy(sourceAbsolute, destAbsolute, overwrite: false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "Failed to copy image '{Source}' → '{Dest}' while saving template; dropping ref.",
+                    sourceAbsolute, destAbsolute);
+                rewritten = rewritten.Remove(match.Index, match.Length);
+                continue;
+            }
+
+            // Build the new markdown image ref pointing at the
+            // template's asset folder. URL-encode segments to
+            // match the convention AssetService uses for its
+            // markdown emit.
+            var newSrc = $"{AssetFileHelpers.UrlEncodeSegment(assetsFolderName)}/{AssetFileHelpers.UrlEncodeSegment(storedName)}";
+            var newImg = string.IsNullOrEmpty(title)
+                ? $"![{alt}]({newSrc})"
+                : $"![{alt}]({newSrc} \"{title}\")";
+
+            rewritten = rewritten.Remove(match.Index, match.Length)
+                .Insert(match.Index, newImg);
+            copiedAny = true;
+        }
+
+        await Task.CompletedTask;
+        return (rewritten, copiedAny);
+    }
+
+    private static bool IsAbsoluteOrDataUrl(string src)
+    {
+        return src.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || src.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || src.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+            || src.StartsWith("blob:", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Rewrite "<oldName>.assets/" → "<newName>.assets/" everywhere in

@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { Editor } from '@tiptap/core';
 
+import { ApiError, templatesApi } from '../api/client';
+import { refreshTemplates } from '../editor/templateCache';
+import { showToast } from '../utils/toast';
+
 /**
  * Floating formatting toolbar that appears above any text selection.
  *
@@ -28,16 +32,32 @@ import type { Editor } from '@tiptap/core';
  * consistency is worth more than tippy's polish for a four-button
  * toolbar.
  *
- * Buttons offered: Bold, Italic, inline Code, Link. Headings and
- * strikethrough are deliberately excluded:
+ * Buttons offered: Bold, Italic, inline Code, Link, and (Ship 98b,
+ * note-editor only) "Save as template". Headings and strikethrough
+ * are deliberately excluded:
  *   - Headings are block-level — turning a paragraph into H2
  *     affects the whole paragraph, which is confusing UI for a
  *     selection-driven menu.
  *   - Strikethrough mark isn't part of StarterKit and would need
  *     its own extension.
+ *
+ * The "Save as template" button only renders when the BubbleMenu is
+ * given both `vaultId` and `getNotePath` props (i.e. it's mounted
+ * inside the NoteEditor, not the TemplateEditor — saving a template
+ * selection as a new template would be confusing recursion).
  */
 export interface BubbleMenuProps {
   editor: Editor | null;
+  /**
+   * Ship 98b: when both of these are present, the bubble menu shows
+   * a "Save as template" button. Both are required because the
+   * server endpoint needs the source note path to resolve image
+   * references, and the API call needs the vault id. The
+   * TemplateEditor mounts BubbleMenu without these props so the
+   * extra button doesn't appear there.
+   */
+  vaultId?: string;
+  getNotePath?: () => string;
 }
 
 /**
@@ -84,7 +104,7 @@ const FALLBACK_TOP_INSET = 8;
 // is a safe upper bound.
 const TOOLBAR_WIDTH_ESTIMATE = 200;
 
-export function BubbleMenu({ editor }: BubbleMenuProps) {
+export function BubbleMenu({ editor, vaultId, getNotePath }: BubbleMenuProps) {
   const [active, setActive] = useState(false);
   const [position, setPosition] = useState<BubblePosition | null>(null);
 
@@ -310,6 +330,83 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
     editor.chain().focus().setLink({ href: trimmed }).run();
   };
 
+  /*
+   * Ship 98b: "Save selection as template".
+   *
+   * Slice out the current selection's markdown using the same
+   * serializer the auto-save flow uses (tiptap-markdown's
+   * MarkdownSerializer.serialize), then POST it to the server.
+   *
+   * The serializer accepts any ProseMirror Node — we pass a sub-doc
+   * created via `state.doc.cut(from, to)` which preserves block
+   * structure (lists, callouts, code blocks, tables) within the
+   * selected range. A flat plain-text join would lose all that.
+   *
+   * State: a busy flag prevents double-submit if the user
+   * impatiently double-clicks. The toast acknowledges success;
+   * errors get their own (longer) toast.
+   */
+  const [savingAsTemplate, setSavingAsTemplate] = useState(false);
+  const showSaveAsTemplate = !!vaultId && !!getNotePath;
+
+  const handleSaveAsTemplate = async () => {
+    if (!showSaveAsTemplate) return;     // shouldn't happen — button is hidden
+    if (savingAsTemplate) return;        // double-click guard
+
+    const { from, to, empty } = editor.state.selection;
+    if (empty || from === to) return;    // nothing selected
+
+    // tiptap-markdown exposes its serializer on editor.storage.markdown.
+    // editor.state.doc.cut returns a NEW doc node containing the
+    // sliced content; the serializer can stringify any Node.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const markdownStorage = (editor.storage as any).markdown;
+    if (!markdownStorage?.serializer) {
+      // Should be impossible — both NoteEditor and TemplateEditor
+      // register the markdown extension. Bail loudly via toast so
+      // the user isn't left wondering why nothing happened.
+      showToast('Could not serialise selection.');
+      return;
+    }
+    let markdown: string;
+    try {
+      const slice = editor.state.doc.cut(from, to);
+      markdown = markdownStorage.serializer.serialize(slice) as string;
+    } catch {
+      showToast('Could not serialise selection.');
+      return;
+    }
+    if (!markdown.trim()) {
+      // Selection was structurally empty (e.g. just whitespace).
+      showToast('Selection is empty.');
+      return;
+    }
+
+    setSavingAsTemplate(true);
+    try {
+      const sourceNotePath = getNotePath!();
+      if (!sourceNotePath) {
+        showToast('Cannot save template: note path missing.');
+        return;
+      }
+      const dto = await templatesApi.createFromSelection(
+        vaultId!,
+        sourceNotePath,
+        markdown,
+      );
+      // Immediately refresh the slash-menu cache so the new
+      // template is usable in this and other open editors.
+      void refreshTemplates(vaultId!);
+      showToast(`Template saved: ${dto.name}`);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError ? e.message : 'Could not save template.';
+      showToast(msg, 5000);
+    } finally {
+      setSavingAsTemplate(false);
+    }
+  };
+
   // Pre-compute active states so each button can show its
   // pressed/depressed style. Read once per render — cheap.
   const isBold = editor.isActive('bold');
@@ -374,6 +471,17 @@ export function BubbleMenu({ editor }: BubbleMenuProps) {
       >
         🔗
       </button>
+      {showSaveAsTemplate && (
+        <button
+          type="button"
+          className="nc-bubble-button"
+          onClick={() => void handleSaveAsTemplate()}
+          disabled={savingAsTemplate}
+          title="Save selection as template"
+        >
+          {savingAsTemplate ? '⏳' : '📋'}
+        </button>
+      )}
     </div>
   );
 }

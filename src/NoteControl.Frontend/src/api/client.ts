@@ -509,6 +509,30 @@ export const templatesApi = {
 
     return (await response.json()) as AssetUploadResponse;
   },
+
+  /**
+   * POST /api/vaults/{id}/templates/from-selection
+   *
+   * Ship 98b: save a selection from a note as a new template.
+   * Server picks the auto-name (no client-side name negotiation),
+   * walks the markdown for image refs, copies referenced images
+   * from the source note's asset folder into the new template's
+   * own asset folder, and rewrites the markdown paths. Returns the
+   * created TemplateDto so the caller can show the chosen name in
+   * a toast.
+   */
+  createFromSelection: (
+    vaultId: string,
+    sourceNotePath: string,
+    markdown: string,
+  ) =>
+    request<TemplateDto>(
+      `/api/vaults/${vaultId}/templates/from-selection`,
+      {
+        method: 'POST',
+        body: { sourceNotePath, markdown },
+      },
+    ),
 };
 
 // ============================================================== DAILY NOTES
