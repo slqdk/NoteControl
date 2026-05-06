@@ -36,17 +36,43 @@ export function TemplatesPage() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [draft, setDraft] = useState<TemplateDto | null>(null);
 
-  // True when the draft has unsaved changes vs. the loaded template.
+  // The "loaded copy" — set when an existing template is fetched, so
+  // we can compare the live draft against it for dirty-tracking. For
+  // brand-new drafts this is null (there's nothing to compare against
+  // — see the dirty predicate below).
   const [originalForCompare, setOriginalForCompare] = useState<TemplateDto | null>(null);
+
+  // For new (unsaved) templates we don't have a loaded copy; we flip
+  // create-vs-update at save time based on this flag.
+  const [isNew, setIsNew] = useState(false);
+
+  // True when the Save/Create button should be enabled.
+  //
+  // Two cases, because new drafts and edits compare differently:
+  //
+  //   - New draft (isNew + originalForCompare === null):
+  //       enabled as soon as the name field is non-empty. The body
+  //       can be empty — an empty-body template is legal and the
+  //       server allows it. We deliberately don't require body
+  //       changes; "name is filled in" is the user-meaningful
+  //       trigger for "ready to create".
+  //
+  //   - Existing template (isNew=false, originalForCompare set):
+  //       enabled only when the draft differs from the loaded copy
+  //       (rename or body edit). Saving an unchanged template is a
+  //       no-op we don't bother sending.
+  //
+  // Pre-fix (Ship 11a-fix10): the predicate required
+  // originalForCompare !== null in both branches, but startNew()
+  // sets it to null, so the button stayed disabled forever for new
+  // drafts. The split below restores the intended behaviour.
   const dirty =
     draft !== null &&
-    originalForCompare !== null &&
-    (draft.name !== originalForCompare.name ||
-      draft.body !== originalForCompare.body);
-
-  // For new (unsaved) templates we use a placeholder name and flip
-  // create-vs-update at save time.
-  const [isNew, setIsNew] = useState(false);
+    (isNew
+      ? draft.name.trim().length > 0
+      : originalForCompare !== null &&
+        (draft.name !== originalForCompare.name ||
+          draft.body !== originalForCompare.body));
 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
