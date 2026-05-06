@@ -521,6 +521,27 @@ public sealed class TemplateService : ITemplateService
             return (originalBody, false);
         }
 
+        // Normalize the caller-supplied folder paths once at entry.
+        //
+        // Why this matters (Ship 98c-fix2): the anti-traversal check
+        // below uses StartsWith to confirm a resolved source path
+        // sits under srcResolveFolder. That check is comparing two
+        // paths AS STRINGS — if one is normalised (all backslashes
+        // on Windows, no .. segments) and the other isn't, the
+        // comparison fails even when the paths refer to the same
+        // location. ResolveTemplatesFolderAsync builds its return
+        // value with Path.Combine on a constant containing literal
+        // forward-slashes ("notesapp/templates"), producing a mixed-
+        // separator string like "C:\NotesData\Vault\.notesapp/templates".
+        // Path.GetFullPath then normalises it to "C:\NotesData\Vault\.notesapp\templates",
+        // which is what the resolved source path looks like. Without
+        // this normalisation pass, the StartsWith check rejected
+        // every image as "outside the resolve folder" and the helper
+        // silently dropped them all — the bug behind Ship C's
+        // missing-image-on-insert symptom.
+        srcResolveFolder = Path.GetFullPath(srcResolveFolder);
+        destAssetsParent = Path.GetFullPath(destAssetsParent);
+
         var assetsFolderName = destBasename + AssetsFolderSuffix;
         var assetsAbsolute = Path.Combine(destAssetsParent, assetsFolderName);
         // Don't pre-create the folder — only do it lazily in
