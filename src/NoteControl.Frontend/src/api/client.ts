@@ -14,6 +14,7 @@ import type {
   UpdateNoteRequest,
   VaultDto,
 } from './types';
+import { recordApi } from '../util/debugRecorder';
 
 let csrfToken: string | null = null;
 
@@ -83,16 +84,32 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers['X-CSRF-Token'] = csrfToken;
   }
 
+  // Debug recorder: capture timing + result. The __ncTyped marker
+  // tells the global fetch patch (in util/debugRecorder.ts) to skip
+  // logging this call — we record it ourselves here with richer
+  // typed info.
+  const t0 = performance.now();
   const response = await fetch(path, {
     method,
     headers,
     credentials: 'include',
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    // @ts-expect-error — non-standard marker read by debug recorder
+    __ncTyped: true,
   });
 
   if (response.status === 401 && !options.skipAuthRedirect) {
     // Session expired or invalid. Clear CSRF and bounce.
     csrfToken = null;
+    recordApi({
+      method,
+      path,
+      body: options.body,
+      status: 401,
+      durationMs: Math.round(performance.now() - t0),
+      errorStatus: 401,
+      errorMessage: 'Not signed in.',
+    });
     onUnauthorized?.();
     throw new ApiError(401, null, 'Not signed in.');
   }
@@ -107,18 +124,38 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       // Body wasn't JSON — fall through to the fallback message.
     }
-    throw new ApiError(
-      response.status,
-      problem,
-      `Request failed: ${response.status} ${response.statusText}`,
-    );
+    const errMsg = `Request failed: ${response.status} ${response.statusText}`;
+    recordApi({
+      method,
+      path,
+      body: options.body,
+      status: response.status,
+      durationMs: Math.round(performance.now() - t0),
+      errorStatus: response.status,
+      errorMessage: problem?.detail || problem?.title || errMsg,
+    });
+    throw new ApiError(response.status, problem, errMsg);
   }
 
   if (response.status === 204) {
+    recordApi({
+      method,
+      path,
+      body: options.body,
+      status: 204,
+      durationMs: Math.round(performance.now() - t0),
+    });
     return null as T;
   }
 
   const text = await response.text();
+  recordApi({
+    method,
+    path,
+    body: options.body,
+    status: response.status,
+    durationMs: Math.round(performance.now() - t0),
+  });
   if (text.length === 0) {
     return null as T;
   }
