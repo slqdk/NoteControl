@@ -256,11 +256,103 @@ export const notesApi = {
    * this URL and the cookie auth + Content-Disposition combine to
    * trigger a Save dialog with the right filename.
    *
-   * format defaults to 'docx'. 'pdf' is accepted by the server but
-   * currently returns 501 (see step 15 — pdf export deferred).
+   * Two formats:
+   *   - 'docx' (default) → Word document via the rich-conversion
+   *     pipeline (callouts, tables, embedded images).
+   *   - 'md' → zip containing the note's .md plus its .assets/
+   *     folder if it has one. Round-trips through the import
+   *     endpoint with image references intact.
+   *
+   * 'pdf' was supported as a placeholder (server returned 501) but
+   * was dropped from the UI; the export menu now exposes .docx and
+   * .md only.
    */
-  exportUrl: (vaultId: string, notePath: string, format: 'docx' | 'pdf' = 'docx') =>
+  exportUrl: (vaultId: string, notePath: string, format: 'docx' | 'md' = 'docx') =>
     `/api/vaults/${vaultId}/note/export?path=${encodeURIComponent(notePath)}&format=${format}`,
+
+  /**
+   * POST /api/vaults/{id}/import (multipart/form-data)
+   *
+   * Imports either a single .md file or a .zip of .md + asset
+   * files into the given target folder. The server resolves
+   * conflicts by appending a numeric suffix (Foo.md → Foo (2).md)
+   * — same convention as asset-upload collisions. Per-entry
+   * failures inside a zip surface as "failed" rows in the result;
+   * the whole batch never aborts on one bad file.
+   *
+   * Bypasses the shared request() helper for the same reason
+   * assetsApi.upload does — multipart boundaries must come from
+   * the browser, not a hand-set Content-Type header.
+   */
+  async import(
+    vaultId: string,
+    file: File,
+    targetFolder: string,
+  ): Promise<ImportNoteResult> {
+    const form = new FormData();
+    form.append('targetFolder', targetFolder);
+    form.append('file', file, file.name);
+
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+
+    const response = await fetch(`/api/vaults/${vaultId}/import`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: form,
+    });
+
+    if (!response.ok) {
+      let problem: ProblemDetails | null = null;
+      try {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('json')) {
+          problem = (await response.json()) as ProblemDetails;
+        }
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(
+        response.status,
+        problem,
+        `Import failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as ImportNoteResult;
+  },
+};
+
+/**
+ * Per-entry outcome shape from POST /import. Mirrors the C#
+ * ImportNoteEntry record. Outcome values:
+ *   - "created"  the file was written at finalPath
+ *   - "renamed"  the requested path collided; finalPath has a
+ *                numeric suffix (e.g. "Foo (2).md")
+ *   - "skipped"  zip contained an entry we don't import
+ *                (non-.md outside any *.assets/ folder)
+ *   - "failed"   the write attempt threw; errorMessage has detail
+ */
+export interface ImportNoteEntry {
+  requestedPath: string;
+  finalPath: string;
+  outcome: 'created' | 'renamed' | 'skipped' | 'failed';
+  errorMessage: string | null;
+}
+
+/** Mirrors C# ImportNoteResult. */
+export interface ImportNoteResult {
+  created: number;
+  renamed: number;
+  skipped: number;
+  failed: number;
+  entries: ImportNoteEntry[];
 };
 
 // ============================================================== ASSETS

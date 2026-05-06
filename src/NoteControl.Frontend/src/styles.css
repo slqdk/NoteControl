@@ -608,6 +608,183 @@ body.nc-dragging * {
   gap: 2px;
 }
 
+/* ----------------------------------------------------------------
+   Import dropdown (desktop only).
+
+   The wrap is a positioning anchor for the absolutely-positioned
+   menu, and groups the chevron with its (currently invisible)
+   busy/modal siblings without leaking flex gaps onto them.
+
+   The chevron itself is a sibling of the rail-header buttons but
+   sits TIGHT against the 📄+ that precedes it — the negative
+   margin pulls it back over the parent's gap so the pair reads
+   as one widget.
+   ---------------------------------------------------------------- */
+.nc-rail-import-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.nc-rail-import-chev {
+  /* Pull tight against the preceding 📄+. The header-actions
+     parent has gap:2px; we counteract it here. */
+  margin-left: -2px;
+  padding: 0 4px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.nc-rail-import-chev:hover {
+  opacity: 1;
+}
+
+.nc-rail-import-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  padding: 4px;
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.nc-rail-import-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-rail-import-menu-item:hover {
+  background: var(--nc-accent-bg-soft);
+}
+.nc-rail-import-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.nc-rail-import-menu-target {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-rail-import-busy {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+
+/* ----------------------------------------------------------------
+   Import-result modal.
+
+   Lightweight one-off — no shared modal helper exists in the
+   codebase yet, so we keep these rules co-located with the
+   import widget that owns them.
+
+   The list shows per-file outcomes; each row colour-codes its
+   left edge by outcome (green=created, amber=renamed, grey=
+   skipped, red=failed). The badge is a small monospace glyph so
+   a long renamed-path row still aligns vertically.
+   ---------------------------------------------------------------- */
+.nc-import-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.nc-import-modal {
+  width: min(640px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+}
+.nc-import-modal-title {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+}
+.nc-import-modal-summary {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+}
+.nc-import-modal-error {
+  margin: 0 0 16px 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: var(--nc-accent-bg-soft);
+  border-radius: var(--nc-radius-sm);
+}
+.nc-import-modal-list {
+  flex: 1 1 auto;
+  margin: 0 0 12px 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  font-size: 12px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+}
+.nc-import-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nc-import-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--nc-border);
+  word-break: break-all;
+}
+.nc-import-entry:last-child {
+  border-bottom: 0;
+}
+.nc-import-entry-created  { border-left-color: #16a34a; }
+.nc-import-entry-renamed  { border-left-color: #ca8a04; }
+.nc-import-entry-skipped  { border-left-color: #94a3b8; }
+.nc-import-entry-failed   { border-left-color: #dc2626; }
+
+.nc-import-entry-outcome {
+  flex: 0 0 auto;
+  width: 14px;
+  font-family: var(--nc-font-mono, monospace);
+  text-align: center;
+  color: var(--nc-fg-muted);
+}
+.nc-import-entry-paths {
+  flex: 1 1 auto;
+  font-family: var(--nc-font-mono, monospace);
+}
+.nc-import-entry-arrow {
+  color: var(--nc-fg-muted);
+}
+.nc-import-entry-error {
+  color: var(--nc-fg-muted);
+  font-style: italic;
+}
+
 /* Inline rename row — same styling as the new-folder row. */
 .nc-tree-renaming {
   cursor: default;

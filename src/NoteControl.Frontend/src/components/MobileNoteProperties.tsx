@@ -339,9 +339,12 @@ export function MobileNoteProperties({
                 <dd className="nc-props-mono nc-props-truncate">{note.etag}</dd>
               </dl>
 
-              {/* Export action lives in More since it's not a
-                  daily-use button. Mirrors the desktop link
-                  shape. */}
+              {/* Export actions live in More since they're not
+                  daily-use buttons. Mirror the desktop link shape.
+                  Two formats: .docx for sharing-with-Word, .md for
+                  round-trippable export (zip with the .md plus
+                  asset folder). Import is desktop-only and lives
+                  in the tree rail's note-add split button. */}
               <div className="nc-props-actions">
                 <a
                   className="nc-btn"
@@ -350,6 +353,14 @@ export function MobileNoteProperties({
                   title="Download this note as a Word document (.docx)"
                 >
                   📄 Export as .docx
+                </a>
+                <a
+                  className="nc-btn"
+                  href={notesApi.exportUrl(vaultId, notePath, 'md')}
+                  download
+                  title="Download a zip containing this note's .md file plus its assets folder (if any)."
+                >
+                  📥 Export as .md
                 </a>
               </div>
             </>

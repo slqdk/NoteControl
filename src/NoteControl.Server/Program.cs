@@ -255,6 +255,13 @@ try
     // the scoped ServerDbContext for vault root resolution.
     builder.Services.AddScoped<NoteControl.Server.Notes.Export.INoteExportService,
         NoteControl.Server.Notes.Export.NoteExportService>();
+    // Markdown export (zip with .md + .assets/). Same scoping rationale.
+    builder.Services.AddScoped<NoteControl.Server.Notes.Export.INoteMdExportService,
+        NoteControl.Server.Notes.Export.NoteMdExportService>();
+    // Note import (single .md or .zip). Scoped — depends on the same
+    // db/path resolvers and on the indexer.
+    builder.Services.AddScoped<NoteControl.Server.Notes.Import.INoteImportService,
+        NoteControl.Server.Notes.Import.NoteImportService>();
 
     // Folder services. Scoped because FolderService depends on the
     // scoped ServerDbContext (vault root lookup).
@@ -597,6 +604,7 @@ try
     app.MapVaultEndpoints();
     app.MapNoteEndpoints();
     app.MapNoteExportEndpoints();
+    app.MapNoteImportEndpoints();
     app.MapFolderEndpoints();
     app.MapSearchEndpoints();
     app.MapFolderRecursiveEndpoints();

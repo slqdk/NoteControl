@@ -411,8 +411,11 @@ export function PropertiesPanel({
           confirmation prompt, API call, tree refresh, and URL
           navigation; we just dispatch.
 
-          The .pdf button is disabled for now — pdf export is
-          deferred to a future ship.
+          Export buttons: .docx (rich-conversion docx with embedded
+          images) and .md (zip with the .md plus its .assets/ folder
+          if any). The .md zip is the round-trippable format — re-
+          import via the rail's Import action and references stay
+          intact.
         */}
         {selection && (
           (selection.kind === 'note' && !!note) ||
@@ -429,14 +432,14 @@ export function PropertiesPanel({
                 >
                   📄 Export as .docx
                 </a>
-                <button
-                  type="button"
+                <a
                   className="nc-btn"
-                  disabled
-                  title="PDF export coming next"
+                  href={notesApi.exportUrl(vaultId, selection.path, 'md')}
+                  download
+                  title="Download a zip containing this note's .md file plus its assets folder (if any). Round-trips via Import."
                 >
-                  📑 Export as .pdf
-                </button>
+                  📥 Export as .md
+                </a>
               </>
             )}
             {showMoveButton && (

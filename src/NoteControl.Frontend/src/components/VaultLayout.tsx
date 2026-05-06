@@ -15,6 +15,7 @@ import { TreeContextMenu } from './TreeContextMenu';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ResizableRail } from './ResizableRail';
 import { ToggleRailButtons } from './ToggleRailButtons';
+import { ImportNoteSplitButton } from './ImportNoteSplitButton';
 import {
   useTreeData,
   useRailLayout,
@@ -853,6 +854,29 @@ export function VaultLayout() {
       >
         📄+
       </button>
+      {/*
+        Ship: import dropdown lives between 📄+ and 📁+ as a small
+        chevron — same visual weight as its siblings. Renders only
+        on desktop; mobile keeps the rail-action row tight and
+        import is a desktop-first workflow.
+
+        On success the callback refreshes the tree at the target
+        folder and (if the target was collapsed) expands it so the
+        imported files are visible without further clicks.
+      */}
+      {!isMobile && (
+        <ImportNoteSplitButton
+          vaultId={vaultId}
+          targetFolder={toolbarParent}
+          targetLabel={toolbarParentLabel}
+          onImported={(target) => {
+            void treeData.refresh(target);
+            if (target !== '' && !treeData.expanded.has(target)) {
+              treeData.toggle(target);
+            }
+          }}
+        />
+      )}
       <button
         type="button"
         className="nc-rail-header-button"

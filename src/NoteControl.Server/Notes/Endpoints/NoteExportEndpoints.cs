@@ -7,17 +7,27 @@ namespace NoteControl.Server.Notes.Endpoints;
 
 /// <summary>
 /// /api/vaults/{vaultId}/note/export — exports one note as a binary
-/// file the browser downloads via Save dialog. Currently only docx
-/// is implemented; the pdf branch returns 501 as a placeholder so
-/// the frontend can detect it and disable the corresponding button.
+/// file the browser downloads via Save dialog. Two formats today:
+/// <list type="bullet">
+///   <item><c>format=docx</c> (default) — Word document via the
+///     existing rich-conversion pipeline (callouts, tables,
+///     embedded images).</item>
+///   <item><c>format=md</c> — zip containing the note's .md file
+///     plus its <c>{basename}.assets/</c> folder if present, so a
+///     subsequent import round-trips with image references intact.</item>
+/// </list>
+/// The <c>pdf</c> branch returns 501 as a placeholder; the frontend
+/// dropped its PDF button in this ship and exposes Markdown export
+/// in its place, but anyone hitting the URL directly with format=pdf
+/// still gets a clear 501 rather than a 500 or generic 400.
 /// </summary>
 public static class NoteExportEndpoints
 {
     public static IEndpointRouteBuilder MapNoteExportEndpoints(this IEndpointRouteBuilder app)
     {
-        // Viewer role is sufficient — exporting is read-shaped. A
-        // viewer with read access has every right to take content
-        // out, same as copy-paste from the editor.
+        // Viewer role is sufficient for both formats — exporting is
+        // read-shaped. A viewer with read access has every right to
+        // take content out, same as copy-paste from the editor.
         app.MapGet("/api/vaults/{vaultId:guid}/note/export", ExportAsync)
             .RequireVault(VaultService.RoleViewer);
 
@@ -28,7 +38,8 @@ public static class NoteExportEndpoints
         Guid vaultId,
         string path,
         string? format,
-        INoteExportService export,
+        INoteExportService docxExport,
+        INoteMdExportService mdExport,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -38,26 +49,47 @@ public static class NoteExportEndpoints
 
         var fmt = (format ?? "docx").Trim().ToLowerInvariant();
 
+        // ---- markdown zip ---------------------------------------------
+        if (fmt == "md")
+        {
+            try
+            {
+                var result = await mdExport.ExportMarkdownZipAsync(vaultId, path, ct);
+                var fileName = SanitiseFileName(result.BaseFileName) + ".zip";
+
+                // application/zip is the registered MIME for zips.
+                // Some browsers fall back to octet-stream regardless;
+                // the explicit type at least gives them a chance.
+                return Results.File(
+                    fileContents: result.Bytes,
+                    contentType: "application/zip",
+                    fileDownloadName: fileName);
+            }
+            catch (NoteException ex)
+            {
+                return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+            }
+        }
+
+        // ---- pdf placeholder ------------------------------------------
         if (fmt == "pdf")
         {
-            // Placeholder — the panel disables this button, but
-            // anyone hitting the URL directly should get a clear
-            // 501 rather than a 500.
             return Results.Problem(
                 statusCode: 501,
                 title: "PDF export is not yet implemented.");
         }
 
+        // ---- docx (default) -------------------------------------------
         if (fmt != "docx")
         {
             return Results.Problem(
                 statusCode: 400,
-                title: $"Unsupported format '{fmt}'. Use 'docx'.");
+                title: $"Unsupported format '{fmt}'. Use 'docx' or 'md'.");
         }
 
         try
         {
-            var result = await export.ExportDocxAsync(vaultId, path, ct);
+            var result = await docxExport.ExportDocxAsync(vaultId, path, ct);
             var fileName = SanitiseFileName(result.BaseFileName) + ".docx";
 
             // Results.File with fileDownloadName produces a proper
