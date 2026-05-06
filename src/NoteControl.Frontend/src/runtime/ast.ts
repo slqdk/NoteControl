@@ -108,6 +108,11 @@ export interface VarRefExpr {
   name: string;
   nameLower: string;
   line: number;
+  /** 1-indexed column of the identifier's first character.
+   *  Carried only on VarRefExpr (and not other nodes) because
+   *  the inline-pill renderer is the sole consumer — pills only
+   *  appear next to variable references. */
+  column: number;
 }
 
 /** NOT, unary minus, unary plus. */

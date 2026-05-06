@@ -42,10 +42,9 @@
  * Modal scrim and shell.
  *
  * Layered above the editor (z-index 1500 — above .nc-import-modal-
- * backdrop's 1000 so a runtime modal opened ON TOP of an import
- * dialog wins, though that combination shouldn't actually happen
- * in normal use). The shell is wider than the import modal so the
- * declaration / implementation panes have room to breathe.
+ * backdrop's 1000). The shell narrowed from Ship A's 1100px to
+ * 900px because the watch panel is gone and the code area
+ * shouldn't stretch to a full ultrawide width.
  * ---------------------------------------------------------------- */
 .nc-runtime-modal-backdrop {
   position: fixed;
@@ -59,7 +58,7 @@
 }
 
 .nc-runtime-modal {
-  width: min(1100px, 100%);
+  width: min(900px, 100%);
   max-height: 88vh;
   display: flex;
   flex-direction: column;
@@ -118,6 +117,11 @@
   border: 1px solid rgba(220, 38, 38, 0.32);
   border-radius: var(--nc-radius-sm);
   white-space: pre-wrap;
+}
+.nc-runtime-modal-error-hint {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-style: italic;
 }
 
 /* ----------------------------------------------------------------
@@ -181,31 +185,17 @@
 }
 
 /* ----------------------------------------------------------------
- * Body grid — code panes on the left, watch panel on the right.
- * Vertical layout on narrow viewports (the modal stays usable on
- * a sub-1000px monitor).
+ * Body — vertical stack of declaration pane on top, implementation
+ * pane below. Watch panel is gone in Ship B (inline pills replace it).
  * ---------------------------------------------------------------- */
 .nc-runtime-modal-body {
   flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: 1fr 320px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 12px 16px;
   overflow: hidden;
   min-height: 300px;
-}
-@media (max-width: 800px) {
-  .nc-runtime-modal-body {
-    grid-template-columns: 1fr;
-  }
-}
-
-.nc-runtime-modal-code {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: auto;
-  min-height: 0;
 }
 
 .nc-runtime-modal-pane {
@@ -215,6 +205,7 @@
   border-radius: var(--nc-radius);
   overflow: hidden;
   background: var(--nc-bg-elev);
+  min-height: 0;
 }
 
 .nc-runtime-modal-pane-title {
@@ -245,71 +236,100 @@
 }
 
 /* ----------------------------------------------------------------
- * Watch panel — variable list with type and value.
+ * Inline source — implementation pane with value pills.
+ *
+ * Each line is its own row containing a small line-number gutter
+ * and the content. Whitespace inside the content span is
+ * preserved (white-space: pre) so original indentation is kept
+ * up until the first inline pill — after which the line shifts
+ * right by the pill's width (the trade-off we picked for parity
+ * with TwinCAT's online view).
  * ---------------------------------------------------------------- */
-.nc-runtime-modal-watch {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--nc-border);
-  border-radius: var(--nc-radius);
-  overflow: hidden;
-  background: var(--nc-bg-elev);
-  min-height: 0;
-}
-.nc-runtime-modal-watch-table {
-  flex: 1 1 auto;
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 12px;
-  overflow-y: auto;
-}
-.nc-runtime-modal-watch-table th,
-.nc-runtime-modal-watch-table td {
-  padding: 4px 8px;
-  text-align: left;
-  border-bottom: 1px solid var(--nc-border);
-  vertical-align: top;
-}
-.nc-runtime-modal-watch-table th {
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--nc-fg-muted);
-  background: var(--nc-bg-elev);
-  position: sticky;
-  top: 0;
-}
-.nc-runtime-modal-watch-name {
+.nc-runtime-inline-source {
+  margin: 0;
+  padding: 8px 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--nc-fg);
-}
-.nc-runtime-modal-watch-type {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--nc-fg-muted);
-  font-size: 11px;
-}
-.nc-runtime-modal-watch-value {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--nc-accent);
-}
-.nc-runtime-modal-watch-marker {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-family: inherit;
-  color: var(--nc-fg-muted);
-  background: var(--nc-bg-elev-2);
-  border: 1px solid var(--nc-border);
-  border-radius: 3px;
-}
-.nc-runtime-modal-watch-empty {
-  padding: 12px;
   font-size: 13px;
+  line-height: 1.6;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  overflow-x: auto;
+}
+.nc-runtime-inline-line {
+  display: flex;
+  align-items: baseline;
+  padding: 0 12px;
+  /* Subtle row to give the line-number gutter a visual edge. */
+  border-left: 2px solid transparent;
+}
+.nc-runtime-inline-line-err {
+  border-left-color: rgba(220, 38, 38, 0.7);
+  background: rgba(220, 38, 38, 0.06);
+}
+.nc-runtime-inline-gutter {
+  flex: 0 0 auto;
+  width: 28px;
   color: var(--nc-fg-muted);
+  font-size: 11px;
+  user-select: none;
+  text-align: right;
+  padding-right: 8px;
+}
+.nc-runtime-inline-content {
+  flex: 1 1 auto;
+  white-space: pre;
+  /* No wrap — long lines scroll horizontally with the parent. */
 }
 
 /* ----------------------------------------------------------------
- * Footer — note about Ship A scope.
+ * Pills.
+ *
+ * Default (numeric / time / string): subtle border-only style
+ * with a slightly lifted background. Tight padding so they sit
+ * inline without ballooning the line height.
+ *
+ * BOOL: TwinCAT-style fills.
+ *   - TRUE  → solid blue background, white text
+ *   - FALSE → soft grey background, muted foreground
+ * ---------------------------------------------------------------- */
+.nc-runtime-pill {
+  display: inline-block;
+  margin: 0 0 0 4px;
+  padding: 0 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--nc-fg);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border-strong);
+  border-radius: 3px;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.nc-runtime-pill-bool {
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.nc-runtime-pill-bool-true {
+  color: #ffffff;
+  background: #2563eb; /* nc-accent (blue) */
+}
+.nc-runtime-pill-bool-false {
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border);
+}
+
+.nc-runtime-pill-missing {
+  color: #ffffff;
+  background: rgba(220, 38, 38, 0.85);
+  border-color: rgba(220, 38, 38, 0.85);
+}
+
+/* ----------------------------------------------------------------
+ * Footer — note about scope.
  * ---------------------------------------------------------------- */
 .nc-runtime-modal-footer {
   padding: 8px 16px;

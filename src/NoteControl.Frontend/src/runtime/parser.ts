@@ -328,6 +328,7 @@ class Parser {
           name: t.value,
           nameLower: t.value.toLowerCase(),
           line: t.line,
+          column: t.column,
         };
         this.consume(); // IDENT
         this.consume(); // :=
@@ -516,6 +517,7 @@ class Parser {
         name: varTok.value,
         nameLower: varTok.value.toLowerCase(),
         line: varTok.line,
+        column: varTok.column,
       },
       start: startExpr,
       end: endExpr,
@@ -755,6 +757,7 @@ class Parser {
         name: t.value,
         nameLower: t.value.toLowerCase(),
         line: t.line,
+        column: t.column,
       };
     }
     if (t.kind === 'PUNCT' && t.value === '(') {
