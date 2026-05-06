@@ -64,8 +64,9 @@ The top bar contains, left to right:
    shared layout.
 4. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-5. **Account menu** — current user's name, with a popover menu
-   (Account, My sessions, Settings, Sign out).
+5. **Account menu** — 👤 button with a popover showing the
+   username, Sign out, and (for admins) debug recording controls.
+   See [Account menu](#account-menu) below.
 
 ## Settings (web UI, not the tray)
 
@@ -333,15 +334,103 @@ are in [notes.md](notes.md).
 
 ## Account menu
 
-A small popover triggered from the user's name in the topbar.
-Items:
+A small popover triggered from the 👤 button in the topbar.
+Items, top to bottom:
 
-- **Account** — change own password, change email.
-- **My sessions** — list of own active sessions, with revoke
-  buttons.
-- **Settings** — opens the appearance/notes/tree settings panel.
+- **Username** (small, muted, non-interactive) — the calling
+  user's name as a header for the popover.
+- **Debug recording: ON/OFF** *(admin only)* — toggles the
+  frontend debug recorder. See [debug recorder](#debug-recorder)
+  below.
+- **View log (N)** *(admin only)* — opens the debug log viewer
+  overlay. The count is the current number of captured entries.
 - **Sign out** — POSTs `/api/auth/logout`, clears in-memory
   state, navigates to `/login`.
+
+Non-admin users see only the username and Sign out.
+
+Open/close behaviour: click the button to toggle; click outside
+or press Escape to close. Toggling Debug recording does NOT
+close the menu (so the user can flip it on and immediately go
+to View log without re-opening). Opening the log viewer DOES
+close the menu (the viewer is a full-page overlay).
+
+## Debug recorder
+
+An admin-only diagnostic tool that captures a rolling buffer of
+frontend events, intended for reproducing "weird things"
+(actions that don't fire, images that fail to load, etc.) and
+sharing the trace for analysis.
+
+Recording is **off by default** and lives entirely in
+**in-memory state, per browser tab**. There is no localStorage
+persistence — closing or reloading the tab clears the buffer.
+The buffer is a ring of up to **500 entries**; once full,
+oldest entries are dropped.
+
+### What's captured
+
+Each entry has a kind, a relative timestamp (ms since recording
+started), and a payload:
+
+- **`api`** — calls through the typed API client. Method, path,
+  request body, response status, duration, and parsed error
+  detail on failure. Bodies are truncated at ~2 KB with a
+  visible `…[truncated]` marker.
+- **`fetch`** — direct `fetch()` calls outside the typed
+  wrapper (multipart uploads for note import and asset upload).
+- **`console`** — calls to `console.error` and `console.warn`,
+  including arguments.
+- **`click`** — every `pointerdown` at document level. Records
+  a CSS-ish descriptor of the closest interactive ancestor
+  (button / link / `[role="button"]` / `[role="menuitem"]`),
+  including its text. Useful for confirming a click registered
+  even when no handler ran.
+- **`nav`** — route changes via `pushState` / `replaceState` /
+  `popstate`.
+- **`image`** — `<img>` element error events (failed asset
+  loads). Records the resolved `src`.
+- **`error`** — uncaught window errors and unhandled promise
+  rejections, with stack traces.
+- **`mark`** — synthesised entries when recording starts and
+  stops, so the boundaries of a recording session are visible.
+
+### Log viewer
+
+Opened from the Account menu's **View log** item. A full-page
+overlay with:
+
+- A header showing recording state (`● Recording` / `○ Stopped`)
+  and the entry count.
+- Action buttons: **Start/Stop**, **Clear**, **Copy JSON**,
+  **Close**.
+- A list of entries (oldest at top), each as a click-to-expand
+  row with `+Nms | kind | summary`. Expanding shows the full
+  JSON payload.
+- A notice line reminding the user that captured request bodies
+  may include note content.
+
+**Copy JSON** writes the full log (entries + URL + user agent +
+viewport size + capture timestamp) to the clipboard. Falls back
+to `document.execCommand('copy')` on plain HTTP (where
+`navigator.clipboard.writeText` is unavailable). Dismissing the
+viewer (Close, Escape, or clicking the backdrop) does NOT stop
+recording.
+
+### Caveats
+
+- **Admin gating is UI-only**. The recorder is also accessible
+  via `window.__ncDebug.{start,stop,clear,getEntries,toJson}()`
+  from the browser console regardless of role. This is by
+  design — the recorder doesn't grant any new access; it
+  records traffic the user could already see in DevTools'
+  Network and Console tabs.
+- **Captured bodies may be sensitive.** Saving a note while
+  recording puts that note's content in the buffer until
+  Clear, Stop, or tab reload. The viewer surfaces a warning;
+  treat exported logs accordingly.
+- **The buffer is per-tab**. Multiple tabs each have their own
+  independent recorder.
 
 ## Keyboard shortcuts
 
