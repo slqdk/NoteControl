@@ -126,7 +126,10 @@ block-insertion shortcuts. Items shown in order:
 4. **Heading 3**
 5. **Bullet list**
 6. **Numbered list**
-7. **Code block**
+7. **Code block** (inserts a paragraph header plus paired
+   `Declaration` and `Implementation` ST code blocks — the
+   same shape the PLCOpen XML import produces, runtime-ready
+   for the **Run ▶** button on the Implementation block)
 8. **Quote**
 9. **Divider**
 10. **Table** (3×3 with header)
