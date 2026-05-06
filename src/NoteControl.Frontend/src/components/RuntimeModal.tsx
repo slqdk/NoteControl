@@ -125,7 +125,11 @@ function reducer(state: UiState, action: Action): UiState {
 const INITIAL: UiState = {
   mode: 'paused',
   scanCount: 0,
-  cycleMs: 100,
+  // 10ms default — matches the typical TwinCAT task cycle and
+  // makes counters/timers feel responsive on first Run. Users can
+  // dial it slower from the Cycle dropdown when they want to watch
+  // the scan progress step by step.
+  cycleMs: 10,
   errorMessage: null,
   errorLine: null,
   envVersion: 0,

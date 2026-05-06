@@ -290,10 +290,11 @@
  *
  * BOOL: TwinCAT-style fills.
  *   - TRUE  → solid blue background, white text
- *   - FALSE → black text on the same warm base background as
- *             non-BOOL pills (matches TwinCAT's online view, where
- *             every live-value pill sits in a shared cream colour
- *             and FALSE just stays in plain text on it).
+ *   - FALSE → solid black background, white text. Stronger
+ *             contrast than the earlier "black text on cream"
+ *             treatment — FALSE pills now read as clearly as
+ *             TRUE pills do, just on the opposite end of the
+ *             contrast scale.
  * ---------------------------------------------------------------- */
 .nc-runtime-pill {
   display: inline-block;
@@ -323,12 +324,12 @@
   border-color: #2563eb;
 }
 .nc-runtime-pill-bool-false {
-  /* Black text on the base cream background — same surface the
-   * non-BOOL pills use. The earlier "muted grey" treatment made
-   * FALSE feel disabled, which read poorly when scanning a busy
-   * implementation. */
-  color: #1a1a1a;
-  /* Inherits the base pill background + border from .nc-runtime-pill. */
+  /* White text on solid black. Reversed-out from TRUE so a
+   * page of mostly-FALSE pills still reads at a glance and
+   * doesn't compete visually with the cream non-BOOL pills. */
+  color: #ffffff;
+  background: #1a1a1a;
+  border-color: #1a1a1a;
 }
 
 .nc-runtime-pill-missing {
