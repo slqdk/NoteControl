@@ -2,6 +2,7 @@ import type { Editor, Range } from '@tiptap/core';
 import { Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi, templatesApi } from '../api/client';
+import { parsePlcopenXml, type PlcopenPou } from './plcopenImport';
 import { getCachedTemplates } from './templateCache';
 
 /**
@@ -81,6 +82,85 @@ export interface SlashMenuContext {
   allowImages?: boolean;
   allowTemplates?: boolean;
   templateName?: string;
+}
+
+/**
+ * Insert one or more PLCOpen POUs at the current selection.
+ * Per POU we emit, in order:
+ *
+ *   - A paragraph header in the form **<name>** (<pouType>) — this
+ *     is just a styled paragraph rather than a Heading because an
+ *     imported POU is body content, not a top-level section. Users
+ *     can promote it to a heading themselves if they want.
+ *   - A code block with title "Declaration", language "st",
+ *     containing the declaration text.
+ *   - A code block with title "Implementation", language "st",
+ *     containing the implementation text.
+ *
+ * Between consecutive POUs we drop an empty paragraph so they're
+ * visually separated. After the last POU we also drop an empty
+ * paragraph and place the cursor in it — same finishing touch
+ * the regular slash items use via insertTrailingParagraph.
+ *
+ * The whole insertion goes through one editor.chain().insertContent()
+ * call so it's a single undo step. Building the prosemirror JSON
+ * directly (rather than chaining toggleCodeBlock + setNode etc.)
+ * keeps the title / language attributes on each code block from
+ * leaking onto the next one.
+ */
+function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
+  if (pous.length === 0) return;
+
+  type Json = Record<string, unknown>;
+  const content: Json[] = [];
+
+  pous.forEach((pou, index) => {
+    if (index > 0) {
+      content.push({ type: 'paragraph' });
+    }
+
+    // Header paragraph: bold POU name, optional pouType in parens.
+    const headerInline: Json[] = [
+      {
+        type: 'text',
+        marks: [{ type: 'bold' }],
+        text: pou.name,
+      },
+    ];
+    if (pou.pouType) {
+      headerInline.push({ type: 'text', text: ` (${pou.pouType})` });
+    }
+    content.push({ type: 'paragraph', content: headerInline });
+
+    // Declaration code block.
+    content.push(codeBlockNode('Declaration', pou.declaration));
+
+    // Implementation code block.
+    content.push(codeBlockNode('Implementation', pou.implementation));
+  });
+
+  // Trailing paragraph so the cursor lands on a fresh line and
+  // the user can immediately keep writing.
+  content.push({ type: 'paragraph' });
+
+  editor.chain().focus().insertContent(content).run();
+}
+
+/**
+ * Build a prosemirror JSON node for a code block with the given
+ * title and ST source. Empty source becomes a code block with no
+ * inner text content (which prosemirror renders as an empty
+ * editable code area — fine).
+ */
+function codeBlockNode(title: string, source: string): Record<string, unknown> {
+  const node: Record<string, unknown> = {
+    type: 'codeBlock',
+    attrs: { title, language: 'st' },
+  };
+  if (source.length > 0) {
+    node.content = [{ type: 'text', text: source }];
+  }
+  return node;
 }
 
 /**
@@ -431,6 +511,102 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
       },
     });
   }
+
+  // --- PLCOpen XML import ----------------------------------------
+  // Import a PLCOpen XML file (typically a TwinCAT 3 PLCopenXML
+  // export of a single POU) and insert each POU as a paragraph
+  // header followed by two code blocks — Declaration (the
+  // PROGRAM/VAR/END_VAR area) and Implementation (the body).
+  //
+  // Both blocks use language=st so the existing Structured Text
+  // highlighter colours them. Titles "Declaration" and
+  // "Implementation" carry through the markdown round-trip
+  // because the code block extension serialises non-default
+  // titles as raw <pre data-title="..."> HTML.
+  //
+  // No allow-flag gate — this is not asset-bound, works in both
+  // the note editor and the template editor. (Templates can't
+  // host live runtime state, but a *static* declaration+body pair
+  // is just text — perfectly fine to keep in a template body.)
+  items.push({
+    title: 'PLCOpen XML',
+    subtitle: 'Import a TwinCAT 3 PLCopenXML export as code blocks',
+    icon: 'PLC',
+    keywords: ['plc', 'plcopen', 'twincat', 'st', 'xml', 'import'],
+    command: ({ editor, range }) => {
+      // Strip the "/" trigger immediately so the editor isn't left
+      // with a stranded slash if the user cancels the file picker.
+      editor.chain().focus().deleteRange(range).run();
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.xml,application/xml,text/xml';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+
+      const cleanup = () => {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      };
+
+      input.addEventListener('change', async () => {
+        try {
+          const file = input.files?.[0];
+          if (!file) return;
+
+          let text: string;
+          try {
+            text = await file.text();
+          } catch (e) {
+            window.alert(
+              `Couldn't read the file: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            return;
+          }
+
+          let result;
+          try {
+            result = parsePlcopenXml(text);
+          } catch (e) {
+            window.alert(
+              `PLCOpen XML import failed.\n\n${e instanceof Error ? e.message : String(e)}`,
+            );
+            return;
+          }
+
+          insertPousAtSelection(editor, result.pous);
+
+          if (result.skippedNonST.length > 0) {
+            // Non-fatal — the ST POUs were imported. Tell the user
+            // about the ones we couldn't handle so they're not
+            // surprised by a partial import.
+            window.alert(
+              `Imported ${result.pous.length} POU(s). ` +
+                `Skipped ${result.skippedNonST.length} non-ST POU(s) ` +
+                `(LD/FBD/SFC are not supported): ${result.skippedNonST.join(', ')}`,
+            );
+          }
+        } finally {
+          cleanup();
+        }
+      });
+
+      // Same focus-back cleanup pattern as the Image item: if the
+      // user dismisses the picker without selecting anything, the
+      // change event never fires, so we tear down the hidden input
+      // a moment after the window regains focus.
+      const onFocusBack = () => {
+        window.removeEventListener('focus', onFocusBack);
+        setTimeout(() => {
+          if (!input.files || input.files.length === 0) {
+            cleanup();
+          }
+        }, 300);
+      };
+      window.addEventListener('focus', onFocusBack);
+
+      input.click();
+    },
+  });
 
   // --- Templates (dynamic submenu) -------------------------------
   //
