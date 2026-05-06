@@ -100,15 +100,17 @@ All under `/api/vaults/{vaultId}`.
 
 ## Templates
 
-All under `/api/vaults/{vaultId}/templates`.
+All under `/api/vaults/{vaultId}`.
 
 | Method | Path | Auth | Behaviour |
 |---|---|---|---|
 | GET | `/templates` | vault:viewer | List template names. |
 | GET | `/templates/{name}` | vault:viewer | Get one template's body. |
 | POST | `/templates` | vault:editor | Create a new template (name + body). |
-| PUT | `/templates/{name}` | vault:editor | Update an existing template's body or rename it. |
-| DELETE | `/templates/{name}` | vault:editor | Delete a template. |
+| POST | `/templates/from-selection` | vault:editor | Create a new template from a selection in a note. Body: `sourceNotePath`, `markdown`. Server picks the auto-name (`Template YYYY-MM-DD HHmm` in local time, suffixed on collision), copies any images referenced in the selection from the source note's asset folder into the new template's asset folder, rewrites image paths. Returns the created template. |
+| POST | `/templates/{name}/render?targetNotePath=` | vault:editor | Render a template's body for insertion into a target note. Copies any images from the template's asset folder into the target note's asset folder, rewrites paths, returns `{body}`. The slash-menu submenu calls this on every template insert. Side-effecting (writes to the target's asset folder), hence editor and not viewer. |
+| PUT | `/templates/{name}` | vault:editor | Update an existing template's body or rename it. Rename also moves the `<name>.assets/` folder and rewrites image refs in the body. |
+| DELETE | `/templates/{name}` | vault:editor | Delete a template. Also deletes the `<name>.assets/` folder. |
 
 A template named `Daily` is used as the body of newly-created
 daily notes.
@@ -136,7 +138,8 @@ All under `/api/vaults/{vaultId}`.
 | Method | Path | Auth | Behaviour |
 |---|---|---|---|
 | POST | `/note/asset` | vault:editor | Multipart upload. Form fields: `notePath`, file, optional `originalName`. Stores under the note's asset folder; returns the relative markdown path to insert. |
-| GET | `/asset?path=` | vault:viewer | Stream one asset by relative path. |
+| POST | `/template/asset` | vault:editor | Multipart upload for template assets. Form fields: `templateName`, file. Stores under `.notesapp/templates/<templateName>.assets/`. **Image-only** — server enforces `image/*` content types (PNG/JPEG/GIF/WebP/BMP/SVG); other types return 415. |
+| GET | `/asset?path=` | vault:viewer | Stream one asset by relative path. Accepts both note-asset paths (`<NoteName>.assets/<file>`) and template-asset paths (`.notesapp/templates/<TemplateName>.assets/<file>`). The path must contain a `.assets/` segment — that's the load-bearing safety rule. |
 
 ## Startpage
 
@@ -221,6 +224,8 @@ status codes used:
 - **404** — note/folder/vault/template/user not found.
 - **409** — conflict (creating a name that exists, concurrent
   backup running, etc.).
+- **413** — request body too large (asset upload exceeds size limit).
+- **415** — unsupported content type (e.g. non-image upload to `/template/asset`).
 - **423** — login locked out (per-account rate limit hit).
 - **429** — too many requests (per-IP rate limit hit).
 - **5xx** — uncaught exception. Logged with a correlation id;

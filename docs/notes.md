@@ -131,8 +131,9 @@ block-insertion shortcuts. Items shown in order:
 13. **Info callout**
 14. **Tip callout**
 15. **Note callout**
-16. **Image** (only outside the templates editor; opens a file
-    picker, uploads, inserts)
+16. **Image** (opens a file picker, uploads, inserts; in the
+    template editor this uploads to the template's own asset
+    folder rather than a note's)
 
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
@@ -141,9 +142,21 @@ infix.
 ### Bubble menu
 
 Selection in the editor floats a small toolbar with: bold,
-italic, link (text input), inline code. The link button uses
-the browser's `window.prompt` today (queue item: replace with a
-proper modal).
+italic, link (text input), inline code, and **Save selection
+as template** (📋, only in the note editor — the template
+editor doesn't show this button).
+
+The link button uses the browser's `window.prompt` today (queue
+item: replace with a proper modal).
+
+The Save-as-template button slices the current selection's
+markdown, posts it to the server, and shows a toast naming the
+new template. The server picks the name (`Template YYYY-MM-DD HHmm`
+in local time, suffixed with `(2)`, `(3)`, …  on collision) and
+copies any images referenced in the selection into the new
+template's asset folder, rewriting paths so the template is
+self-contained. The user renames the template afterwards in the
+templates page if they want a meaningful name.
 
 ### Paste
 
@@ -163,6 +176,11 @@ Asset paste requires a **secure context** (HTTPS or localhost)
 because `navigator.clipboard.read()` is gated on that. If
 you're on plain HTTP from a remote host, paste-image won't
 work; the user is told nothing — pre-existing limitation.
+
+Paste into the **template editor** (templates page) is not
+wired up — only the slash-menu Image item adds images to a
+template. Drag-and-drop into the template editor is also
+unhandled.
 
 Generated paste filenames: `paste-<unix-ms>-<index>.<ext>`.
 
@@ -240,8 +258,8 @@ template body if a `Daily.md` template exists in the vault.
 Templates are markdown files in `{vault}/.notesapp/templates/`.
 Each file is one template; the filename (minus `.md`) is the
 template name shown in the picker. Body is plain markdown,
-inserted verbatim at the cursor when the user picks the
-template from the slash menu.
+inserted at the cursor when the user picks the template from
+the slash menu.
 
 Templates are managed via the **Templates** page (separate
 route, not under the shared layout). Permissions: viewers can
@@ -252,15 +270,78 @@ the same template list.
 Special name: a template called `Daily` is used as the body
 for newly-created daily notes (see above).
 
+### Template assets
+
+A template can have its own sibling asset folder at
+`{vault}/.notesapp/templates/<TemplateName>.assets/` holding
+images embedded in the body. The convention mirrors note
+assets (`<NoteName>.assets/`); the template body references
+images by relative path (`<TemplateName>.assets/photo.png`)
+exactly as a note body does.
+
+Two paths put an image into a template's asset folder:
+
+- **Slash-menu Image** in the templates-page editor — opens a
+  file picker, uploads via `POST /template/asset`, inserts the
+  image at the cursor. Image-only by server policy (PNG / JPEG
+  / GIF / WebP / BMP / SVG); other content types return 415.
+- **Save selection as template** from a note's bubble menu —
+  the server copies any images referenced in the selection
+  from the source note's asset folder into the new template's
+  asset folder.
+
+Lifecycle:
+
+- **Rename** a template (PUT with a new name): the asset
+  folder renames in lockstep, and the body's image refs are
+  rewritten to point at the new folder name. Pre-Ship-98
+  templates without an asset folder are unaffected (no-op).
+- **Delete** a template: the asset folder is recursively
+  removed alongside the `.md` file. Best-effort — a locked
+  folder leaves an orphan that can be cleaned by hand.
+- **Edit** a template: the body markdown is loaded as-is and
+  edited in the templates page editor; the editor's src-rewriter
+  resolves image refs against `.notesapp/templates/` so the
+  images render correctly.
+
+### Inserting a template into a note
+
+When the user picks a template from the slash menu, the client
+calls `POST /templates/{name}/render?targetNotePath=...`. The
+server reads the template body, copies any images from the
+template's asset folder into the **target note's** asset
+folder (collision-safe), rewrites the markdown image paths,
+and returns the rewritten body. The client inserts that body
+at the cursor.
+
+This makes inserted content **self-contained**: the target
+note carries its own copies of the images. Deleting or
+renaming the source template later does not break the target
+note. The trade-off is image duplication — inserting the same
+template into N notes results in N copies of each image on
+disk.
+
+The render endpoint is called on every template insert (text-
+only or image-bearing), so the slash-menu submenu pick is
+asynchronous — there's a brief network roundtrip before the
+content appears. Cost is negligible for text-only templates.
+
+### Template editor restrictions
+
 The template editor is a stripped-down version of the note
 editor:
 
-- The slash menu has the **Image** item disabled (templates
-  have no asset folder).
 - The slash menu has the **Templates** submenu disabled
   (avoids template-of-template recursion in the picker).
+- The slash-menu **Image** item is enabled, but only after
+  the template has been saved at least once — a brand-new
+  unsaved draft has no on-disk template name, so there's
+  nowhere to upload to. The parent re-mounts the editor with
+  image support after the first save.
 - Otherwise behaves the same: callouts, code blocks, lists,
   tables, and so on are all available.
+- Drag-and-drop and clipboard paste of images are silently
+  ignored — only the slash-menu Image item adds images.
 
 ## Tree view
 

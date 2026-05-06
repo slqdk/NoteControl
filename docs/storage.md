@@ -39,6 +39,10 @@ it to `dev-data` (relative to the working directory).
 │   │   ├── index.db-wal
 │   │   ├── index.db-shm
 │   │   ├── templates/          ← {name}.md per template
+│   │   │   ├── Daily.md        ← e.g. seeds new daily notes
+│   │   │   ├── Meeting.md
+│   │   │   └── Meeting.assets/ ← per-template asset folder
+│   │   │       └── photo.png
 │   │   ├── trash/              ← deleted notes (vault-scoped)
 │   │   └── startpage.json      ← block layout for the startpage
 │   ├── My Note.md              ← markdown body + frontmatter
@@ -92,6 +96,7 @@ notes or folders called `.notesapp`.
 |---|---|
 | `.notesapp/index.db` | SQLite + FTS5 index of all notes in the vault. WAL mode. |
 | `.notesapp/templates/` | Each `*.md` file is one template. Filename without `.md` is the template name. A template called `Daily.md` is the body for new daily notes. |
+| `.notesapp/templates/<name>.assets/` | Per-template asset folder, sibling to the `.md` file. Same convention as note assets — see "Asset folders" below. |
 | `.notesapp/trash/` | Deleted notes are moved here, keeping their original folder structure as subpaths. No automatic cleanup. |
 | `.notesapp/startpage.json` | Block layout for the startpage: positions, sizes, RSS URLs, sticky note contents, link entries. Saved with debounced cadence. |
 
@@ -101,25 +106,52 @@ A note is a single `.md` file at any depth in the vault folder.
 Frontmatter format and the well-known fields are documented in
 [notes.md](notes.md#file-on-disk-model).
 
-### Asset folders (`<NoteName>.assets/`)
+### Asset folders (`<NoteName>.assets/` and `<TemplateName>.assets/`)
 
-Each note that uploads an asset gets its own asset folder
-*next to* the note file, named `<note basename>.assets`. So a
-note `My Note.md` gets a folder `My Note.assets/`.
+Each `.md` file that has uploaded assets gets its own asset
+folder *next to* it, named `<basename>.assets`. The same
+convention applies to two places:
+
+- **Note assets**: `My Note.md` → `My Note.assets/`, sitting
+  in the same vault subfolder as the note.
+- **Template assets**: `MyTemplate.md` → `MyTemplate.assets/`,
+  sitting under `.notesapp/templates/` next to the template's
+  `.md`.
+
+Properties of asset folders (note or template):
 
 - Filenames inside are URL-segment-encoded for markdown
   references (spaces become `%20`, etc.) so `![]()` works
   without quoting.
 - Conflicts on upload (same filename twice) get a numeric
   suffix: `photo.png`, `photo (2).png`, etc.
-- The folder is created lazily on first asset upload for that
-  note. Empty asset folders aren't auto-created; deleting a
-  note doesn't remove its asset folder (queue: cleanup pass).
+- The folder is created lazily on first asset upload. Empty
+  asset folders aren't auto-created.
+- For TEMPLATES, the asset folder lifecycle tracks the
+  template's `.md`: rename moves the asset folder and rewrites
+  image refs in the body, delete removes the asset folder. For
+  NOTES, deleting the note does not currently remove its asset
+  folder (queue: cleanup pass).
 
-A note's body references its assets relatively:
-`![alt](My%20Note.assets/photo.png)`. This means a vault
+A note or template body references its assets relatively:
+`![alt](My%20Note.assets/photo.png)` or
+`![alt](MyTemplate.assets/photo.png)`. This means a vault
 folder is **portable** — copy or move the whole vault folder
 elsewhere and references stay intact.
+
+### Image duplication for templates
+
+When a template is **inserted into a note** via the slash
+menu, the server copies any images from the template's asset
+folder into the target note's asset folder and rewrites the
+markdown to point at the new location. This is intentional:
+both the template and the inserted-into note end up
+self-contained, so deleting/renaming the template later does
+not break the inserted content. Cost is on-disk duplication —
+inserting one template into N notes makes N copies of each
+image. Acceptable for the "self-contained at every level"
+posture; a future deduplication pass (hash+hardlink) is
+possible if disk usage becomes a problem in practice.
 
 ## server.db (server-wide SQLite)
 
