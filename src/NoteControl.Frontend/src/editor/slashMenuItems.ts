@@ -301,14 +301,40 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
     },
 
     // --- Code & quote ------------------------------------------------
+    // Code block: produces the SAME structure the PLCOpen XML import
+    // produces, minus the file-picker / XML parsing. That means a
+    // bold name paragraph + Declaration code block + Implementation
+    // code block, both `language: st`, with the canonical
+    // "Declaration" / "Implementation" titles. Because the runtime
+    // Run button (CodeBlockNodeView.isRunnableImplementation) keys
+    // off exactly that triplet, the inserted skeleton is immediately
+    // Runnable once the user fills in some ST.
+    //
+    // We reuse insertPousAtSelection with a single synthetic POU so
+    // the inserted JSON is byte-for-byte identical to what the
+    // importer emits — no risk of the two paths drifting. The
+    // Declaration block ships with a starter PROGRAM/VAR/END_VAR
+    // skeleton (the runtime parser requires PROGRAM at the top of
+    // the declaration), and the Implementation block ships empty.
+    //
+    // Placeholder name "Program1" because the runtime parser is
+    // PROGRAM-only in v1; a default name avoids forcing the user
+    // to remember to rename two places.
     {
       title: 'Code block',
-      subtitle: 'Multi-line code with editable title',
+      subtitle: 'ST runtime-ready: Declaration + Implementation pair',
       icon: '</>',
-      keywords: ['code', 'snippet', 'pre'],
+      keywords: ['code', 'snippet', 'pre', 'st', 'program', 'plc', 'run'],
       command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).toggleCodeBlock().run();
-        insertTrailingParagraph(editor);
+        editor.chain().focus().deleteRange(range).run();
+        insertPousAtSelection(editor, [
+          {
+            name: 'Program1',
+            pouType: 'program',
+            declaration: 'PROGRAM Program1\nVAR\n\t\nEND_VAR',
+            implementation: '',
+          },
+        ]);
       },
     },
     {
