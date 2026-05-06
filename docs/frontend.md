@@ -159,11 +159,115 @@ A few mobile-specific affordances:
 - Properties panel content is rendered inside the editor itself
   via `MobileNoteProperties` when the right rail is hidden, so
   edits to name/tags/etc. stay accessible.
+- **The topbar's Templates link is hidden** at ≤ 768 px —
+  template management is a desktop workflow; the route is still
+  reachable by URL, but isn't surfaced.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
 This is desktop-first software. Mobile is "doesn't break,"
 not "first-class."
+
+## Templates page
+
+Per-vault template manager at `/vaults/:vaultId/templates`.
+Reached via the **Templates** link in the topbar (visible only
+when a vault is in scope) or by navigating directly. **Hidden
+on mobile** (viewports ≤ 768 px) — the link is suppressed via
+CSS because template editing is a desktop-only workflow; mobile
+users who need the page can still reach it by typing the URL
+or via a bookmark, but the page layout itself isn't tuned for
+narrow viewports.
+
+The page sits outside the shared `VaultLayout` — it has its
+own header and uses the full app-frame width (no tree, no
+properties panel).
+
+The page is **two-column**:
+
+- **Left rail** — list of existing templates, sorted
+  alphabetically (server-side). Each row shows the template
+  name and last-modified timestamp. A **+ New template** button
+  at the top of the rail starts a new draft.
+- **Right pane** — editor for the currently-selected template.
+  Shows the template's name (editable text input) and body
+  (rich TipTap editor — same surface as the note editor, with
+  the restrictions documented in [notes.md](notes.md)). When
+  nothing is selected, the pane shows an empty-state hint.
+
+### Save semantics
+
+**No autosave.** A **Save** button at the bottom of the right
+pane commits the draft. The button is enabled when:
+
+- For a new (unsaved) draft: the name field is non-empty.
+- For an existing template: the draft's name or body differs
+  from what was loaded.
+
+Save dispatches `POST /templates` for new drafts and
+`PUT /templates/{originalName}` for edits. A name change on an
+existing template uses the same `PUT` (the server treats a
+different name in the body as a rename). After a successful
+save the page reloads the list and re-selects the (possibly
+renamed) template.
+
+A **Delete** button appears next to Save when editing an
+existing template — confirms, then `DELETE /templates/{name}`.
+
+### Cache refresh
+
+After any save or delete the page calls
+`refreshTemplates(vaultId)`, which repopulates the module-level
+cache that the editor's slash menu reads from. This is the only
+mechanism that updates the slash-menu cache while a vault
+session is alive — the cache otherwise refreshes only when a
+`NoteEditor` instance mounts (i.e. when you navigate to or
+between notes).
+
+### Caveats
+
+- The slash-menu cache is **per-tab in-memory only**. If you
+  have an editor tab open in a second window and create a
+  template in the first window's templates page, the second
+  tab's slash menu won't see the new template until that editor
+  remounts (switch to a different note and back).
+- The cache refresh **silently swallows errors** (auth race
+  during page load, transient network failure). If the cache
+  stays empty after the page initialises, the slash menu's
+  Templates entry won't appear in editors until a successful
+  refresh runs. This is a known limitation; a forced refresh
+  from the slash menu UI itself isn't currently available.
+
+## Templates submenu in the slash menu
+
+Inside any note editor, typing `/` opens the slash menu. When
+the vault has at least one template (i.e. the cache is
+non-empty for the vault), a **Templates** entry sits at **the
+top of the menu** — position 0, above all built-in block items.
+
+Selecting it (Enter, click, or arrow-down + Enter) **swaps the
+popup in place** to a submenu listing all templates
+alphabetically. The first row is **← Back**, which returns to
+the main menu. Picking a template inserts its body at the
+original `/` position; the popup closes.
+
+There is **no search box and no preview pane** in the
+submenu — by design, this is a flat clickable list. Filtering
+happens in the main menu (typing `/temp` narrows to the
+Templates entry plus anything else matching).
+
+Esc inside the submenu returns to the main menu. Esc in the
+main menu closes the popup entirely.
+
+The Templates entry **disappears when the cache is empty** —
+there's no "0 templates" placeholder. The cache is empty either
+when the vault genuinely has no templates or when the initial
+fetch failed (see caveat above). The Templates page itself
+remains reachable via the topbar link regardless.
+
+The template editor's own slash menu (when editing a template
+body) hides this Templates entry — see
+[notes.md](notes.md#templates) for why.
 
 ## Startpage
 
