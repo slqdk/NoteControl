@@ -395,7 +395,10 @@ class Parser {
     }
 
     this.expectKeyword('end_if');
-    this.expectPunct(';');
+    // Trailing `;` is optional. TwinCAT and most ST style guides
+    // omit it (END_IF is a block terminator, not a statement); the
+    // earlier strict requirement here was overzealous.
+    this.acceptPunct(';');
     return { kind: 'If', branches, line: start.line };
   }
 
@@ -451,7 +454,7 @@ class Parser {
       branches.push({ labels: [], body });
     }
     this.expectKeyword('end_case');
-    this.expectPunct(';');
+    this.acceptPunct(';');
 
     return { kind: 'Case', selector, branches, line: start.line };
   }
@@ -526,7 +529,7 @@ class Parser {
     this.expectKeyword('do');
     const body = this.parseStatementList(['end_for']);
     this.expectKeyword('end_for');
-    this.expectPunct(';');
+    this.acceptPunct(';');
     return {
       kind: 'For',
       loopVar: {
@@ -551,7 +554,7 @@ class Parser {
     this.expectKeyword('do');
     const body = this.parseStatementList(['end_while']);
     this.expectKeyword('end_while');
-    this.expectPunct(';');
+    this.acceptPunct(';');
     return { kind: 'While', condition: cond, body, line: start.line };
   }
 
@@ -562,7 +565,7 @@ class Parser {
     this.expectKeyword('until');
     const cond = this.parseExpression();
     this.expectKeyword('end_repeat');
-    this.expectPunct(';');
+    this.acceptPunct(';');
     return { kind: 'Repeat', body, until: cond, line: start.line };
   }
 

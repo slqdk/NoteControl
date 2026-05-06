@@ -290,7 +290,10 @@
  *
  * BOOL: TwinCAT-style fills.
  *   - TRUE  → solid blue background, white text
- *   - FALSE → soft grey background, muted foreground
+ *   - FALSE → black text on the same warm base background as
+ *             non-BOOL pills (matches TwinCAT's online view, where
+ *             every live-value pill sits in a shared cream colour
+ *             and FALSE just stays in plain text on it).
  * ---------------------------------------------------------------- */
 .nc-runtime-pill {
   display: inline-block;
@@ -300,9 +303,12 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 1.35;
-  color: var(--nc-fg);
-  background: var(--nc-bg);
-  border: 1px solid var(--nc-border-strong);
+  /* Warm cream/yellow base — matches the TwinCAT live-view pill
+   * colour. We keep it as a token so any future palette tweak
+   * (e.g. dark-mode variant) lands in one place. */
+  color: var(--nc-runtime-pill-fg, #1a1a1a);
+  background: var(--nc-runtime-pill-bg, #fff8c4);
+  border: 1px solid var(--nc-runtime-pill-border, #e6d77a);
   border-radius: 3px;
   vertical-align: baseline;
   white-space: nowrap;
@@ -310,16 +316,19 @@
 
 .nc-runtime-pill-bool {
   font-weight: 600;
-  border: 1px solid transparent;
 }
 .nc-runtime-pill-bool-true {
   color: #ffffff;
   background: #2563eb; /* nc-accent (blue) */
+  border-color: #2563eb;
 }
 .nc-runtime-pill-bool-false {
-  color: var(--nc-fg-muted);
-  background: var(--nc-bg-elev-2);
-  border-color: var(--nc-border);
+  /* Black text on the base cream background — same surface the
+   * non-BOOL pills use. The earlier "muted grey" treatment made
+   * FALSE feel disabled, which read poorly when scanning a busy
+   * implementation. */
+  color: #1a1a1a;
+  /* Inherits the base pill background + border from .nc-runtime-pill. */
 }
 
 .nc-runtime-pill-missing {

@@ -731,13 +731,30 @@ function coerceTo(
   const meta = TYPE_META[target];
 
   if (target === 'BOOL') {
-    if (value.type !== 'BOOL') {
+    if (value.type === 'BOOL') {
+      return scalar('BOOL', value.value as boolean);
+    }
+    // Accept integer 0 / 1 as FALSE / TRUE. TwinCAT permits this
+    // and people lean on it routinely (`bDone := 1;`). We stay
+    // STRICT on other integer values: `bDone := 2` is rejected
+    // rather than silently treated as TRUE — fewer ambiguous
+    // bugs, and the user can write `<> 0` if that's what they
+    // actually mean.
+    if (typeof value.value === 'number' || typeof value.value === 'bigint') {
+      const n = typeof value.value === 'bigint'
+        ? value.value
+        : BigInt(Math.trunc(value.value as number));
+      if (n === 0n) return scalar('BOOL', false);
+      if (n === 1n) return scalar('BOOL', true);
       throw new StRuntimeError(
         'type-mismatch', line,
-        `cannot assign ${value.type} to BOOL`,
+        `cannot assign ${value.value} to BOOL — only 0 / 1 / FALSE / TRUE are accepted`,
       );
     }
-    return scalar('BOOL', value.value as boolean);
+    throw new StRuntimeError(
+      'type-mismatch', line,
+      `cannot assign ${value.type} to BOOL`,
+    );
   }
 
   if (target === 'STRING') {
@@ -1152,12 +1169,15 @@ const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
         );
       }
       if (ptV.type !== 'TIME') {
-        // Allow numeric coercion (`PT := 1000`) for ergonomics.
-        if (typeof ptV.value !== 'number') {
-          throw new StRuntimeError(
-            'type-mismatch', line, 'TON.PT must be TIME',
-          );
-        }
+        // Strict: PT must be a TIME literal (T#…). The earlier
+        // permissive "accept a bare integer as ms" path was a
+        // foot-gun — `PT := 10000` looked plausible but didn't
+        // match the IEC 61131-3 spec or TwinCAT, where PT is
+        // declared as TIME and only TIME values flow into it.
+        throw new StRuntimeError(
+          'type-mismatch', line,
+          'TON.PT must be TIME (e.g. T#1s, T#500ms)',
+        );
       }
       const inB = inV.value as boolean;
       const pt = Math.max(0, Math.trunc(ptV.value as number));
@@ -1208,9 +1228,9 @@ const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
           'type-mismatch', line, 'TOF requires IN := <BOOL>',
         );
       }
-      if (!ptV || (ptV.type !== 'TIME' && typeof ptV.value !== 'number')) {
+      if (!ptV || ptV.type !== 'TIME') {
         throw new StRuntimeError(
-          'type-mismatch', line, 'TOF requires PT := <TIME>',
+          'type-mismatch', line, 'TOF.PT must be TIME (e.g. T#1s, T#500ms)',
         );
       }
       const inB = inV.value as boolean;
