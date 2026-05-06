@@ -128,8 +128,8 @@ block-insertion shortcuts. Items shown in order:
 6. **Numbered list**
 7. **Code block** (inserts a paragraph header plus paired
    `Declaration` and `Implementation` ST code blocks — the
-   same shape the PLCOpen XML import produces, runtime-ready
-   for the **Run ▶** button on the Implementation block)
+   shape the [ST runtime sandbox](#st-runtime-sandbox) reads
+   to enable the **Run ▶** button)
 8. **Quote**
 9. **Divider**
 10. **Table** (3×3 with header)
@@ -231,10 +231,12 @@ The Declaration block holds the `VAR ... END_VAR` block(s);
 the Implementation block holds the body. The runtime needs
 both to know what variables exist and what statements to run.
 
-There is no slash-menu item for inserting a Declaration +
-Implementation pair today — code blocks come from the slash
-menu's **Code block** entry, and the user types or pastes the
-declaration/implementation text and titles afterwards.
+The slash menu's **Code block** item inserts this Declaration +
+Implementation pair directly (a header paragraph + the two
+correctly-titled ST code blocks). Users can also build the
+pair by hand from two separate code blocks if they want — the
+runtime keys off the title + language attributes, not how the
+blocks were created.
 
 Clicking Run opens a modal overlaying the editor. The modal is
 a self-contained sandbox: it holds its own copy of the program
@@ -247,7 +249,7 @@ The modal contains:
 
 - A **toolbar** at the top: Run / Stop / Step / Reset buttons,
   a cycle-time selector (10 / 50 / 100 / 500 ms or 1 s,
-  default 100 ms), a scan counter (`scan: N`), and a runtime
+  default 10 ms), a scan counter (`scan: N`), and a runtime
   elapsed-time readout (`t: 1.5s`). Elapsed time is the
   runtime's own clock, not wall time — frozen during Stop and
   zeroed by Reset.
@@ -255,9 +257,10 @@ The modal contains:
   declaration source.
 - An **Implementation pane**: the implementation source with
   inline value pills spliced in after every variable reference
-  and FB-member access. BOOL pills are coloured (blue =
-  `TRUE`, grey = `FALSE`); other types render as a neutral
-  bordered pill.
+  and FB-member access. Non-BOOL pills sit on a warm cream
+  background (matching TwinCAT's online-view look). BOOL pills
+  reverse out for stronger signal: `TRUE` is white text on
+  blue, `FALSE` is white text on black.
 - An **error banner** appears above the toolbar when a parse
   or runtime error occurs, naming the offending line; the
   matching source line in the Implementation pane is
@@ -281,7 +284,9 @@ What the v1 interpreter handles:
   range labels, `FOR / TO / BY / DO / END_FOR`, `WHILE / DO /
   END_WHILE`, `REPEAT / UNTIL / END_REPEAT`, `EXIT`,
   `CONTINUE`, `RETURN`, plain assignments and expression
-  statements.
+  statements. The trailing `;` after `END_IF` / `END_CASE` /
+  `END_FOR` / `END_WHILE` / `END_REPEAT` is **optional** —
+  both `END_IF` and `END_IF;` parse.
 - **Built-in functions**: `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`,
   `SHL`, `SHR`, `ROL`, `ROR`, and the full `<X>_TO_<Y>`
   conversion family across the numeric types (e.g.
@@ -291,15 +296,25 @@ What the v1 interpreter handles:
   allowed for FB instances — the parser rejects it). Called
   with named arguments using `:=` for inputs and `=>` for
   output bindings: `MyTimer(IN := bStart, PT := T#1s, Q =>
-  bDone);`. FB outputs are also readable via member access:
-  `MyTimer.Q`, `MyTimer.ET`. Timer elapsed time uses the
-  runtime's scan-time clock, so a Stop/Run pause doesn't
-  advance the timer.
+  bDone);`. The `PT` argument **must be a TIME value** —
+  `PT := 1000` is rejected with a type-mismatch; write
+  `PT := T#1s` (or any other `T#…` literal). FB outputs are
+  also readable via member access: `MyTimer.Q`, `MyTimer.ET`.
+  Timer elapsed time uses the runtime's scan-time clock, so a
+  Stop/Run pause doesn't advance the timer.
 - **Literals**: decimal, hexadecimal (`16#FF`), binary
   (`2#1010`), and octal (`8#777`) integers; typed-prefix
   integers (`UDINT#42`); reals; BOOL `TRUE`/`FALSE`; string
   literals in single quotes; TIME literals `T#1s500ms`,
   `T#2h30m`, etc.
+- **BOOL assignment from integer**: `bFlag := 1` and
+  `bFlag := 0` are accepted (mapping to `TRUE` / `FALSE`),
+  in both `:= initial` declarations and assignment
+  statements. Other integer values are rejected — write
+  `<> 0` or similar if you want C-style "non-zero is true"
+  semantics. The reverse direction (assigning a BOOL into an
+  integer variable) is still rejected; use `BOOL_TO_INT` for
+  that.
 
 ### Variable poking
 
@@ -359,9 +374,14 @@ elapsed := myTimer.ET;
 ```
 ````
 
-Set the **first block's title to `Declaration`** and the
-**second's to `Implementation`** (titles are editable on the
-code block UI). The Run button appears on the second block.
+The fastest way to get this set up is the slash menu's
+**Code block** entry, which inserts the Declaration +
+Implementation skeleton with the right titles already on it
+— then replace the seed `Program1` declaration and empty
+implementation with the bodies above. (You can also build
+the pair by hand from two separate code blocks; titles are
+editable on the code block UI.) The Run button appears on
+the Implementation block once both blocks are in place.
 Open the modal, click Run, then click the `bStart` pill and
 type `TRUE`. The `myTimer.ET` pill counts up; after 2 s,
 `bDone` flips to TRUE and stays latched until `bStart` goes
