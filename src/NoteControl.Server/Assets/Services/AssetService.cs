@@ -10,11 +10,18 @@ namespace NoteControl.Server.Assets.Services;
 /// Filesystem-backed asset storage. See <see cref="IAssetService"/>
 /// for the contract.
 ///
-/// Path safety: every user-supplied path goes through
+/// Path safety: write paths (SaveAsync, MoveAlongsideNoteAsync,
+/// TrashAlongsideNoteAsync) all go through
 /// <see cref="INotePathResolver"/> which canonicalises and rejects
 /// path traversal, absolute paths, and the reserved
-/// <c>.notesapp/</c> subtree. We never combine raw user strings
-/// with the vault root.
+/// <c>.notesapp/</c> subtree. The READ path (GetAsync) does its
+/// own validation inline because, since Ship 98, asset GETs must
+/// also serve files under <c>.notesapp/templates/&lt;name&gt;.assets/</c>
+/// — paths the resolver intentionally rejects for note operations.
+/// The same anti-traversal protections apply (Path.GetFullPath +
+/// IsUnderRoot), and the load-bearing safety rule is that the path
+/// must contain a <c>.assets/</c> segment, restricting reads to
+/// genuine asset folders.
 /// </summary>
 public sealed class AssetService : IAssetService
 {
@@ -98,14 +105,14 @@ public sealed class AssetService : IAssetService
         // Sanitise the original filename. Drop path separators (a
         // malicious browser could send "../escape.txt"), strip
         // characters illegal on Windows.
-        var safeName = SanitiseFileName(originalFileName);
+        var safeName = AssetFileHelpers.SanitiseFileName(originalFileName);
         if (string.IsNullOrWhiteSpace(safeName))
         {
             safeName = "file";
         }
 
         // Resolve collisions: foo.png → foo-2.png → foo-3.png ...
-        var storedName = NextAvailableName(assetsAbsolute, safeName);
+        var storedName = AssetFileHelpers.NextAvailableName(assetsAbsolute, safeName);
         var storedAbsolute = Path.Combine(assetsAbsolute, storedName);
 
         // Stream-copy into a temp file first, then rename. This
@@ -153,7 +160,7 @@ public sealed class AssetService : IAssetService
         // round-trips through tiptap-markdown's load+save cycle,
         // and the browser decodes back to the real path when
         // fetching.
-        var relativeMarkdownPath = $"{UrlEncodeSegment(assetsFolderName)}/{UrlEncodeSegment(storedName)}";
+        var relativeMarkdownPath = $"{AssetFileHelpers.UrlEncodeSegment(assetsFolderName)}/{AssetFileHelpers.UrlEncodeSegment(storedName)}";
 
         // Canonical vault-relative path. This is what the GET
         // endpoint uses to find the file again.
@@ -179,30 +186,94 @@ public sealed class AssetService : IAssetService
             return null;
         }
 
-        // We don't use CanonicalizeNote here because asset files
-        // aren't .md. Reuse CanonicalizeFolder which validates
-        // path-traversal but doesn't enforce extensions.
-        string canonicalAsset;
-        try
+        // Normalise separators and strip leading/trailing slashes —
+        // does NOT enforce the .notesapp rejection rule, because we
+        // explicitly want to accept template-asset paths that live
+        // inside .notesapp/templates/<name>.assets/<file>.
+        //
+        // Two valid path shapes after Ship 98:
+        //   1. <subfolders>/<basename>.assets/<file>
+        //         — note assets (the original behaviour).
+        //   2. .notesapp/templates/<name>.assets/<file>
+        //         — template assets (Ship 98).
+        //
+        // Both end with "/<something>.assets/<filename>", which is
+        // what the .assets/ membership check below validates. The
+        // crucial safety constraint — "the path must end inside an
+        // .assets/ folder" — is preserved across both shapes; an
+        // attacker can't ask for .notesapp/index.db this way, only
+        // for files that are literally under a .assets/ folder.
+        var normalised = assetPath.Replace('\\', '/').Trim('/');
+        while (normalised.Contains("//", StringComparison.Ordinal))
         {
-            canonicalAsset = _notePaths.CanonicalizeFolder(assetPath);
+            normalised = normalised.Replace("//", "/", StringComparison.Ordinal);
         }
-        catch (InvalidNotePathException)
+        if (normalised.Length == 0)
         {
             return null;
         }
 
-        // Extra safety: reject anything that escapes the assets
-        // convention. An asset path must contain a ".assets/"
-        // segment somewhere — otherwise it's some other vault file
-        // we don't intend to serve via this endpoint.
-        if (!canonicalAsset.Contains($"{AssetsFolderSuffix}/", StringComparison.Ordinal))
+        // Reject path traversal segments anywhere in the path. Same
+        // protection CanonicalizeFolder gives us, applied directly
+        // here so we don't have to route through it (which would
+        // reject .notesapp/ paths and lock us out of templates).
+        var segments = normalised.Split('/');
+        foreach (var seg in segments)
+        {
+            if (seg == "." || seg == ".." || seg.Length == 0)
+            {
+                return null;
+            }
+            // Reject segments containing characters that aren't
+            // valid in either Windows or Linux filenames. Slashes
+            // were already split out; everything else passes through
+            // and Path.GetFullPath would reject anything dangerous
+            // anyway, but cheap to check up-front.
+            foreach (var invalid in Path.GetInvalidFileNameChars())
+            {
+                if (seg.Contains(invalid))
+                {
+                    return null;
+                }
+            }
+        }
+
+        // The .assets/ membership check is the LOAD-BEARING safety
+        // rule for this endpoint: an asset path MUST contain a
+        // ".assets/" segment, so the only files reachable through
+        // this method are inside such a folder. Without this, a
+        // caller could ask for .notesapp/index.db, server.db, or
+        // any other vault-internal file.
+        if (!normalised.Contains($"{AssetsFolderSuffix}/", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // For template-asset paths, also require the prefix shape
+        // .notesapp/templates/ to exist. Belt-and-braces: the .assets/
+        // check above already guarantees the suffix part, but checking
+        // the prefix means a caller can't smuggle a non-template path
+        // that happens to contain ".assets/" somewhere.
+        if (normalised.StartsWith(".notesapp/", StringComparison.Ordinal) &&
+            !normalised.StartsWith(".notesapp/templates/", StringComparison.Ordinal))
         {
             return null;
         }
 
         var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
-        var absolute = _notePaths.ResolveFolder(vaultRoot, canonicalAsset);
+
+        // Resolve the path manually rather than via INotePathResolver
+        // (which would reject .notesapp/...). The Path.GetFullPath +
+        // IsUnder check below is the same anti-traversal guard
+        // INotePathResolver applies internally.
+        var rootFull = Path.GetFullPath(vaultRoot);
+        var combined = Path.Combine(rootFull, normalised.Replace('/', Path.DirectorySeparatorChar));
+        var absolute = Path.GetFullPath(combined);
+
+        if (!IsUnderRoot(absolute, rootFull))
+        {
+            return null;
+        }
 
         if (!File.Exists(absolute))
         {
@@ -210,8 +281,26 @@ public sealed class AssetService : IAssetService
         }
 
         var size = new FileInfo(absolute).Length;
-        var contentType = MimeFromExtension(Path.GetExtension(absolute));
+        var contentType = AssetFileHelpers.MimeFromExtension(Path.GetExtension(absolute));
         return new AssetFile(absolute, contentType, size);
+    }
+
+    /// <summary>
+    /// Same is-this-path-under-the-root check INotePathResolver does
+    /// internally. Inlined here because we resolve template-asset
+    /// paths without going through that resolver (it would reject
+    /// the leading .notesapp segment).
+    /// </summary>
+    private static bool IsUnderRoot(string candidate, string rootFull)
+    {
+        // Path.GetFullPath has already normalised both. Trailing
+        // separator on the root makes string.StartsWith correct
+        // (without it, "/vaultA" would match "/vaultAB").
+        var rootWithSep = rootFull.EndsWith(Path.DirectorySeparatorChar)
+            ? rootFull
+            : rootFull + Path.DirectorySeparatorChar;
+        return candidate.Equals(rootFull.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
+            || candidate.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase);
     }
 
     // ============================================================== Lifecycle
@@ -316,75 +405,10 @@ public sealed class AssetService : IAssetService
         return Path.Combine(parent, basename + AssetsFolderSuffix);
     }
 
-    /// <summary>
-    /// Strip path separators and characters Windows / Linux
-    /// can't use in filenames. Keep dots, dashes, underscores,
-    /// spaces — anything reasonable.
-    /// </summary>
-    private static string SanitiseFileName(string raw)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sb = new System.Text.StringBuilder(raw.Length);
-        foreach (var c in raw)
-        {
-            if (Array.IndexOf(invalid, c) < 0 && c != '/' && c != '\\')
-            {
-                sb.Append(c);
-            }
-        }
-        var result = sb.ToString().Trim().TrimStart('.');
-        return result;
-    }
-
-    /// <summary>
-    /// Find a non-colliding filename in the target folder.
-    /// "image.png" → "image.png" if free, else "image-2.png",
-    /// "image-3.png", ... up to a sane upper bound.
-    /// </summary>
-    private static string NextAvailableName(string folder, string desired)
-    {
-        var path = Path.Combine(folder, desired);
-        if (!File.Exists(path))
-        {
-            return desired;
-        }
-
-        var stem = Path.GetFileNameWithoutExtension(desired);
-        var ext = Path.GetExtension(desired);
-        for (int i = 2; i < 10_000; i++)
-        {
-            var candidate = $"{stem}-{i}{ext}";
-            if (!File.Exists(Path.Combine(folder, candidate)))
-            {
-                return candidate;
-            }
-        }
-        // Fallback — astronomically unlikely. Use a timestamp.
-        return $"{stem}-{DateTime.UtcNow:yyyyMMddHHmmssfff}{ext}";
-    }
-
     private static string parentOf(string path)
     {
         var idx = path.LastIndexOf('/');
         return idx < 0 ? "" : path[..idx];
-    }
-
-    /// <summary>
-    /// URL-encode a single path segment (folder or filename) for use
-    /// inside markdown image/link syntax. Uses
-    /// <see cref="Uri.EscapeDataString"/> which encodes spaces as
-    /// <c>%20</c> and handles other reserved characters per RFC 3986.
-    /// We escape DATA (the segment) not a full URL — slashes are not
-    /// part of the input here.
-    ///
-    /// CommonMark's image syntax <c>![alt](url)</c> ends the URL at
-    /// the first unescaped space, so any segment containing a space
-    /// MUST be encoded for the markdown to round-trip correctly
-    /// through load → save → reload.
-    /// </summary>
-    private static string UrlEncodeSegment(string segment)
-    {
-        return Uri.EscapeDataString(segment);
     }
 
     private static string JoinCanonical(string parent, string folderName, string fileName)
@@ -394,47 +418,6 @@ public sealed class AssetService : IAssetService
             return $"{folderName}/{fileName}";
         }
         return $"{parent}/{folderName}/{fileName}";
-    }
-
-    /// <summary>
-    /// Map a file extension to a MIME type for the Content-Type
-    /// response header. Conservative list — anything unknown gets
-    /// <c>application/octet-stream</c> which the browser handles
-    /// as a download.
-    /// </summary>
-    private static string MimeFromExtension(string extension)
-    {
-        var ext = extension.ToLowerInvariant().TrimStart('.');
-        return ext switch
-        {
-            "png" => "image/png",
-            "jpg" or "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "bmp" => "image/bmp",
-            "svg" => "image/svg+xml",
-            "mp4" => "video/mp4",
-            "webm" => "video/webm",
-            "mov" => "video/quicktime",
-            "mkv" => "video/x-matroska",
-            "mp3" => "audio/mpeg",
-            "wav" => "audio/wav",
-            "ogg" => "audio/ogg",
-            "pdf" => "application/pdf",
-            "txt" => "text/plain",
-            "md" => "text/markdown",
-            "json" => "application/json",
-            "xml" => "application/xml",
-            "csv" => "text/csv",
-            "doc" => "application/msword",
-            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "xls" => "application/vnd.ms-excel",
-            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "ppt" => "application/vnd.ms-powerpoint",
-            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "zip" => "application/zip",
-            _ => "application/octet-stream",
-        };
     }
 }
 

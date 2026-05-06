@@ -53,8 +53,12 @@ export interface SlashMenuItem {
  * Two flags control which dynamic items appear:
  *
  *   allowImages    — include the "Image" item that opens a file
- *                    picker. Templates set this false because they
- *                    have no note path to upload assets into.
+ *                    picker. Pre-Ship-98 templates set this false
+ *                    because they had no asset folder. Ship 98
+ *                    introduces template asset folders, so the
+ *                    template editor now sets allowImages=true and
+ *                    sets `templateName` to route uploads through
+ *                    the template-asset endpoint instead.
  *
  *   allowTemplates — include the per-template items pulled from
  *                    the cache. Templates set this false to avoid
@@ -63,12 +67,20 @@ export interface SlashMenuItem {
  *                    template is technically fine but confusing).
  *
  * Both default to true (the note-editor's behaviour).
+ *
+ * `templateName` (Ship 98): when set, the Image command uploads
+ * via `templatesApi.uploadAsset` instead of `assetsApi.upload`.
+ * When unset (the note editor's case), uploads go through the
+ * note-asset path. The two are mutually exclusive — a given
+ * editor instance is either editing a note (uses getNotePath) or
+ * a template (uses templateName).
  */
 export interface SlashMenuContext {
   getNotePath: () => string;
   vaultId: string;
   allowImages?: boolean;
   allowTemplates?: boolean;
+  templateName?: string;
 }
 
 /**
@@ -340,9 +352,12 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
   ];
 
   // --- Asset upload ------------------------------------------------
-  // Gated: templates pass allowImages=false because they have no note
-  // path to bind asset uploads to, and asset paths are relative-to-
-  // note so they wouldn't survive template insertion anyway.
+  // Gated: pre-Ship-98 templates passed allowImages=false because
+  // they had no asset folder. Ship 98 introduces template asset
+  // folders, so the template editor now keeps allowImages=true and
+  // sets ctx.templateName — the command branches based on that to
+  // hit either the note-asset endpoint or the template-asset
+  // endpoint.
   if (ctx.allowImages !== false) {
     items.push({
       title: 'Image',
@@ -366,10 +381,27 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
           try {
             const file = input.files?.[0];
             if (!file) return;
-            const notePath = ctx.getNotePath();
-            if (!notePath) return;
 
-            const res = await assetsApi.upload(ctx.vaultId, notePath, file, file.name);
+            // Branch based on context: template-mode (Ship 98) goes
+            // through templatesApi.uploadAsset; note-mode keeps the
+            // existing assetsApi.upload path. We don't fall back —
+            // an editor with allowImages=true must have either a
+            // notePath or a templateName, and it's a real bug if
+            // neither is set.
+            let res;
+            if (ctx.templateName) {
+              res = await templatesApi.uploadAsset(
+                ctx.vaultId,
+                ctx.templateName,
+                file,
+                file.name,
+              );
+            } else {
+              const notePath = ctx.getNotePath();
+              if (!notePath) return;
+              res = await assetsApi.upload(ctx.vaultId, notePath, file, file.name);
+            }
+
             editor
               .chain()
               .focus()

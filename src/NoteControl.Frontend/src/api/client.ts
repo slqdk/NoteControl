@@ -449,6 +449,66 @@ export const templatesApi = {
       `/api/vaults/${vaultId}/templates/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
     ),
+
+  /**
+   * POST /api/vaults/{id}/template/asset (multipart/form-data)
+   *
+   * Ship 98: upload an image for a specific template. Returns the
+   * same shape as a note-asset upload — the relativeMarkdownPath
+   * is what the template body should reference (e.g.
+   * "MyTemplate.assets/photo.png").
+   *
+   * Mirrors `assetsApi.upload` exactly except for the form field
+   * name (`templateName` instead of `notePath`) and the URL.
+   * Server enforces an image-only policy; non-image content types
+   * return 415.
+   */
+  async uploadAsset(
+    vaultId: string,
+    templateName: string,
+    file: File | Blob,
+    fileName?: string,
+  ): Promise<AssetUploadResponse> {
+    const form = new FormData();
+    form.append('templateName', templateName);
+    const effectiveName =
+      fileName ?? (file instanceof File ? file.name : 'image.bin');
+    form.append('file', file, effectiveName);
+
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+
+    const response = await fetch(`/api/vaults/${vaultId}/template/asset`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: form,
+    });
+
+    if (!response.ok) {
+      let problem: ProblemDetails | null = null;
+      try {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('json')) {
+          problem = (await response.json()) as ProblemDetails;
+        }
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(
+        response.status,
+        problem,
+        `Template asset upload failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as AssetUploadResponse;
+  },
 };
 
 // ============================================================== DAILY NOTES

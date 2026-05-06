@@ -28,6 +28,14 @@ public static class AssetEndpoints
             // CSRF is enforced by the global CsrfFilter (X-CSRF-Token
             // header) — same as every other mutating endpoint.
 
+        // Ship 98: parallel upload endpoint for template assets.
+        // Lives under the same vaults group so RequireVault("editor")
+        // still scopes auth to the vault — but uses templateName
+        // rather than notePath as the binding identifier.
+        group.MapPost("/template/asset", UploadTemplateAsync)
+            .WithName("UploadTemplateAsset")
+            .RequireVault("editor");
+
         group.MapGet("/asset", DownloadAsync)
             .WithName("DownloadAsset")
             .RequireVault("viewer");
@@ -112,6 +120,95 @@ public static class AssetEndpoints
         {
             return Results.Problem(
                 title: "Could not save asset",
+                detail: ex.Message,
+                statusCode: ex.StatusCode);
+        }
+    }
+
+    /// <summary>
+    /// Multipart upload for templates. Form fields:
+    ///   <c>templateName</c> (string, required) — the template's
+    ///                       file-name-without-extension. The
+    ///                       template must already exist on disk.
+    ///   <c>file</c>         (file,   required) — the asset binary.
+    ///                       Must be an image (image-only policy
+    ///                       enforced server-side; see
+    ///                       <see cref="TemplateAssetService"/>).
+    ///
+    /// Mirrors <see cref="UploadAsync"/> but routes to
+    /// <see cref="ITemplateAssetService"/>. Response shape is
+    /// identical (<see cref="AssetUploadResponse"/>) so the
+    /// frontend can reuse the same handler logic for either case.
+    /// </summary>
+    private static async Task<IResult> UploadTemplateAsync(
+        Guid vaultId,
+        HttpRequest request,
+        ITemplateAssetService templateAssets,
+        CancellationToken ct)
+    {
+        if (!request.HasFormContentType)
+        {
+            return Results.Problem(
+                title: "Multipart form data required",
+                statusCode: 415);
+        }
+
+        IFormCollection form;
+        try
+        {
+            form = await request.ReadFormAsync(ct);
+        }
+        catch (Exception ex) when (ex is BadHttpRequestException)
+        {
+            return Results.Problem(
+                title: "Upload too large or malformed",
+                detail: ex.Message,
+                statusCode: 413);
+        }
+
+        var templateName = form["templateName"].ToString();
+        if (string.IsNullOrWhiteSpace(templateName))
+        {
+            return Results.Problem(
+                title: "templateName form field is required",
+                statusCode: 400);
+        }
+
+        var file = form.Files.GetFile("file");
+        if (file is null || file.Length == 0)
+        {
+            return Results.Problem(
+                title: "file is required",
+                statusCode: 400);
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var stored = await templateAssets.SaveAsync(
+                vaultId,
+                templateName,
+                file.FileName,
+                file.ContentType ?? "application/octet-stream",
+                stream,
+                file.Length,
+                ct);
+
+            var serveUrl =
+                $"/api/vaults/{vaultId}/asset?path={Uri.EscapeDataString(stored.CanonicalAssetPath)}";
+
+            return Results.Ok(new AssetUploadResponse(
+                RelativeMarkdownPath: stored.RelativeMarkdownPath,
+                ServeUrl: serveUrl,
+                OriginalFileName: stored.OriginalFileName,
+                StoredFileName: stored.StoredFileName,
+                SizeBytes: stored.SizeBytes,
+                ContentType: stored.ContentType));
+        }
+        catch (AssetException ex)
+        {
+            return Results.Problem(
+                title: "Could not save template asset",
                 detail: ex.Message,
                 statusCode: ex.StatusCode);
         }

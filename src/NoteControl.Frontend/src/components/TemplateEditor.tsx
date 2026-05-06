@@ -10,32 +10,44 @@ import TableCell from '@tiptap/extension-table-cell';
 
 import { CodeBlockWithTitle } from '../editor/CodeBlockWithTitle';
 import { CalloutExtension } from '../editor/CalloutExtension';
+import { ImageWithControls } from '../editor/ImageWithControls';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { TableToolbar } from './TableToolbar';
 import { BubbleMenu } from './BubbleMenu';
+import { assetsApi } from '../api/client';
 
 /**
  * Rich editor surface for editing templates.
  *
  * This is a sibling to NoteEditor — same TipTap extensions for the
  * shared block types (headings, lists, code, callouts, tables) but
- * without the note-specific machinery:
+ * with a stripped-down note-specific machinery:
  *
  *   - No autosave / debounce / ETag — parent owns saving via the
  *     onChange callback (called on every keystroke; parent decides
  *     when to commit).
- *   - No AssetPasteExtension or ImageWithControls — templates have
- *     no associated note path to upload assets into. Image paste
- *     is silently dropped (TipTap handles it as a no-op when the
- *     image extension isn't registered).
  *   - No frontmatter / locked state — templates are pure markdown.
+ *   - No AssetPasteExtension — paste-image-into-template is not in
+ *     scope for Ship 98; the slash-menu Image item is the explicit
+ *     upload trigger. Drag-and-drop and clipboard paste are silently
+ *     no-ops here. Will likely be added later if the workflow proves
+ *     valuable.
  *
- * The slash menu is configured to skip the Image item (no upload
- * destination) and to skip the per-template items (so a template
- * editor doesn't list other templates as insertable — confusing
- * recursion). Tables, callouts, headings, code, lists all work.
+ * Ship 98: image SUPPORT is now wired in — ImageWithControls is
+ * registered and the slash menu's Image item uploads to the
+ * template's own asset folder under
+ * `{vault}/.notesapp/templates/<name>.assets/`. The `templateName`
+ * prop is required when `enableImages` is true, since the slash-
+ * menu command needs to know which template's asset folder to
+ * upload into. (For an unsaved-new draft the parent passes
+ * `enableImages={false}` until after the first save creates a
+ * template name on disk.)
+ *
+ * The slash menu still skips the per-template items (allowTemplates
+ * = false) so a template editor doesn't list other templates as
+ * insertable — confusing recursion in the picker.
  */
 
 export interface TemplateEditorProps {
@@ -48,13 +60,38 @@ export interface TemplateEditorProps {
    */
   onChange: (markdown: string) => void;
   /**
-   * Vault ID is needed by the slash menu's underlying context even
-   * though we won't use the asset-upload item. Pass it through.
+   * Vault ID is needed by the slash menu's underlying context for
+   * image-upload routing.
    */
   vaultId: string;
+  /**
+   * Ship 98: the template's name on disk (without .md). Required
+   * when `enableImages` is true — the slash-menu Image command
+   * uploads into `<vault>/.notesapp/templates/<templateName>.assets/`,
+   * so it must know which folder to write to.
+   *
+   * For an unsaved-new draft this is the empty string and the
+   * parent passes `enableImages={false}` until after the first save
+   * gives the template a name. After save, the parent re-mounts the
+   * editor with the new `templateName` and `enableImages={true}`.
+   */
+  templateName?: string;
+  /**
+   * Ship 98: gate for image upload via the slash menu. Defaults to
+   * false to preserve pre-Ship-98 behaviour for any caller that
+   * hasn't been updated. Set to true once the parent has a saved
+   * template (i.e. `templateName` is non-empty).
+   */
+  enableImages?: boolean;
 }
 
-export function TemplateEditor({ initialBody, onChange, vaultId }: TemplateEditorProps) {
+export function TemplateEditor({
+  initialBody,
+  onChange,
+  vaultId,
+  templateName,
+  enableImages,
+}: TemplateEditorProps) {
   // Hold the latest onChange in a ref so the editor's onUpdate
   // closure doesn't capture a stale callback. (Same pattern as
   // NoteEditor — React functional components recreate the handler
@@ -95,13 +132,25 @@ export function TemplateEditor({ initialBody, onChange, vaultId }: TemplateEdito
       TableDeleteShortcut,
       // Callouts — same in both note and template editors.
       CalloutExtension,
+      // Ship 98: Image node, registered for templates as well.
+      // ImageWithControls provides resize / border / delete UI and
+      // the .setImage() command the slash-menu Image item dispatches.
+      // Without this the slash-menu insertion would be a no-op
+      // (TipTap silently ignores commands for unregistered nodes).
+      ImageWithControls.configure({
+        allowBase64: false,
+      }),
       // Slash menu, with the gates set for template editing.
+      // Ship 98: when `enableImages` is true the Image item is
+      // included, and the upload routes via templatesApi (using
+      // ctx.templateName) instead of assetsApi.
       SlashMenuExtension.configure({
         context: {
           vaultId,
-          getNotePath: () => '',     // unused when allowImages=false
-          allowImages: false,
+          getNotePath: () => '',                  // unused for templates
+          allowImages: enableImages === true,
           allowTemplates: false,
+          templateName: enableImages === true ? templateName : undefined,
         },
       }),
       MarkdownExtension,
@@ -129,6 +178,86 @@ export function TemplateEditor({ initialBody, onChange, vaultId }: TemplateEdito
   // full remount when switching to a different template. Within a
   // single template-editing session, the editor is mounted once
   // and lives until the component unmounts.
+
+  /*
+   * Ship 98: rewrite relative <img src> values to absolute
+   * /api/vaults/{id}/asset?path=... URLs so the browser can
+   * actually fetch them. Mirrors the rewriter in NoteEditor —
+   * see that file for the full rationale (initial render race,
+   * programmatic setImage timing, MutationObserver coverage).
+   *
+   * The only difference here is the canonical-path prefix: a
+   * template body references "<TemplateName>.assets/<file>" and
+   * the file lives at ".notesapp/templates/<TemplateName>.assets/<file>"
+   * on disk, so the rewriter prepends that prefix before handing
+   * to assetsApi.serveUrl.
+   *
+   * If `templateName` isn't yet set (unsaved-new draft), we don't
+   * have an asset folder name to point at — just skip the
+   * rewrite. A new draft can't have images anyway since uploads
+   * require a saved template name.
+   */
+  useEffect(() => {
+    if (!editor) return;
+    if (!templateName) return;
+    const dom = editor.view.dom as HTMLElement;
+
+    const assetsParent = `.notesapp/templates`;
+
+    function isAlreadyResolved(src: string): boolean {
+      return (
+        src.startsWith('http://') ||
+        src.startsWith('https://') ||
+        src.startsWith('/api/') ||
+        src.startsWith('data:') ||
+        src.startsWith('blob:')
+      );
+    }
+
+    function rewrite() {
+      const candidates = dom.querySelectorAll('img, video, source');
+      candidates.forEach((el) => {
+        const src = el.getAttribute('src');
+        if (!src || isAlreadyResolved(src)) return;
+        const cleaned = src.replace(/^\.\//, '');
+
+        // URL-decode each segment — the markdown emits %20-encoded
+        // spaces, but assetsApi.serveUrl re-encodes via
+        // encodeURIComponent. Without decoding first we'd
+        // double-encode and the GET would 404.
+        const decodedRelative = cleaned
+          .split('/')
+          .map((segment) => {
+            try {
+              return decodeURIComponent(segment);
+            } catch {
+              return segment;
+            }
+          })
+          .join('/');
+
+        const canonical = `${assetsParent}/${decodedRelative}`;
+        const absoluteUrl = assetsApi.serveUrl(vaultId, canonical);
+        el.setAttribute('src', absoluteUrl);
+      });
+    }
+
+    rewrite();
+
+    const observer = new MutationObserver(() => {
+      rewrite();
+    });
+    observer.observe(dom, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['src'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [editor, templateName, vaultId]);
 
   return (
     <div className="nc-template-editor">

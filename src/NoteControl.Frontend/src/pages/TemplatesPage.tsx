@@ -322,6 +322,26 @@ export function TemplatesPage() {
                   <TemplateEditor
                     key={isNew ? '__new__' : selectedName ?? '__none__'}
                     vaultId={vaultId}
+                    /*
+                      Ship 98: image upload.
+
+                      `templateName` is the on-disk name of the
+                      currently-loaded template (after a save it's
+                      whatever the server settled on — could differ
+                      from the user's draft name if they renamed).
+                      For an unsaved-new draft the on-disk template
+                      doesn't exist yet, so we have nothing to
+                      upload INTO; `enableImages` is gated to false
+                      until the first save creates the .md.
+
+                      After save, the parent re-mounts the editor
+                      via the React `key` (which switches from
+                      "__new__" to selectedName), so the slash-menu
+                      context picks up the new templateName cleanly
+                      — no in-flight cache to invalidate.
+                    */
+                    templateName={selectedName ?? undefined}
+                    enableImages={!isNew && !!selectedName}
                     initialBody={
                       // For new templates, start blank. For an
                       // existing template, use the loaded body —

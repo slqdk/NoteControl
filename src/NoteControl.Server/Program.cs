@@ -263,6 +263,10 @@ try
     // Asset services (image/video/file paste storage).
     builder.Services.Configure<AssetOptions>(builder.Configuration.GetSection("Assets"));
     builder.Services.AddScoped<IAssetService, AssetService>();
+    // Ship 98: parallel service for template assets. Same options
+    // (size limits, etc.) but writes into .notesapp/templates/X.assets/
+    // rather than next to a note.
+    builder.Services.AddScoped<ITemplateAssetService, TemplateAssetService>();
 
     // Template services. Templates are markdown skeletons stored
     // under {vault}/.notesapp/templates/, inserted at cursor via
