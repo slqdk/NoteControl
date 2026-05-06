@@ -1,70 +1,88 @@
+import { useEffect, useRef, useState } from 'react';
+
 import type { Environment, RuntimeValue } from '../runtime/interpreter';
-import { formatRuntimeValue } from '../runtime/interpreter';
-import type { ParsedProgram, VarRefExpr, Statement, Expr } from '../runtime/ast';
+import {
+  formatRuntimeValue, parsePokeInput, pokeVariable,
+} from '../runtime/interpreter';
+import type {
+  ParsedProgram, VarRefExpr, Statement, Expr, ScalarTypeName,
+} from '../runtime/ast';
 
 /**
  * Renders the implementation source text with inline value pills
- * spliced after every variable reference.
+ * spliced after every variable reference and FB-member access.
  *
  * Visual model (matches TwinCAT online view):
- *   - Plain monospace text with original whitespace preserved
- *     INSIDE each line.
+ *   - Plain monospace text with original whitespace preserved.
  *   - After each variable reference identifier, an inline pill
  *     containing the current runtime value of that variable.
+ *   - After `MyTimer.Q`-style member access, a pill with the
+ *     member's current value.
  *   - BOOLs get a coloured fill (blue=TRUE, grey=FALSE). Other
  *     types get a neutral border-only style.
- *
- * Why splice instead of overlay: TwinCAT does it this way too.
- * Pills shift the following text right; tabs may misalign on
- * lines with pills. Keeping the source's indentation perfectly
- * aligned would require absolute-positioning the pills over
- * the text, which causes overlap when several variables sit
- * close together. The shift-right tradeoff is the lesser evil
- * and matches the reference UI.
- *
- * Inputs:
- *   source — the raw implementation text, as it appears in the
- *            code block. Newlines split into lines.
- *   program — the parsed program. We walk every VarRefExpr in
- *            the body and collect (line, column, nameLower)
- *            tuples — those are the splice sites.
- *   env — the current runtime environment. May be null when
- *            execution hasn't started yet — in that case pills
- *            still render but show the variable's INITIAL value
- *            (taken from a static-init env passed through env).
- *   errorLine — when a runtime error fires, the offending line
- *            gets a red left-border accent. null when no error.
+ *   - Pills are clickable when poking is enabled — click to edit
+ *     the variable's value mid-run. FB-instance and FB-member
+ *     pills are read-only (member values are derived; the user
+ *     can't poke an FB output).
  */
 export interface InlineSourceProps {
   source: string;
   program: ParsedProgram;
   env: Environment;
   errorLine: number | null;
+  /** Bumped by the parent on every scan / state change so this
+   *  component re-renders pill values. The component reads env
+   *  through a prop ref but env-mutation alone won't trigger
+   *  React; the version bump is what does. */
+  envVersion: number;
+  /** True when the modal allows mid-run poking. Disabled in
+   *  error mode. */
+  pokeEnabled: boolean;
 }
 
-interface Decoration {
-  /** 1-indexed column of the identifier's first character. */
-  column: number;
-  /** Number of source characters to skip after the identifier
-   *  begins, before splicing the pill. We splice AFTER the
-   *  identifier, so this equals the identifier's length. */
-  length: number;
-  /** Lowercase name to look up in env. */
+interface VarPayload {
+  kind: 'var';
   nameLower: string;
-  /** Original spelling — used as the pill's tooltip. */
   name: string;
 }
 
-export function InlineSource({
-  source, program, env, errorLine,
-}: InlineSourceProps) {
-  // Build per-line decoration lists once. Memoising would be
-  // ideal but the parsed program is stable across renders for
-  // a given modal instance, and walking the AST is cheap, so
-  // we do it inline. If perf bites later we can useMemo.
-  const decorations = collectDecorations(program);
+interface MemberPayload {
+  kind: 'member';
+  objectLower: string;
+  objectName: string;
+  memberLower: string;
+  memberName: string;
+}
 
+interface Decoration {
+  /** 1-indexed column of the decoration's first character. */
+  column: number;
+  /** How many source characters this decoration spans. For
+   *  VarRefs that's the identifier's length; for MemberExprs
+   *  it's `object.length + 1 + member.length`. */
+  length: number;
+  /** 1-indexed source line. */
+  line: number;
+  payload: VarPayload | MemberPayload;
+}
+
+export function InlineSource({
+  source, program, env, errorLine, envVersion, pokeEnabled,
+}: InlineSourceProps) {
+  const decorations = collectDecorations(program);
   const lines = source.split('\n');
+
+  // Active poke session. Null when nothing is being edited. Used
+  // for exclusivity (only one poke at a time) and so the user's
+  // input field doesn't fight the scan loop's value updates.
+  const [editing, setEditing] = useState<{
+    line: number; column: number; nameLower: string;
+  } | null>(null);
+
+  // After a successful poke, force a re-render so all pills (not
+  // just the edited one) reflect the new value.
+  const [, forceRender] = useState({});
+  void envVersion;
 
   return (
     <div className="nc-runtime-inline-source">
@@ -76,12 +94,17 @@ export function InlineSource({
           <div
             key={lineNum}
             className={
-              'nc-runtime-inline-line' + (isErr ? ' nc-runtime-inline-line-err' : '')
+              'nc-runtime-inline-line' +
+              (isErr ? ' nc-runtime-inline-line-err' : '')
             }
           >
             <span className="nc-runtime-inline-gutter">{lineNum}</span>
             <span className="nc-runtime-inline-content">
-              {renderLine(lineText, decos, env)}
+              {renderLine(
+                lineText, decos, env, lineNum,
+                pokeEnabled, editing, setEditing,
+                () => forceRender({}),
+              )}
             </span>
           </div>
         );
@@ -94,41 +117,58 @@ export function InlineSource({
  * Walk the parsed program's body and return a map from 1-indexed
  * line number to a sorted list of decoration sites on that line.
  *
- * Decoration sources, in order:
- *   - the LHS of every assignment statement
- *   - the FOR loop variable
- *   - every VarRefExpr inside expressions
+ * MemberExprs emit ONE decoration covering `obj.member` rather
+ * than separate ones for `obj` and `member`. Avoids double-pills
+ * like `myTimer FB myTimer.Q TRUE`.
  *
- * We DON'T decorate FB-call argument expressions in v1 because
- * v1 has no FB calls. When/if we add them we revisit the
- * "literal pill at the call site" question.
- *
- * The returned per-line list is sorted by column ascending so
- * the renderer can splice in document order.
+ * Decoration sources:
+ *   - Assignment LHS (a VarRef)
+ *   - FOR loop variable
+ *   - Every VarRefExpr in expressions
+ *   - Every MemberExpr (covers the whole `obj.member` span)
+ *   - Call args (positional/named-in values, named-out targets)
  */
 function collectDecorations(
   program: ParsedProgram,
 ): Map<number, Decoration[]> {
   const out = new Map<number, Decoration[]>();
 
-  function add(line: number, column: number, name: string, nameLower: string) {
-    const list = out.get(line);
-    if (list) list.push({ line, column, length: name.length, name, nameLower } as Decoration & { line: number });
-    else out.set(line, [{ column, length: name.length, name, nameLower }]);
+  function add(d: Decoration) {
+    const list = out.get(d.line);
+    if (list) list.push(d);
+    else out.set(d.line, [d]);
   }
 
   function visitExpr(e: Expr) {
     switch (e.kind) {
-      case 'Literal': return;
+      case 'Literal':
+        return;
       case 'VarRef':
-        add(e.line, e.column, e.name, e.nameLower);
+        add({
+          line: e.line, column: e.column, length: e.name.length,
+          payload: { kind: 'var', nameLower: e.nameLower, name: e.name },
+        });
+        return;
+      case 'Member':
+        add({
+          line: e.line, column: e.column,
+          length: e.object.name.length + 1 + e.member.length,
+          payload: {
+            kind: 'member',
+            objectLower: e.object.nameLower, objectName: e.object.name,
+            memberLower: e.memberLower, memberName: e.member,
+          },
+        });
         return;
       case 'Unary':
         visitExpr(e.operand); return;
       case 'Binary':
         visitExpr(e.left); visitExpr(e.right); return;
       case 'Call':
-        for (const a of e.args) visitExpr(a);
+        for (const a of e.args) {
+          if (a.value) visitExpr(a.value);
+          if (a.target) visitVarRef(a.target);
+        }
         return;
     }
   }
@@ -136,7 +176,6 @@ function collectDecorations(
   function visitStmt(s: Statement) {
     switch (s.kind) {
       case 'Assign':
-        // Assignment target is itself a VarRef with line/col.
         visitVarRef(s.target);
         visitExpr(s.value);
         return;
@@ -182,81 +221,49 @@ function collectDecorations(
   }
 
   function visitVarRef(v: VarRefExpr) {
-    add(v.line, v.column, v.name, v.nameLower);
+    add({
+      line: v.line, column: v.column, length: v.name.length,
+      payload: { kind: 'var', nameLower: v.nameLower, name: v.name },
+    });
   }
 
   for (const s of program.body) visitStmt(s);
 
-  // Sort each line's decorations by column ascending.
   for (const list of out.values()) {
     list.sort((a, b) => a.column - b.column);
   }
   return out;
 }
 
-/**
- * Render one line of text with its decoration pills spliced in.
- *
- * Algorithm:
- *   - Track a running source-text cursor at the START of the
- *     line (column 1).
- *   - For each decoration in column-sorted order:
- *       - Emit text from cursor up to AND INCLUDING the
- *         identifier (column-1 + length characters).
- *       - Emit a pill <span> for that variable's value.
- *       - Advance cursor.
- *   - Emit any remaining text after the last decoration.
- *
- * Edge case: a decoration whose column extends past the line's
- * length (shouldn't happen, but if column tracking ever drifts)
- * is silently skipped. We log to console for visibility.
- */
 function renderLine(
   text: string,
   decos: Decoration[],
   env: Environment,
+  lineNum: number,
+  pokeEnabled: boolean,
+  editing: { line: number; column: number; nameLower: string } | null,
+  setEditing: (v: { line: number; column: number; nameLower: string } | null) => void,
+  forceRender: () => void,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  let cursor = 0; // 0-indexed character position in this line
+  let cursor = 0;
   let pillKey = 0;
 
   for (const d of decos) {
-    // d.column is 1-indexed; the character at column N has 0-index N-1.
     const idStart = d.column - 1;
     const idEnd = idStart + d.length;
-
-    if (idStart < cursor) {
-      // Decorations should never overlap; if they do, skip the
-      // out-of-order one. (Could happen if the parser ever made
-      // a column mistake — defensive.)
-      // eslint-disable-next-line no-console
-      console.warn('inline-source: overlapping decorations', d);
-      continue;
-    }
-
-    if (idEnd > text.length) {
-      // Past EOL — bail.
-      // eslint-disable-next-line no-console
-      console.warn('inline-source: decoration past EOL', d, text);
-      continue;
-    }
-
-    // Text up to and including the identifier
+    if (idStart < cursor) continue;
+    if (idEnd > text.length) continue;
     out.push(text.slice(cursor, idEnd));
-
-    // The pill itself
-    out.push(renderPill(d, env, pillKey++));
-
+    out.push(renderPill(
+      d, env, pillKey++, lineNum, pokeEnabled, editing, setEditing, forceRender,
+    ));
     cursor = idEnd;
   }
 
-  // Trailing text
   if (cursor < text.length) {
     out.push(text.slice(cursor));
   } else if (text.length === 0 && decos.length === 0) {
-    // Empty line — render a zero-width space so the line still
-    // has its proper height. (CSS could do this but the explicit
-    // node makes it copy-paste-friendly too.)
     out.push('\u200b');
   }
 
@@ -264,39 +271,210 @@ function renderLine(
 }
 
 function renderPill(
-  d: Decoration, env: Environment, key: number,
+  d: Decoration,
+  env: Environment,
+  key: number,
+  lineNum: number,
+  pokeEnabled: boolean,
+  editing: { line: number; column: number; nameLower: string } | null,
+  setEditing: (v: { line: number; column: number; nameLower: string } | null) => void,
+  forceRender: () => void,
 ): React.ReactNode {
-  const v: RuntimeValue | undefined = env.get(d.nameLower);
-  if (!v) {
-    // Should be unreachable — every reference was validated at
-    // parse time. Render a placeholder so the layout doesn't
-    // collapse.
+  let formattedValue: string;
+  let pillType: ScalarTypeName | null = null;
+  let isBoolTrue = false;
+  let isMissing = false;
+
+  if (d.payload.kind === 'var') {
+    const v: RuntimeValue | undefined = env.get(d.payload.nameLower);
+    if (!v) {
+      formattedValue = '?';
+      isMissing = true;
+    } else if (v.kind === 'fb') {
+      // FB-typed variable referenced bare (not via member). Show
+      // the type tag so the user sees it's an FB. Not pokeable.
+      formattedValue = `<${v.fbType}>`;
+    } else {
+      formattedValue = formatRuntimeValue(v);
+      pillType = v.type;
+      if (v.type === 'BOOL') isBoolTrue = v.value === true;
+    }
+  } else {
+    // Member access — derive the current member value.
+    const obj = env.get(d.payload.objectLower);
+    if (!obj || obj.kind !== 'fb') {
+      formattedValue = '?';
+      isMissing = true;
+    } else {
+      const ms = obj.state;
+      const memberLower = d.payload.memberLower;
+      if (memberLower === 'q') {
+        const q = ms.q === true;
+        formattedValue = q ? 'TRUE' : 'FALSE';
+        pillType = 'BOOL';
+        isBoolTrue = q;
+      } else if (memberLower === 'et') {
+        const et = (ms.et ?? 0) as number;
+        formattedValue = formatTimeForPill(et);
+        pillType = 'TIME';
+      } else {
+        formattedValue = '?';
+        isMissing = true;
+      }
+    }
+  }
+
+  const isEditing =
+    editing !== null &&
+    d.payload.kind === 'var' &&
+    editing.line === lineNum &&
+    editing.column === d.column &&
+    editing.nameLower === d.payload.nameLower;
+
+  if (isEditing && d.payload.kind === 'var') {
     return (
-      <span
+      <PillEditor
         key={key}
-        className="nc-runtime-pill nc-runtime-pill-missing"
-        title={`unknown variable "${d.name}"`}
-      >
-        ?
-      </span>
+        nameLower={d.payload.nameLower}
+        currentText={formattedValue.replace(/^'|'$/g, '')}
+        env={env}
+        onCommit={(success) => {
+          setEditing(null);
+          if (success) forceRender();
+        }}
+      />
     );
   }
 
-  const formatted = formatRuntimeValue(v);
   let cls = 'nc-runtime-pill';
-  if (v.type === 'BOOL') {
-    cls += (v.value as boolean)
+  if (isMissing) cls += ' nc-runtime-pill-missing';
+  else if (pillType === 'BOOL') {
+    cls += isBoolTrue
       ? ' nc-runtime-pill-bool nc-runtime-pill-bool-true'
       : ' nc-runtime-pill-bool nc-runtime-pill-bool-false';
   }
+
+  // Pokeable: scalar var only, type known, poking enabled.
+  const canPoke =
+    pokeEnabled && !isMissing &&
+    d.payload.kind === 'var' && pillType !== null;
+  if (canPoke) cls += ' nc-runtime-pill-pokeable';
+
+  const tooltip = d.payload.kind === 'var'
+    ? `${d.payload.name} : ${pillType ?? '?'}` +
+      (canPoke ? ' (click to edit)' : '')
+    : `${d.payload.objectName}.${d.payload.memberName} : ${pillType ?? '?'}`;
 
   return (
     <span
       key={key}
       className={cls}
-      title={`${d.name} : ${v.type}`}
+      title={tooltip}
+      role={canPoke ? 'button' : undefined}
+      tabIndex={canPoke ? 0 : undefined}
+      onClick={canPoke
+        ? () => {
+            if (d.payload.kind === 'var') {
+              setEditing({
+                line: lineNum,
+                column: d.column,
+                nameLower: d.payload.nameLower,
+              });
+            }
+          }
+        : undefined}
     >
-      {formatted}
+      {formattedValue}
     </span>
   );
+}
+
+function PillEditor({
+  nameLower, currentText, env, onCommit,
+}: {
+  nameLower: string;
+  currentText: string;
+  env: Environment;
+  onCommit(success: boolean): void;
+}) {
+  const [text, setText] = useState(currentText);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, []);
+
+  const v = env.get(nameLower);
+  if (!v || v.kind !== 'scalar') {
+    return null;
+  }
+  const targetType = v.type;
+
+  function commit() {
+    const parsed = parsePokeInput(text, targetType);
+    if (!parsed.ok) {
+      setError(parsed.error);
+      return;
+    }
+    const result = pokeVariable(env, nameLower, parsed.value, 0);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onCommit(true);
+  }
+
+  return (
+    <span className="nc-runtime-pill nc-runtime-pill-editing">
+      <input
+        ref={inputRef}
+        type="text"
+        className={
+          'nc-runtime-pill-input' +
+          (error ? ' nc-runtime-pill-input-err' : '')
+        }
+        value={text}
+        size={Math.max(4, text.length + 1)}
+        onChange={(e) => {
+          setText(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            onCommit(false);
+          }
+        }}
+        onBlur={() => {
+          if (text === currentText) {
+            onCommit(false);
+          } else {
+            commit();
+          }
+        }}
+        title={error ?? `${nameLower} : ${targetType}`}
+        aria-label={`Edit ${nameLower}`}
+      />
+    </span>
+  );
+}
+
+function formatTimeForPill(ms: number): string {
+  if (ms === 0) return 'T#0ms';
+  let r = Math.max(0, Math.round(ms));
+  const parts: string[] = [];
+  const day = 86400000, hr = 3600000, min = 60000, sec = 1000;
+  if (r >= day) { const d = Math.floor(r / day); parts.push(`${d}d`); r -= d * day; }
+  if (r >= hr)  { const h = Math.floor(r / hr);  parts.push(`${h}h`); r -= h * hr; }
+  if (r >= min) { const m = Math.floor(r / min); parts.push(`${m}m`); r -= m * min; }
+  if (r >= sec) { const s = Math.floor(r / sec); parts.push(`${s}s`); r -= s * sec; }
+  if (r > 0) parts.push(`${r}ms`);
+  return 'T#' + parts.join('');
 }

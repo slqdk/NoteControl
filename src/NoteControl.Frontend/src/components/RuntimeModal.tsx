@@ -60,6 +60,12 @@ interface UiState {
   /** Versioning bump — components reading env directly through
    *  the ref need a render trigger to pick up scan changes. */
   envVersion: number;
+  /** Cumulative wall-clock-style time the runtime has been
+   *  executing, in ms. Increments by cycleMs per Run-tick.
+   *  Frozen during Stop/error. Reset to 0 by Reset. The
+   *  interpreter passes this into runScan() so TON/TOF can
+   *  derive elapsed time from it. */
+  scanTimeMs: number;
 }
 
 type Action =
@@ -83,6 +89,7 @@ function reducer(state: UiState, action: Action): UiState {
         ...state,
         mode: 'paused',
         scanCount: state.scanCount + 1,
+        scanTimeMs: state.scanTimeMs + state.cycleMs,
         envVersion: state.envVersion + 1,
       };
     case 'RESET':
@@ -90,6 +97,7 @@ function reducer(state: UiState, action: Action): UiState {
         ...state,
         mode: state.mode === 'error' ? 'paused' : state.mode,
         scanCount: 0,
+        scanTimeMs: 0,
         errorMessage: null,
         errorLine: null,
         envVersion: state.envVersion + 1,
@@ -100,6 +108,7 @@ function reducer(state: UiState, action: Action): UiState {
       return {
         ...state,
         scanCount: state.scanCount + 1,
+        scanTimeMs: state.scanTimeMs + state.cycleMs,
         envVersion: state.envVersion + 1,
       };
     case 'SCAN_ERR':
@@ -120,6 +129,7 @@ const INITIAL: UiState = {
   errorMessage: null,
   errorLine: null,
   envVersion: 0,
+  scanTimeMs: 0,
 };
 
 export function RuntimeModal({
@@ -163,9 +173,12 @@ export function RuntimeModal({
 
   // --- Scan loop ----------------------------------------------
   const intervalRef = useRef<number | null>(null);
+  // Mirror state.scanTimeMs into a ref so the tick callback always
+  // reads the current value, not a stale closure capture.
+  const scanTimeRef = useRef<number>(state.scanTimeMs);
+  scanTimeRef.current = state.scanTimeMs;
 
   useEffect(() => {
-    // Clear any prior interval; this effect is the single owner.
     if (intervalRef.current !== null) {
       window.clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -177,7 +190,7 @@ export function RuntimeModal({
       const env = envRef.current;
       if (!env) return;
       try {
-        runScan(parsed.program, env);
+        runScan(parsed.program, env, scanTimeRef.current);
         dispatch({ type: 'SCAN_OK' });
       } catch (e) {
         if (e instanceof StRuntimeError) {
@@ -223,7 +236,7 @@ export function RuntimeModal({
     if (!env || !parsed.ok) return;
     if (state.mode === 'error') return;
     try {
-      runScan(parsed.program, env);
+      runScan(parsed.program, env, scanTimeRef.current);
       dispatch({ type: 'STEP_DONE' });
     } catch (e) {
       if (e instanceof StRuntimeError) {
@@ -373,6 +386,9 @@ export function RuntimeModal({
           <span className="nc-runtime-modal-status" title="Scan counter">
             scan: {state.scanCount}
           </span>
+          <span className="nc-runtime-modal-status" title="Runtime elapsed time (frozen during Stop)">
+            t: {formatElapsed(state.scanTimeMs)}
+          </span>
         </div>
 
         <div className="nc-runtime-modal-body">
@@ -390,6 +406,8 @@ export function RuntimeModal({
                 program={parsed.program}
                 env={env}
                 errorLine={state.errorLine}
+                envVersion={state.envVersion}
+                pokeEnabled={state.mode !== 'error'}
               />
             ) : (
               <pre className="nc-runtime-modal-source">
@@ -411,4 +429,32 @@ export function RuntimeModal({
   );
 
   return createPortal(modal, document.body);
+}
+
+/**
+ * Format the runtime's elapsed time for the toolbar status. Uses
+ * a slightly different convention than the inline TIME pills: we
+ * always show seconds, and rounded to one decimal place under
+ * 100s, so the running counter feels alive at fast cycles.
+ *
+ * Examples:
+ *   0      → "0s"
+ *   500    → "0.5s"
+ *   1500   → "1.5s"
+ *   60000  → "60s"
+ *   125000 → "2m 5s"
+ */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) {
+    const dec = (ms / 1000).toFixed(1);
+    return `${dec}s`;
+  }
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min < 60) return `${min}m ${sec}s`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return `${hr}h ${remMin}m`;
 }

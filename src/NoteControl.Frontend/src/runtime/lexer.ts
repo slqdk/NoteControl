@@ -85,7 +85,7 @@ const KEYWORDS = new Set([
  * single-char alternatives. `:=` before `:`, `<>`/`<=` before
  * `<`, `>=` before `>`, `..` before `.` (range in CASE labels).
  */
-const PUNCT_TWO = ['..', ':=', '<>', '<=', '>=', '**'];
+const PUNCT_TWO = ['..', ':=', '<>', '<=', '>=', '**', '=>'];
 const PUNCT_ONE = '+-*/();,:.<>=[]';
 
 /**

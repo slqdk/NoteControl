@@ -25,6 +25,12 @@
  * instance types (TON, TOF, etc.) come in a later ship — declaring
  * one in v1 will produce a parse error pointing at the type name.
  */
+/**
+ * The set of scalar type names we recognise in v1. Function-block
+ * instance types like TON / TOF / R_TRIG / F_TRIG are NOT in this
+ * union — they're handled separately by the interpreter via the
+ * `fbType` discriminator on TypeRef below.
+ */
 export type ScalarTypeName =
   | 'BOOL'
   | 'BYTE' | 'WORD' | 'DWORD' | 'LWORD'
@@ -34,9 +40,22 @@ export type ScalarTypeName =
   | 'STRING'
   | 'TIME';
 
+/**
+ * The set of FB types the runtime knows how to instantiate in
+ * v1. User-defined FBs aren't supported — adding one would mean
+ * adding to this union AND providing the body in the runtime.
+ */
+export type FbTypeName = 'TON' | 'TOF' | 'R_TRIG' | 'F_TRIG';
+
 export interface TypeRef {
-  /** Canonical uppercase name, e.g. "UDINT". */
-  name: ScalarTypeName;
+  /** Canonical uppercase type name. May be a scalar OR an FB
+   *  type — the interpreter dispatches on which. */
+  name: ScalarTypeName | FbTypeName;
+  /** True when this is an FB type. Set by the parser based on
+   *  the `lookupFbType` lookup. The interpreter uses this to
+   *  decide between regular value semantics and FB-instance
+   *  semantics. */
+  isFb: boolean;
   /** 1-indexed source line where the type was named. */
   line: number;
 }
@@ -76,7 +95,8 @@ export type Expr =
   | VarRefExpr
   | UnaryExpr
   | BinaryExpr
-  | CallExpr;
+  | CallExpr
+  | MemberExpr;
 
 /**
  * A literal value parsed from source. We keep the original token
@@ -142,21 +162,67 @@ export interface BinaryExpr {
 }
 
 /**
- * Function call: `ABS(x)`, `MIN(a, b, c)`, `INT_TO_REAL(n)`. v1
- * supports only built-in functions — the parser produces this
- * node for any `IDENT ( ... )` form, and the interpreter looks
- * up the name in its built-in table at call time. Unknown names
- * therefore become a *runtime* error, not a parse error. We
- * could resolve at parse time but it's not worth the coupling.
+ * Function call: `ABS(x)`, `MIN(a, b, c)`, `INT_TO_REAL(n)`, and
+ * also FB-instance calls like `MyTimer(IN := bStart, PT := T#1s)`
+ * — they share the same surface syntax, and the interpreter
+ * dispatches at runtime based on whether the name resolves to a
+ * built-in function or an FB instance in env.
+ *
+ * Args use the `CallArg` shape: positional for plain
+ * `func(a, b, c)`, named-input for `:=` form, named-output for
+ * `=>` form (FB calls only). The parser accepts a mix in any
+ * order (matching ST), and the interpreter validates that the
+ * shapes are appropriate for the resolved target.
  */
 export interface CallExpr {
   kind: 'Call';
-  /** Function name in original casing. */
+  /** Function or FB-instance name in original casing. */
   name: string;
-  /** Lowercased for built-in table lookup. */
+  /** Lowercased for built-in / env lookup. */
   nameLower: string;
-  args: Expr[];
+  args: CallArg[];
   line: number;
+}
+
+/**
+ * One argument in a call. Positional args have `nameLower === ''`
+ * (the parser produces them when the user wrote a bare expression
+ * — `ABS(x)`). Named-input args carry the parameter's lowercased
+ * name and an expression. Named-output args (FB output bindings,
+ * `Q => bDone`) carry the parameter name and a target variable
+ * name to assign into after the FB call returns.
+ */
+export interface CallArg {
+  kind: 'positional' | 'named-in' | 'named-out';
+  /** Empty for positional; lowercased parameter name for named. */
+  nameLower: string;
+  /** Original casing of the parameter name (for diagnostics). */
+  name: string;
+  /** For positional and named-in: the value expression. */
+  value: Expr | null;
+  /** For named-out: the target variable to assign Q/ET/etc into. */
+  target: VarRefExpr | null;
+  line: number;
+}
+
+/**
+ * Member access on a variable, used for FB output reads:
+ * `MyTimer.Q`, `MyTimer.ET`. v1 only supports member access on
+ * FB instances — accessing `.foo` on a scalar throws a runtime
+ * error. The parser produces the node uniformly; the interpreter
+ * decides at evaluation time.
+ *
+ * v1 doesn't support chained access (`a.b.c`) because we have no
+ * nested FBs. The parser only accepts a single dot after a
+ * VarRef.
+ */
+export interface MemberExpr {
+  kind: 'Member';
+  object: VarRefExpr;
+  member: string;
+  memberLower: string;
+  line: number;
+  column: number;
 }
 
 // --- Statements ------------------------------------------------

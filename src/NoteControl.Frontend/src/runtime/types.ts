@@ -27,7 +27,7 @@
  * 32-bit-or-smaller slot.
  */
 
-import type { ScalarTypeName } from './ast';
+import type { ScalarTypeName, FbTypeName } from './ast';
 
 export type ValueRepr = 'number' | 'bigint' | 'boolean' | 'string' | 'time-ms';
 
@@ -144,4 +144,19 @@ export const TYPE_META: Record<ScalarTypeName, TypeMeta> = {
 export function lookupTypeName(s: string): ScalarTypeName | null {
   const upper = s.toUpperCase() as ScalarTypeName;
   return upper in TYPE_META ? upper : null;
+}
+
+/**
+ * The set of built-in FB types the v1 runtime knows how to
+ * instantiate. The interpreter has matching tickFb implementations
+ * for each. Adding more FB types is two changes: this set, and a
+ * registration in interpreter.ts.
+ */
+const FB_TYPES: ReadonlySet<FbTypeName> = new Set<FbTypeName>([
+  'TON', 'TOF', 'R_TRIG', 'F_TRIG',
+]);
+
+export function lookupFbType(s: string): FbTypeName | null {
+  const upper = s.toUpperCase();
+  return FB_TYPES.has(upper as FbTypeName) ? (upper as FbTypeName) : null;
 }

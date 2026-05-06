@@ -37,10 +37,11 @@ import {
   type ParsedProgram, type ProgramDecl, type VarDecl,
   type Statement, type Expr, type CaseLabel, type CaseBranch,
   type IfBranch, type LiteralExpr, type VarRefExpr, type BinaryOp,
+  type CallArg,
 } from './ast';
 import { StParseError } from './errors';
 import { tokenize, type Token } from './lexer';
-import { lookupTypeName } from './types';
+import { lookupTypeName, lookupFbType } from './types';
 
 // --- Public API ------------------------------------------------
 
@@ -224,20 +225,36 @@ class Parser {
       }
       this.expectPunct(':');
 
-      // Type
+      // Type — first try scalar, then FB types. The TypeRef
+      // carries an `isFb` flag so the interpreter can branch on
+      // it without re-parsing the type name.
       const typeTok = this.peek();
       if (typeTok.kind !== 'IDENT' && typeTok.kind !== 'KEYWORD') {
         throw this.err(typeTok, `expected type name, got ${describeToken(typeTok)}`);
       }
-      const canon = lookupTypeName(typeTok.value);
-      if (!canon) {
-        throw this.err(typeTok, `unknown type "${typeTok.value}" (v1 supports only standard scalars)`);
+      const scalarName = lookupTypeName(typeTok.value);
+      const fbName = scalarName ? null : lookupFbType(typeTok.value);
+      if (!scalarName && !fbName) {
+        throw this.err(
+          typeTok,
+          `unknown type "${typeTok.value}" (v1 supports standard scalars and TON, TOF, R_TRIG, F_TRIG)`,
+        );
       }
+      const typeRef = scalarName
+        ? { name: scalarName, isFb: false as const, line: typeTok.line }
+        : { name: fbName!, isFb: true as const, line: typeTok.line };
       this.consume();
 
-      // Optional initial value
+      // Optional initial value — only meaningful for scalars.
+      // FB instances have internal state init done by the runtime.
       let initial: Expr | null = null;
       if (this.acceptPunct(':=')) {
+        if (typeRef.isFb) {
+          throw this.err(
+            typeTok,
+            `FB instances cannot have an initial value (drop the := for "${typeTok.value}")`,
+          );
+        }
         initial = this.parseExpression();
       }
       this.expectPunct(';');
@@ -251,7 +268,7 @@ class Parser {
         vars.push({
           name: n.name,
           nameLower: n.nameLower,
-          type: { name: canon, line: typeTok.line },
+          type: typeRef,
           initial,
           line: n.tok.line,
         });
@@ -734,13 +751,13 @@ class Parser {
     }
     if (t.kind === 'IDENT') {
       this.consume();
-      // Function call?
+      // Function or FB-instance call?
       if (this.acceptPunct('(')) {
-        const args: Expr[] = [];
+        const args: CallArg[] = [];
         if (!this.acceptPunct(')')) {
-          args.push(this.parseExpression());
+          args.push(this.parseCallArg());
           while (this.acceptPunct(',')) {
-            args.push(this.parseExpression());
+            args.push(this.parseCallArg());
           }
           this.expectPunct(')');
         }
@@ -750,6 +767,33 @@ class Parser {
           nameLower: t.value.toLowerCase(),
           args,
           line: t.line,
+        };
+      }
+      // Member access? `MyTimer.Q` — only one dot supported. The
+      // VarRef on the left becomes the `object` of the MemberExpr;
+      // we don't recurse into chained `.a.b.c`.
+      if (this.acceptPunct('.')) {
+        const memberTok = this.peek();
+        if (memberTok.kind !== 'IDENT' && memberTok.kind !== 'KEYWORD') {
+          throw this.err(
+            memberTok,
+            `expected member name after ".", got ${describeToken(memberTok)}`,
+          );
+        }
+        this.consume();
+        return {
+          kind: 'Member',
+          object: {
+            kind: 'VarRef',
+            name: t.value,
+            nameLower: t.value.toLowerCase(),
+            line: t.line,
+            column: t.column,
+          },
+          member: memberTok.value,
+          memberLower: memberTok.value.toLowerCase(),
+          line: t.line,
+          column: t.column,
         };
       }
       return {
@@ -768,6 +812,77 @@ class Parser {
     }
 
     throw this.err(t, `expected an expression, got ${describeToken(t)}`);
+  }
+
+  /**
+   * Parse one argument inside a call's parens. Three shapes:
+   *
+   *   expr            — positional
+   *   IDENT := expr   — named input (FB inputs, but also valid
+   *                     for built-ins that ignore the name)
+   *   IDENT => IDENT  — named output (FB only). The right side
+   *                     must be a plain variable name — the FB's
+   *                     output gets copied there after the call.
+   *
+   * The decision is made by looking ahead two tokens. If we see
+   * IDENT followed by ':=' or '=>', it's a named arg.
+   */
+  private parseCallArg(): CallArg {
+    const first = this.peek();
+    if (first.kind === 'IDENT') {
+      const next = this.peek(1);
+      if (next.kind === 'PUNCT' && next.value === ':=') {
+        // named-in
+        this.consume(); // IDENT
+        this.consume(); // :=
+        const value = this.parseExpression();
+        return {
+          kind: 'named-in',
+          name: first.value,
+          nameLower: first.value.toLowerCase(),
+          value,
+          target: null,
+          line: first.line,
+        };
+      }
+      if (next.kind === 'PUNCT' && next.value === '=>') {
+        // named-out — RHS must be a plain identifier.
+        this.consume(); // IDENT (param name)
+        this.consume(); // =>
+        const tgt = this.peek();
+        if (tgt.kind !== 'IDENT') {
+          throw this.err(
+            tgt,
+            `expected variable name after "=>", got ${describeToken(tgt)}`,
+          );
+        }
+        this.consume();
+        return {
+          kind: 'named-out',
+          name: first.value,
+          nameLower: first.value.toLowerCase(),
+          value: null,
+          target: {
+            kind: 'VarRef',
+            name: tgt.value,
+            nameLower: tgt.value.toLowerCase(),
+            line: tgt.line,
+            column: tgt.column,
+          },
+          line: first.line,
+        };
+      }
+    }
+    // Positional
+    const expr = this.parseExpression();
+    return {
+      kind: 'positional',
+      name: '',
+      nameLower: '',
+      value: expr,
+      target: null,
+      line: first.line,
+    };
   }
 
   private peekKw(value: string): boolean {
@@ -805,7 +920,31 @@ function validateVarRefs(body: Statement[], vars: VarDecl[]): void {
       case 'Binary':
         visitExpr(e.left); visitExpr(e.right); return;
       case 'Call':
-        for (const a of e.args) visitExpr(a);
+        // Each arg is a CallArg now. Positional and named-in carry
+        // an expression in `value`; named-out carries a `target`
+        // VarRef that must reference a declared variable.
+        for (const a of e.args) {
+          if (a.value) visitExpr(a.value);
+          if (a.target) {
+            if (!declared.has(a.target.nameLower)) {
+              throw new StParseError(
+                'parse', a.target.line, 1,
+                `undeclared output target "${a.target.name}" in call to "${e.name}"`,
+              );
+            }
+          }
+        }
+        return;
+      case 'Member':
+        // The object must be a declared variable. Whether the
+        // member name is valid is checked at runtime (depends on
+        // the variable's FB type).
+        if (!declared.has(e.object.nameLower)) {
+          throw new StParseError(
+            'parse', e.line, 1,
+            `undeclared variable "${e.object.name}" before "."`,
+          );
+        }
         return;
     }
   }

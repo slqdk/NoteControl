@@ -46,7 +46,8 @@
 
 import type {
   ParsedProgram, Statement, Expr, BinaryOp,
-  CaseLabel, ScalarTypeName,
+  CaseLabel, ScalarTypeName, FbTypeName, CallArg, MemberExpr,
+  VarRefExpr,
 } from './ast';
 import { StRuntimeError } from './errors';
 import { TYPE_META, type TypeMeta } from './types';
@@ -54,7 +55,7 @@ import { TYPE_META, type TypeMeta } from './types';
 // --- Value representation --------------------------------------
 
 /**
- * A runtime value is its type tag plus its JS-side storage.
+ * A scalar value: type tag plus its JS-side storage.
  *
  * Integers ≤32 bit and reals are stored as JS `number`.
  * Integers ≥64 bit (LWORD/LINT/ULINT) use `bigint`.
@@ -65,12 +66,47 @@ import { TYPE_META, type TypeMeta } from './types';
  * intermediate values whose type tag reflects the wider operand
  * (the "result type" — real if either is real, etc).
  */
-export interface RuntimeValue {
+export interface ScalarValue {
+  kind: 'scalar';
   type: ScalarTypeName;
   value: number | bigint | boolean | string;
 }
 
+/**
+ * An FB instance — opaque from the rest of the interpreter's
+ * perspective; the only operations are "call it" (`tickFb`) and
+ * "read a member" (`readFbMember`). The internal `state` shape
+ * varies per fbType and is owned by the matching tickFb function.
+ */
+export interface FbInstance {
+  kind: 'fb';
+  fbType: FbTypeName;
+  state: Record<string, unknown>;
+}
+
+/** Anything storable in the env. */
+export type RuntimeValue = ScalarValue | FbInstance;
+
 export type Environment = Map<string, RuntimeValue>;
+
+// Tag-helpers — the interpreter pre-Ship-C didn't have a `kind`
+// discriminator on values; so a lot of code constructed
+// `{ type, value }` literals. With FB instances added we now
+// require the discriminator. These tiny helpers keep the rest
+// of the file readable.
+function scalar(type: ScalarTypeName, value: ScalarValue['value']): ScalarValue {
+  return { kind: 'scalar', type, value };
+}
+
+function asScalar(v: RuntimeValue, line: number, ctx: string): ScalarValue {
+  if (v.kind !== 'scalar') {
+    throw new StRuntimeError(
+      'type-mismatch', line,
+      `${ctx}: expected a scalar value, got an FB instance (type ${v.fbType})`,
+    );
+  }
+  return v;
+}
 
 // --- Sentinels for control flow -------------------------------
 
@@ -85,10 +121,39 @@ const RET = new ReturnSignal();
 // --- Public API ------------------------------------------------
 
 /**
+ * Per-scan execution context. Threaded through every exec/eval
+ * call so state that's purely about THIS scan (statement budget,
+ * scan time for timers) doesn't leak via the env (which is
+ * persistent across scans).
+ *
+ * - `env`         — variable storage, persistent.
+ * - `scanTimeMs`  — wall-clock-style time the runtime sees this
+ *                   scan, in milliseconds. Increments by the
+ *                   cycle interval per scan; pauses while the
+ *                   user has Stop pressed; reset by the modal's
+ *                   Reset button. TON / TOF read this for
+ *                   elapsed-time calculations.
+ * - `budgetLeft`  — statements remaining before the per-scan
+ *                   budget kicks in. Decrements each statement;
+ *                   throws StRuntimeError('execution-budget')
+ *                   when it hits zero. Reset to MAX_BUDGET each
+ *                   scan.
+ */
+interface ScanContext {
+  env: Environment;
+  scanTimeMs: number;
+  budgetLeft: number;
+}
+
+const MAX_BUDGET = 100_000;
+
+/**
  * Build a fresh environment from the program declaration. Each
  * variable starts at:
- *   - its evaluated initial expression, if any
- *   - the type's default value otherwise
+ *   - for scalars: its evaluated initial expression, or the
+ *     type's default value
+ *   - for FB instances: a fresh state object (no init expression
+ *     allowed, the parser rejects `MyTimer : TON := ...`)
  *
  * Initial expressions can reference earlier-declared variables —
  * the env is populated declaration-order, so `b : INT := a + 1;`
@@ -99,13 +164,21 @@ const RET = new ReturnSignal();
  */
 export function createEnvironment(program: ParsedProgram): Environment {
   const env: Environment = new Map();
+  // Init expressions evaluate in a no-budget, time=0 context.
+  // That's fine — inits are simple expressions, never loops.
+  const initCtx: ScanContext = { env, scanTimeMs: 0, budgetLeft: MAX_BUDGET };
+
   for (const v of program.program.vars) {
+    if (v.type.isFb) {
+      env.set(v.nameLower, makeFbInstance(v.type.name as FbTypeName));
+      continue;
+    }
     if (v.initial) {
-      const value = evalExpr(v.initial, env);
-      env.set(v.nameLower, coerceTo(value, v.type.name, v.line));
+      const value = evalExpr(v.initial, initCtx);
+      env.set(v.nameLower, coerceTo(value, v.type.name as ScalarTypeName, v.line));
     } else {
-      const meta = TYPE_META[v.type.name];
-      env.set(v.nameLower, { type: v.type.name, value: meta.defaultValue });
+      const meta = TYPE_META[v.type.name as ScalarTypeName];
+      env.set(v.nameLower, scalar(v.type.name as ScalarTypeName, meta.defaultValue));
     }
   }
   return env;
@@ -116,13 +189,25 @@ export function createEnvironment(program: ParsedProgram): Environment {
  * Throws StRuntimeError on any runtime fault — caller stops the
  * scan loop and reports.
  *
+ * The caller is responsible for tracking scan time across calls
+ * and passing the new value here. Cleanest approach in the modal
+ * is `scanTimeMs += cycleMs` per Run-tick, frozen during Stop,
+ * back to 0 on Reset.
+ *
  * EXIT or CONTINUE that propagates up to the scan boundary
  * terminates the current scan early without an error (a stray
  * EXIT outside a loop is poor practice but not a crime).
  */
-export function runScan(program: ParsedProgram, env: Environment): void {
+export function runScan(
+  program: ParsedProgram, env: Environment, scanTimeMs: number,
+): void {
+  const ctx: ScanContext = {
+    env,
+    scanTimeMs,
+    budgetLeft: MAX_BUDGET,
+  };
   try {
-    execStatements(program.body, env);
+    execStatements(program.body, ctx);
   } catch (sig) {
     if (sig instanceof ExitSignal || sig instanceof ContinueSignal ||
         sig instanceof ReturnSignal) {
@@ -136,40 +221,54 @@ export function runScan(program: ParsedProgram, env: Environment): void {
 
 // --- Statement execution ---------------------------------------
 
-function execStatements(stmts: Statement[], env: Environment): void {
+function execStatements(stmts: Statement[], ctx: ScanContext): void {
   for (const s of stmts) {
-    execStatement(s, env);
+    execStatement(s, ctx);
   }
 }
 
-function execStatement(s: Statement, env: Environment): void {
+function execStatement(s: Statement, ctx: ScanContext): void {
+  // Per-scan statement budget. Decrements before each statement;
+  // hitting zero throws StRuntimeError. Reset to MAX_BUDGET each
+  // scan in runScan(), so a long-running program with many small
+  // scans is fine — only one *individual* scan can be infinite.
+  if (--ctx.budgetLeft < 0) {
+    throw new StRuntimeError(
+      'internal', s.line,
+      `execution budget exceeded (${MAX_BUDGET} statements per scan) — likely infinite loop`,
+    );
+  }
+
   switch (s.kind) {
     case 'Assign': {
-      const value = evalExpr(s.value, env);
-      const targetVar = env.get(s.target.nameLower);
+      const value = evalExpr(s.value, ctx);
+      const targetVar = ctx.env.get(s.target.nameLower);
       if (!targetVar) {
-        // Should be unreachable — the parser already validated
-        // every reference. Defensive throw.
         throw new StRuntimeError(
           'internal', s.line,
           `internal: unknown variable "${s.target.name}" at runtime`,
         );
       }
+      if (targetVar.kind === 'fb') {
+        throw new StRuntimeError(
+          'type-mismatch', s.line,
+          `cannot assign to FB instance "${s.target.name}" — call it instead`,
+        );
+      }
       const coerced = coerceTo(value, targetVar.type, s.line);
-      env.set(s.target.nameLower, coerced);
+      ctx.env.set(s.target.nameLower, coerced);
       return;
     }
 
     case 'If': {
       for (const branch of s.branches) {
         if (branch.condition === null) {
-          // ELSE
-          execStatements(branch.body, env);
+          execStatements(branch.body, ctx);
           return;
         }
-        const cond = evalExpr(branch.condition, env);
+        const cond = evalExpr(branch.condition, ctx);
         if (truthy(cond, branch.condition.line)) {
-          execStatements(branch.body, env);
+          execStatements(branch.body, ctx);
           return;
         }
       }
@@ -177,33 +276,31 @@ function execStatement(s: Statement, env: Environment): void {
     }
 
     case 'Case': {
-      const sel = evalExpr(s.selector, env);
+      const sel = evalExpr(s.selector, ctx);
       const selN = toIntForCase(sel, s.line);
       let matchedBranch = false;
       for (const branch of s.branches) {
-        if (branch.labels.length === 0) continue; // ELSE — handled below
-        if (caseLabelsMatch(branch.labels, selN, env)) {
-          execStatements(branch.body, env);
+        if (branch.labels.length === 0) continue;
+        if (caseLabelsMatch(branch.labels, selN, ctx)) {
+          execStatements(branch.body, ctx);
           matchedBranch = true;
           break;
         }
       }
       if (!matchedBranch) {
-        // Look for ELSE — last branch with empty labels
         const elseBranch = s.branches.find((b) => b.labels.length === 0);
-        if (elseBranch) execStatements(elseBranch.body, env);
+        if (elseBranch) execStatements(elseBranch.body, ctx);
       }
       return;
     }
 
     case 'For': {
-      const startV = evalExpr(s.start, env);
-      const endV = evalExpr(s.end, env);
-      const stepV = s.step ? evalExpr(s.step, env)
-                           : { type: 'INT' as const, value: 1 };
+      const startV = evalExpr(s.start, ctx);
+      const endV = evalExpr(s.end, ctx);
+      const stepV: ScalarValue = s.step
+        ? asScalar(evalExpr(s.step, ctx), s.line, 'FOR step')
+        : scalar('INT', 1);
 
-      // FOR is integer-only in this v1. Real-typed bounds are a
-      // type error.
       const startN = toIntForLoop(startV, s.line);
       const endN = toIntForLoop(endV, s.line);
       const stepN = toIntForLoop(stepV, s.line);
@@ -215,28 +312,33 @@ function execStatement(s: Statement, env: Environment): void {
         );
       }
 
-      const targetType = env.get(s.loopVar.nameLower)?.type;
-      if (!targetType) {
+      const loopVarStored = ctx.env.get(s.loopVar.nameLower);
+      if (!loopVarStored) {
         throw new StRuntimeError(
           'internal', s.line,
           `internal: loop variable "${s.loopVar.name}" not in env`,
         );
       }
+      if (loopVarStored.kind === 'fb') {
+        throw new StRuntimeError(
+          'type-mismatch', s.line,
+          `FOR loop variable cannot be an FB instance`,
+        );
+      }
+      const targetType = loopVarStored.type;
 
       const ascending = stepN > 0n;
       let i = startN;
       while (ascending ? i <= endN : i >= endN) {
-        // Write loop variable to env each iteration. Coerce so a
-        // narrow loop var (e.g. SINT) wraps as expected.
-        const iValue: RuntimeValue = { type: 'LINT', value: i };
-        env.set(s.loopVar.nameLower, coerceTo(iValue, targetType, s.line));
+        const iValue: ScalarValue = { kind: 'scalar', type: 'LINT', value: i };
+        ctx.env.set(s.loopVar.nameLower, coerceTo(iValue, targetType, s.line));
 
         try {
-          execStatements(s.body, env);
+          execStatements(s.body, ctx);
         } catch (sig) {
           if (sig instanceof ExitSignal) return;
           if (sig instanceof ContinueSignal) {
-            // Fall through to the increment below.
+            // Fall through to the increment.
           } else {
             throw sig;
           }
@@ -248,10 +350,10 @@ function execStatement(s: Statement, env: Environment): void {
 
     case 'While': {
       while (true) {
-        const c = evalExpr(s.condition, env);
+        const c = evalExpr(s.condition, ctx);
         if (!truthy(c, s.condition.line)) return;
         try {
-          execStatements(s.body, env);
+          execStatements(s.body, ctx);
         } catch (sig) {
           if (sig instanceof ExitSignal) return;
           if (sig instanceof ContinueSignal) continue;
@@ -263,16 +365,16 @@ function execStatement(s: Statement, env: Environment): void {
     case 'Repeat': {
       while (true) {
         try {
-          execStatements(s.body, env);
+          execStatements(s.body, ctx);
         } catch (sig) {
           if (sig instanceof ExitSignal) return;
           if (sig instanceof ContinueSignal) {
-            // Fall through to the until check.
+            // Fall through to UNTIL check.
           } else {
             throw sig;
           }
         }
-        const c = evalExpr(s.until, env);
+        const c = evalExpr(s.until, ctx);
         if (truthy(c, s.until.line)) return;
       }
     }
@@ -282,13 +384,12 @@ function execStatement(s: Statement, env: Environment): void {
     case 'Return': throw RET;
 
     case 'ExpressionStmt': {
-      // v1 has no FB calls or user functions, so a bare expression
-      // statement has no side effects. We evaluate it for any
-      // potential built-in side effects (currently none — built-
-      // ins are pure) and discard the result. If the expression
-      // fails (e.g. unknown built-in), the runtime error fires
-      // and surfaces in the modal.
-      evalExpr(s.expression, env);
+      // FB calls are written as expression statements:
+      //   `MyTimer(IN := bStart, PT := T#1s);`
+      // The Call evaluation handles the FB tick + output bindings.
+      // Plain function-call expressions also pass through here;
+      // their return value is discarded.
+      evalExpr(s.expression, ctx);
       return;
     }
   }
@@ -297,12 +398,12 @@ function execStatement(s: Statement, env: Environment): void {
 // --- CASE label matching --------------------------------------
 
 function caseLabelsMatch(
-  labels: CaseLabel[], selN: bigint, env: Environment,
+  labels: CaseLabel[], selN: bigint, ctx: ScanContext,
 ): boolean {
   for (const lab of labels) {
-    const lo = toIntForCase(evalExpr(lab.low, env), 0);
+    const lo = toIntForCase(evalExpr(lab.low, ctx), 0);
     const hi = lab.kind === 'Range'
-      ? toIntForCase(evalExpr(lab.high, env), 0)
+      ? toIntForCase(evalExpr(lab.high, ctx), 0)
       : lo;
     if (selN >= lo && selN <= hi) return true;
   }
@@ -311,76 +412,97 @@ function caseLabelsMatch(
 
 // --- Expression evaluation ------------------------------------
 
-function evalExpr(e: Expr, env: Environment): RuntimeValue {
+function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
   switch (e.kind) {
     case 'Literal': {
       switch (e.litType) {
         case 'INT':
-          // The parser stored the literal value as a JS number
-          // (it parsed the digits via Number()). Always-number
-          // for INT — the discriminated union doesn't narrow that
-          // tightly so we double-coerce defensively.
-          return { type: 'DINT', value: Number(e.value) };
+          return scalar('DINT', Number(e.value));
         case 'REAL':
-          return { type: 'REAL', value: Number(e.value) };
+          return scalar('REAL', Number(e.value));
         case 'BOOL':
-          return { type: 'BOOL', value: Boolean(e.value) };
+          return scalar('BOOL', Boolean(e.value));
         case 'STRING':
-          return { type: 'STRING', value: String(e.value) };
+          return scalar('STRING', String(e.value));
         case 'TIME':
-          return { type: 'TIME', value: Number(e.value) };
+          return scalar('TIME', Number(e.value));
       }
       throw new StRuntimeError('internal', e.line, 'unknown literal type');
     }
 
     case 'VarRef': {
-      const v = env.get(e.nameLower);
+      const v = ctx.env.get(e.nameLower);
       if (!v) {
         throw new StRuntimeError(
           'internal', e.line,
           `internal: unknown variable "${e.name}" at runtime`,
         );
       }
-      // Return a copy so downstream mutation doesn't leak.
-      return { type: v.type, value: v.value };
+      // FB instances aren't directly readable — referencing one
+      // by name (without `.member` or call parens) is a runtime
+      // error. We catch this in evalExpr because the parser
+      // doesn't have type info.
+      if (v.kind === 'fb') {
+        throw new StRuntimeError(
+          'type-mismatch', e.line,
+          `cannot read FB instance "${e.name}" directly — call it or read .member`,
+        );
+      }
+      // Copy so downstream mutation doesn't leak.
+      return scalar(v.type, v.value);
     }
 
+    case 'Member':
+      return evalMember(e, ctx);
+
     case 'Unary':
-      return evalUnary(e.op, evalExpr(e.operand, env), e.line);
+      return evalUnary(e.op, evalExpr(e.operand, ctx), e.line);
 
     case 'Binary':
       return evalBinary(
         e.op,
-        evalExpr(e.left, env),
-        evalExpr(e.right, env),
+        evalExpr(e.left, ctx),
+        evalExpr(e.right, ctx),
         e.line,
       );
 
     case 'Call':
-      return callBuiltin(
-        e.nameLower, e.name,
-        e.args.map((a) => evalExpr(a, env)),
-        e.line,
-      );
+      return evalCall(e.nameLower, e.name, e.args, e.line, ctx);
   }
 }
 
+function evalMember(e: MemberExpr, ctx: ScanContext): RuntimeValue {
+  const v = ctx.env.get(e.object.nameLower);
+  if (!v) {
+    throw new StRuntimeError(
+      'internal', e.line,
+      `internal: unknown variable "${e.object.name}" at runtime`,
+    );
+  }
+  if (v.kind !== 'fb') {
+    throw new StRuntimeError(
+      'type-mismatch', e.line,
+      `cannot read member ".${e.member}" on non-FB variable "${e.object.name}"`,
+    );
+  }
+  return readFbMember(v, e.memberLower, e.member, e.line);
+}
+
 function evalUnary(
-  op: 'NOT' | 'NEG' | 'POS', operand: RuntimeValue, line: number,
-): RuntimeValue {
+  op: 'NOT' | 'NEG' | 'POS', operandIn: RuntimeValue, line: number,
+): ScalarValue {
+  const operand = asScalar(operandIn, line, `unary ${op}`);
   switch (op) {
     case 'NOT':
       if (operand.type === 'BOOL') {
-        return { type: 'BOOL', value: !(operand.value as boolean) };
+        return scalar('BOOL', !(operand.value as boolean));
       }
       // Bitwise NOT on integers
       if (typeof operand.value === 'bigint') {
-        return { type: operand.type, value: ~operand.value };
+        return scalar(operand.type, ~operand.value);
       }
       if (typeof operand.value === 'number') {
-        // ~ in JS works on 32-bit ints. For 8/16-bit types this
-        // is fine since we coerce on assignment anyway.
-        return { type: operand.type, value: ~operand.value };
+        return scalar(operand.type, ~operand.value);
       }
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -388,10 +510,10 @@ function evalUnary(
       );
     case 'NEG':
       if (typeof operand.value === 'bigint') {
-        return { type: operand.type, value: -operand.value };
+        return scalar(operand.type, -operand.value);
       }
       if (typeof operand.value === 'number') {
-        return { type: operand.type, value: -operand.value };
+        return scalar(operand.type, -operand.value);
       }
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -404,8 +526,11 @@ function evalUnary(
 }
 
 function evalBinary(
-  op: BinaryOp, l: RuntimeValue, r: RuntimeValue, line: number,
-): RuntimeValue {
+  op: BinaryOp, lIn: RuntimeValue, rIn: RuntimeValue, line: number,
+): ScalarValue {
+  const l = asScalar(lIn, line, 'binary op left');
+  const r = asScalar(rIn, line, 'binary op right');
+
   // Boolean logical ops on BOOLs
   if (l.type === 'BOOL' && r.type === 'BOOL' &&
       (op === 'AND' || op === 'OR' || op === 'XOR')) {
@@ -415,20 +540,16 @@ function evalBinary(
     if (op === 'AND') out = a && b;
     else if (op === 'OR') out = a || b;
     else out = a !== b;
-    return { type: 'BOOL', value: out };
+    return scalar('BOOL', out);
   }
 
-  // Comparison — works on any matching kinds (numbers vs numbers,
-  // strings vs strings, time vs time, bool vs bool)
+  // Comparison
   if (op === 'EQ' || op === 'NE' || op === 'LT' ||
       op === 'LE' || op === 'GT' || op === 'GE') {
-    return { type: 'BOOL', value: compareValues(op, l, r, line) };
+    return scalar('BOOL', compareValues(op, l, r, line));
   }
 
-  // Numeric arithmetic / bitwise. Promote to a common form.
-  // Decision tree:
-  //   - If either is real → both → JS number, do FP op
-  //   - Else both ints. If either is 64-bit → BigInt. Else number.
+  // Numeric arithmetic / bitwise.
   if (l.type === 'REAL' || l.type === 'LREAL' ||
       r.type === 'REAL' || r.type === 'LREAL') {
     const a = toNumberFromAny(l, line);
@@ -436,7 +557,7 @@ function evalBinary(
     return realArith(op, a, b, line);
   }
 
-  // Both integer. Pick representation.
+  // Both integer.
   const lIsBig = TYPE_META[l.type].repr === 'bigint';
   const rIsBig = TYPE_META[r.type].repr === 'bigint';
   if (lIsBig || rIsBig) {
@@ -444,7 +565,6 @@ function evalBinary(
     const b = toBigInt(r, line);
     return bigIntArith(op, a, b, widerType(l.type, r.type), line);
   }
-  // Both fit in JS number.
   const a = l.value as number;
   const b = r.value as number;
   return numberArith(op, a, b, widerType(l.type, r.type), line);
@@ -454,24 +574,19 @@ function evalBinary(
 
 function realArith(
   op: BinaryOp, a: number, b: number, line: number,
-): RuntimeValue {
+): ScalarValue {
   switch (op) {
-    case 'ADD': return { type: 'REAL', value: a + b };
-    case 'SUB': return { type: 'REAL', value: a - b };
-    case 'MUL': return { type: 'REAL', value: a * b };
+    case 'ADD': return scalar('REAL', a + b);
+    case 'SUB': return scalar('REAL', a - b);
+    case 'MUL': return scalar('REAL', a * b);
     case 'DIV':
-      // FP division by zero gives Infinity (matches IEEE 754 +
-      // TwinCAT lenient mode). No throw.
-      return { type: 'REAL', value: a / b };
+      return scalar('REAL', a / b);
     case 'MOD':
-      // ST: a MOD 0 is a runtime error (TwinCAT). We match that
-      // even for reals because % in JS gives NaN, which is worse
-      // than an explicit error.
       if (b === 0) {
         throw new StRuntimeError('div-by-zero', line, 'MOD by zero');
       }
-      return { type: 'REAL', value: a % b };
-    case 'POW': return { type: 'REAL', value: a ** b };
+      return scalar('REAL', a % b);
+    case 'POW': return scalar('REAL', a ** b);
     default:
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -483,31 +598,25 @@ function realArith(
 function numberArith(
   op: BinaryOp, a: number, b: number,
   resultType: ScalarTypeName, line: number,
-): RuntimeValue {
-  // Integer arithmetic. Result is held as a JS number; assignment
-  // will coerce/wrap to the destination type's range. We do NOT
-  // wrap intermediate results — only on assignment. Matches
-  // TwinCAT (an intermediate that overflows DINT but is then
-  // assigned to LINT preserves the full value).
+): ScalarValue {
   switch (op) {
-    case 'ADD': return { type: resultType, value: a + b };
-    case 'SUB': return { type: resultType, value: a - b };
-    case 'MUL': return { type: resultType, value: a * b };
+    case 'ADD': return scalar(resultType, a + b);
+    case 'SUB': return scalar(resultType, a - b);
+    case 'MUL': return scalar(resultType, a * b);
     case 'DIV':
       if (b === 0) {
         throw new StRuntimeError('div-by-zero', line, 'integer division by zero');
       }
-      return { type: resultType, value: Math.trunc(a / b) };
+      return scalar(resultType, Math.trunc(a / b));
     case 'MOD':
       if (b === 0) {
         throw new StRuntimeError('div-by-zero', line, 'MOD by zero');
       }
-      // ST MOD has the sign of the dividend (matches JS %).
-      return { type: resultType, value: a % b };
-    case 'POW': return { type: resultType, value: a ** b };
-    case 'AND': return { type: resultType, value: (a & b) >>> 0 };
-    case 'OR':  return { type: resultType, value: (a | b) >>> 0 };
-    case 'XOR': return { type: resultType, value: (a ^ b) >>> 0 };
+      return scalar(resultType, a % b);
+    case 'POW': return scalar(resultType, a ** b);
+    case 'AND': return scalar(resultType, (a & b) >>> 0);
+    case 'OR':  return scalar(resultType, (a | b) >>> 0);
+    case 'XOR': return scalar(resultType, (a ^ b) >>> 0);
     default:
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -519,22 +628,21 @@ function numberArith(
 function bigIntArith(
   op: BinaryOp, a: bigint, b: bigint,
   resultType: ScalarTypeName, line: number,
-): RuntimeValue {
+): ScalarValue {
   switch (op) {
-    case 'ADD': return { type: resultType, value: a + b };
-    case 'SUB': return { type: resultType, value: a - b };
-    case 'MUL': return { type: resultType, value: a * b };
+    case 'ADD': return scalar(resultType, a + b);
+    case 'SUB': return scalar(resultType, a - b);
+    case 'MUL': return scalar(resultType, a * b);
     case 'DIV':
       if (b === 0n) {
         throw new StRuntimeError('div-by-zero', line, 'integer division by zero');
       }
-      // BigInt / truncates toward zero already.
-      return { type: resultType, value: a / b };
+      return scalar(resultType, a / b);
     case 'MOD':
       if (b === 0n) {
         throw new StRuntimeError('div-by-zero', line, 'MOD by zero');
       }
-      return { type: resultType, value: a % b };
+      return scalar(resultType, a % b);
     case 'POW':
       if (b < 0n) {
         throw new StRuntimeError(
@@ -542,10 +650,10 @@ function bigIntArith(
           'integer ** with negative exponent — use REAL',
         );
       }
-      return { type: resultType, value: a ** b };
-    case 'AND': return { type: resultType, value: a & b };
-    case 'OR':  return { type: resultType, value: a | b };
-    case 'XOR': return { type: resultType, value: a ^ b };
+      return scalar(resultType, a ** b);
+    case 'AND': return scalar(resultType, a & b);
+    case 'OR':  return scalar(resultType, a | b);
+    case 'XOR': return scalar(resultType, a ^ b);
     default:
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -555,13 +663,8 @@ function bigIntArith(
 }
 
 function compareValues(
-  op: BinaryOp, l: RuntimeValue, r: RuntimeValue, line: number,
+  op: BinaryOp, l: ScalarValue, r: ScalarValue, line: number,
 ): boolean {
-  // Compare like-with-like. Mixed numeric (BigInt vs number) gets
-  // promoted to BigInt-vs-BigInt (lossy for non-int reals — but
-  // ST doesn't compare reals to ints often, and the parser would
-  // have already promoted them to real arithmetic if either side
-  // was real). For string and time we use direct equality.
   if (l.type === 'STRING' || r.type === 'STRING') {
     if (l.type !== 'STRING' || r.type !== 'STRING') {
       throw new StRuntimeError(
@@ -572,7 +675,6 @@ function compareValues(
     return cmpPrimitive(op, l.value as string, r.value as string);
   }
 
-  // Compare booleans only with =, <>
   if (l.type === 'BOOL' && r.type === 'BOOL') {
     if (op === 'EQ') return l.value === r.value;
     if (op === 'NE') return l.value !== r.value;
@@ -582,9 +684,6 @@ function compareValues(
     );
   }
 
-  // Time = number-of-ms; compare as numbers.
-  // Otherwise both numeric — but l might be bigint and r might be
-  // number. Promote uniformly.
   const aBig = TYPE_META[l.type].repr === 'bigint';
   const bBig = TYPE_META[r.type].repr === 'bigint';
   if (aBig || bBig) {
@@ -626,8 +725,9 @@ function cmpPrimitive<T extends number | bigint | string>(
  *   - target TIME: source must be TIME (no implicit ms→time).
  */
 function coerceTo(
-  value: RuntimeValue, target: ScalarTypeName, line: number,
-): RuntimeValue {
+  valueIn: RuntimeValue, target: ScalarTypeName, line: number,
+): ScalarValue {
+  const value = asScalar(valueIn, line, `assign to ${target}`);
   const meta = TYPE_META[target];
 
   if (target === 'BOOL') {
@@ -637,7 +737,7 @@ function coerceTo(
         `cannot assign ${value.type} to BOOL`,
       );
     }
-    return { type: 'BOOL', value: value.value as boolean };
+    return scalar('BOOL', value.value as boolean);
   }
 
   if (target === 'STRING') {
@@ -647,32 +747,29 @@ function coerceTo(
         `cannot assign ${value.type} to STRING`,
       );
     }
-    return { type: 'STRING', value: value.value as string };
+    return scalar('STRING', value.value as string);
   }
 
   if (target === 'TIME') {
     if (value.type !== 'TIME') {
-      // Allow integer → TIME if it's a positive number-of-ms,
-      // since the user's source just wrote `t := 100`. Strict
-      // mode would refuse this.
+      // Allow integer → TIME if it's a positive number-of-ms.
       if (typeof value.value === 'number') {
-        return { type: 'TIME', value: Math.max(0, Math.trunc(value.value)) };
+        return scalar('TIME', Math.max(0, Math.trunc(value.value)));
       }
       throw new StRuntimeError(
         'type-mismatch', line,
         `cannot assign ${value.type} to TIME`,
       );
     }
-    return { type: 'TIME', value: value.value as number };
+    return scalar('TIME', value.value as number);
   }
 
   if (target === 'REAL' || target === 'LREAL') {
     const n = toNumberFromAny(value, line);
-    return { type: target, value: n };
+    return scalar(target, n);
   }
 
-  // Target is integer. Source might be BOOL → reject. Real → trunc.
-  // Integer → wrap.
+  // Target is integer.
   if (value.type === 'BOOL') {
     throw new StRuntimeError(
       'type-mismatch', line,
@@ -686,7 +783,6 @@ function coerceTo(
     );
   }
 
-  // Get an integer representation of the value.
   let asBig: bigint;
   if (typeof value.value === 'bigint') {
     asBig = value.value;
@@ -696,36 +792,27 @@ function coerceTo(
     throw new StRuntimeError('type-mismatch', line, 'expected number');
   }
 
-  // Wrap to range. Two's-complement style: shift to unsigned,
-  // mod by 2^bits, shift back.
   const wrapped = wrapToRange(asBig, meta);
 
-  // Final value: convert back to JS number if the target is
-  // ≤32 bit, otherwise keep as BigInt.
   if (meta.repr === 'bigint') {
-    return { type: target, value: wrapped };
+    return scalar(target, wrapped);
   }
-  return { type: target, value: Number(wrapped) };
+  return scalar(target, Number(wrapped));
 }
 
 function wrapToRange(value: bigint, meta: TypeMeta): bigint {
   if (meta.min === null || meta.max === null) return value;
   const range = meta.max - meta.min + 1n;
-  let v = ((value - meta.min) % range + range) % range + meta.min;
+  const v = ((value - meta.min) % range + range) % range + meta.min;
   return v;
 }
 
 // --- Helpers ---------------------------------------------------
 
 function widerType(a: ScalarTypeName, b: ScalarTypeName): ScalarTypeName {
-  // For arithmetic results we just need a tag that's compatible
-  // with the numeric domain. The actual range check happens on
-  // assignment. Pick the wider operand's type as a hint, falling
-  // back to DINT for anything weird.
   const ma = TYPE_META[a];
   const mb = TYPE_META[b];
   if (ma.repr === 'bigint' || mb.repr === 'bigint') {
-    // Prefer signed if either operand is signed.
     if (ma.signed || mb.signed) return 'LINT';
     return 'ULINT';
   }
@@ -733,7 +820,8 @@ function widerType(a: ScalarTypeName, b: ScalarTypeName): ScalarTypeName {
   return b;
 }
 
-function toNumberFromAny(v: RuntimeValue, line: number): number {
+function toNumberFromAny(vIn: RuntimeValue, line: number): number {
+  const v = asScalar(vIn, line, 'numeric conversion');
   if (typeof v.value === 'number') return v.value;
   if (typeof v.value === 'bigint') return Number(v.value);
   if (typeof v.value === 'boolean') return v.value ? 1 : 0;
@@ -743,7 +831,8 @@ function toNumberFromAny(v: RuntimeValue, line: number): number {
   );
 }
 
-function toBigInt(v: RuntimeValue, line: number): bigint {
+function toBigInt(vIn: RuntimeValue, line: number): bigint {
+  const v = asScalar(vIn, line, 'integer conversion');
   if (typeof v.value === 'bigint') return v.value;
   if (typeof v.value === 'number') return BigInt(Math.trunc(v.value));
   throw new StRuntimeError(
@@ -752,8 +841,8 @@ function toBigInt(v: RuntimeValue, line: number): bigint {
   );
 }
 
-function toIntForCase(v: RuntimeValue, line: number): bigint {
-  // CASE only on integer-ish selectors. Real is a type error.
+function toIntForCase(vIn: RuntimeValue, line: number): bigint {
+  const v = asScalar(vIn, line, 'CASE selector');
   if (v.type === 'REAL' || v.type === 'LREAL') {
     throw new StRuntimeError(
       'type-mismatch', line,
@@ -763,7 +852,8 @@ function toIntForCase(v: RuntimeValue, line: number): bigint {
   return toBigInt(v, line);
 }
 
-function toIntForLoop(v: RuntimeValue, line: number): bigint {
+function toIntForLoop(vIn: RuntimeValue, line: number): bigint {
+  const v = asScalar(vIn, line, 'FOR loop bound');
   if (v.type === 'REAL' || v.type === 'LREAL') {
     throw new StRuntimeError(
       'type-mismatch', line,
@@ -773,7 +863,8 @@ function toIntForLoop(v: RuntimeValue, line: number): bigint {
   return toBigInt(v, line);
 }
 
-function truthy(v: RuntimeValue, line: number): boolean {
+function truthy(vIn: RuntimeValue, line: number): boolean {
+  const v = asScalar(vIn, line, 'condition');
   if (v.type === 'BOOL') return v.value as boolean;
   throw new StRuntimeError(
     'type-mismatch', line,
@@ -782,8 +873,15 @@ function truthy(v: RuntimeValue, line: number): boolean {
 }
 
 // --- Built-in functions ----------------------------------------
+//
+// Built-ins are pure: take `ScalarValue` args, return one
+// `ScalarValue`. They never touch the env, never throw control-
+// flow signals. The dispatcher `evalCall` handles the FB-instance
+// case BEFORE looking in this table, so a user variable named
+// `MyTimer` of type TON shadows any built-in with the same name
+// (matters in theory, not in practice for v1's built-in list).
 
-type Builtin = (args: RuntimeValue[], line: number) => RuntimeValue;
+type Builtin = (args: ScalarValue[], line: number) => ScalarValue;
 
 const BUILTINS: Map<string, Builtin> = new Map();
 
@@ -791,8 +889,9 @@ function reg(name: string, fn: Builtin): void {
   BUILTINS.set(name.toLowerCase(), fn);
 }
 
-// Generic numeric helpers
-function asNumOrBig(v: RuntimeValue, line: number): number | bigint {
+/** Coerce a scalar value to either a number or a bigint, whichever
+ *  representation it natively uses. Strings/booleans throw. */
+function asNumOrBig(v: ScalarValue, line: number): number | bigint {
   if (typeof v.value === 'bigint') return v.value;
   if (typeof v.value === 'number') return v.value;
   throw new StRuntimeError(
@@ -807,8 +906,8 @@ reg('abs', (args, line) => {
   }
   const v = args[0];
   const n = asNumOrBig(v, line);
-  if (typeof n === 'bigint') return { type: v.type, value: n < 0n ? -n : n };
-  return { type: v.type, value: Math.abs(n) };
+  if (typeof n === 'bigint') return scalar(v.type, n < 0n ? -n : n);
+  return scalar(v.type, Math.abs(n));
 });
 
 reg('min', (args, line) => {
@@ -819,11 +918,11 @@ reg('min', (args, line) => {
     const a = asNumOrBig(acc, line);
     const b = asNumOrBig(v, line);
     if (typeof a === 'bigint' || typeof b === 'bigint') {
-      const aBig = typeof a === 'bigint' ? a : BigInt(Math.trunc(a as number));
-      const bBig = typeof b === 'bigint' ? b : BigInt(Math.trunc(b as number));
+      const aBig = typeof a === 'bigint' ? a : BigInt(Math.trunc(a));
+      const bBig = typeof b === 'bigint' ? b : BigInt(Math.trunc(b));
       return aBig < bBig ? acc : v;
     }
-    return (a as number) < (b as number) ? acc : v;
+    return a < b ? acc : v;
   });
 });
 
@@ -835,11 +934,11 @@ reg('max', (args, line) => {
     const a = asNumOrBig(acc, line);
     const b = asNumOrBig(v, line);
     if (typeof a === 'bigint' || typeof b === 'bigint') {
-      const aBig = typeof a === 'bigint' ? a : BigInt(Math.trunc(a as number));
-      const bBig = typeof b === 'bigint' ? b : BigInt(Math.trunc(b as number));
+      const aBig = typeof a === 'bigint' ? a : BigInt(Math.trunc(a));
+      const bBig = typeof b === 'bigint' ? b : BigInt(Math.trunc(b));
       return aBig > bBig ? acc : v;
     }
-    return (a as number) > (b as number) ? acc : v;
+    return a > b ? acc : v;
   });
 });
 
@@ -851,21 +950,20 @@ reg('limit', (args, line) => {
   const loN = asNumOrBig(lo, line);
   const vN = asNumOrBig(v, line);
   const hiN = asNumOrBig(hi, line);
-  // Stay in v's type slot.
   if (typeof vN === 'bigint') {
-    const loB = typeof loN === 'bigint' ? loN : BigInt(Math.trunc(loN as number));
-    const hiB = typeof hiN === 'bigint' ? hiN : BigInt(Math.trunc(hiN as number));
+    const loB = typeof loN === 'bigint' ? loN : BigInt(Math.trunc(loN));
+    const hiB = typeof hiN === 'bigint' ? hiN : BigInt(Math.trunc(hiN));
     let r = vN;
     if (r < loB) r = loB;
     if (r > hiB) r = hiB;
-    return { type: v.type, value: r };
+    return scalar(v.type, r);
   }
-  let r = vN as number;
-  const loF = Number(loN);
-  const hiF = Number(hiN);
+  let r = vN;
+  const loF = typeof loN === 'bigint' ? Number(loN) : loN;
+  const hiF = typeof hiN === 'bigint' ? Number(hiN) : hiN;
   if (r < loF) r = loF;
   if (r > hiF) r = hiF;
-  return { type: v.type, value: r };
+  return scalar(v.type, r);
 });
 
 reg('sel', (args, line) => {
@@ -887,8 +985,8 @@ reg('ror', (args, line) => bitShift('ROR', args, line));
 
 function bitShift(
   op: 'SHL' | 'SHR' | 'ROL' | 'ROR',
-  args: RuntimeValue[], line: number,
-): RuntimeValue {
+  args: ScalarValue[], line: number,
+): ScalarValue {
   if (args.length !== 2) {
     throw new StRuntimeError('type-mismatch', line, `${op} expects 2 arguments`);
   }
@@ -917,9 +1015,9 @@ function bitShift(
         break;
       }
     }
-    return { type: v.type, value: r };
+    return scalar(v.type, r);
   }
-  const x = (v.value as number) & ((1 << bits) - 1 || 0xFFFFFFFF);
+  const x = (v.value as number) & ((bits >= 32 ? 0xFFFFFFFF : (1 << bits) - 1));
   let r: number;
   switch (op) {
     case 'SHL': r = (x << shift) >>> 0; break;
@@ -935,23 +1033,13 @@ function bitShift(
       break;
     }
   }
-  return { type: v.type, value: r };
+  return scalar(v.type, r);
 }
 
-// Type conversions — register the common ones. Each is just
-// "take the value, coerce to target type". The conversion table
-// is verbose but each line is trivial.
-const CONVERSIONS: Array<[from: ScalarTypeName | '_', to: ScalarTypeName]> = [
-  // Common pairs we care about — ABS doesn't need them, but
-  // assignments often do.
-  ['_', 'INT'], ['_', 'DINT'], ['_', 'UINT'], ['_', 'UDINT'],
-  ['_', 'SINT'], ['_', 'USINT'], ['_', 'BYTE'], ['_', 'WORD'],
-  ['_', 'DWORD'], ['_', 'LINT'], ['_', 'ULINT'], ['_', 'LWORD'],
-  ['_', 'REAL'], ['_', 'LREAL'],
-];
-
-// Register all "<X>_TO_<Y>" combinations among the integer/real
-// types. STRING and TIME are special-cased outside this loop.
+// Type conversions: register all <X>_TO_<Y> combos for the
+// numeric types. STRING ↔ numeric and TIME ↔ numeric are NOT
+// auto-registered — those edge cases would lie about behaviour
+// in v1.
 const NUMERIC_TYPES: ScalarTypeName[] = [
   'BOOL', 'BYTE', 'WORD', 'DWORD', 'LWORD',
   'SINT', 'INT', 'DINT', 'LINT',
@@ -969,32 +1057,310 @@ for (const from of NUMERIC_TYPES) {
       const v = args[0];
       // BOOL→numeric: false=0, true=1.
       if (v.type === 'BOOL') {
-        return coerceTo(
-          { type: 'INT', value: (v.value as boolean) ? 1 : 0 },
-          to, line,
-        );
+        return coerceTo(scalar('INT', (v.value as boolean) ? 1 : 0), to, line);
       }
       if (to === 'BOOL') {
         // Numeric→BOOL: 0 = false, anything else = true.
         const n = asNumOrBig(v, line);
         const isTrue = typeof n === 'bigint' ? n !== 0n : n !== 0;
-        return { type: 'BOOL', value: isTrue };
+        return scalar('BOOL', isTrue);
       }
       return coerceTo(v, to, line);
     });
   }
 }
 
-// Suppress the unused-CONVERSIONS warning. The array was a
-// scaffolding artefact during planning; the actual registration
-// loop lives below it. Keeping it (rather than deleting) as a
-// breadcrumb for future bulk-conversion macros.
-void CONVERSIONS;
+// --- FB instances --------------------------------------------
+//
+// Each built-in FB type has:
+//   - an `init` that produces a fresh state object
+//   - a `tick` that runs one cycle, given the input args (after
+//     dropping into named-arg form) and the scan time
+//   - a `members` table mapping output names to type+accessor
+//
+// Adding a new built-in FB is: extend FbTypeName in ast.ts, add
+// to FB_TYPES in types.ts, register here.
 
-function callBuiltin(
+interface FbSchema {
+  /** Make the empty state object for a freshly-declared instance. */
+  init(): Record<string, unknown>;
+  /** Run one tick. `args` is the named-arg map collected from the
+   *  call site; only the FB's known input names are read. Mutates
+   *  `state`. `scanTimeMs` is the runtime's wall-clock-style time
+   *  for this scan, used by TON/TOF for elapsed-time tracking. */
+  tick(
+    state: Record<string, unknown>,
+    args: Map<string, ScalarValue>,
+    scanTimeMs: number,
+    line: number,
+  ): void;
+  /** Members the user may read via `instance.member`. */
+  members: Record<string, FbMember>;
+}
+
+interface FbMember {
+  /** Output's scalar type for the read result. */
+  type: ScalarTypeName;
+  /** Pull the typed value out of the state object. */
+  read(state: Record<string, unknown>): ScalarValue['value'];
+}
+
+const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
+  /**
+   * TON — On-delay timer. Inputs:
+   *   IN  : BOOL  — when TRUE, start (or continue) timing
+   *   PT  : TIME  — preset time (ms)
+   * Outputs:
+   *   Q   : BOOL  — TRUE once elapsed time has reached PT (and IN
+   *                 is still TRUE)
+   *   ET  : TIME  — current elapsed time, capped at PT
+   *
+   * Behaviour: while IN is TRUE, ET counts up from 0 to PT in real
+   * time. Once ET == PT, Q latches TRUE. When IN goes FALSE, ET
+   * resets to 0 and Q clears. Matches IEC 61131-3.
+   *
+   * State carries `startedAtMs`: scan time at which IN went TRUE.
+   * Each tick recomputes ET = currentScanTime - startedAtMs (or
+   * resets if IN is FALSE). This means a Stop/Run pause doesn't
+   * advance the timer because scan time itself is paused.
+   */
+  TON: {
+    init: () => ({
+      q: false,
+      et: 0,
+      prevIn: false,
+      startedAtMs: 0,
+    }),
+    tick(state, args, scanTimeMs, line) {
+      const inV = args.get('in');
+      const ptV = args.get('pt');
+      if (!inV) {
+        throw new StRuntimeError(
+          'type-mismatch', line,
+          'TON requires IN := <BOOL>',
+        );
+      }
+      if (!ptV) {
+        throw new StRuntimeError(
+          'type-mismatch', line,
+          'TON requires PT := <TIME>',
+        );
+      }
+      if (inV.type !== 'BOOL') {
+        throw new StRuntimeError(
+          'type-mismatch', line, 'TON.IN must be BOOL',
+        );
+      }
+      if (ptV.type !== 'TIME') {
+        // Allow numeric coercion (`PT := 1000`) for ergonomics.
+        if (typeof ptV.value !== 'number') {
+          throw new StRuntimeError(
+            'type-mismatch', line, 'TON.PT must be TIME',
+          );
+        }
+      }
+      const inB = inV.value as boolean;
+      const pt = Math.max(0, Math.trunc(ptV.value as number));
+
+      if (inB) {
+        if (!state.prevIn) {
+          // Rising edge — start timing.
+          state.startedAtMs = scanTimeMs;
+        }
+        const elapsed = Math.max(0, scanTimeMs - (state.startedAtMs as number));
+        const et = Math.min(elapsed, pt);
+        state.et = et;
+        state.q = elapsed >= pt;
+      } else {
+        // IN low — reset.
+        state.et = 0;
+        state.q = false;
+      }
+      state.prevIn = inB;
+    },
+    members: {
+      q:  { type: 'BOOL', read: (s) => s.q as boolean },
+      et: { type: 'TIME', read: (s) => s.et as number },
+    },
+  },
+
+  /**
+   * TOF — Off-delay timer. Inputs/outputs as TON, but the timing
+   * is on the *falling* edge:
+   *   - While IN is TRUE: Q is TRUE, ET is 0.
+   *   - On falling edge: ET starts counting up from 0.
+   *   - While ET < PT: Q stays TRUE.
+   *   - When ET reaches PT: Q goes FALSE, ET capped at PT.
+   *   - Rising edge mid-timeout: ET resets to 0, Q goes/stays TRUE.
+   */
+  TOF: {
+    init: () => ({
+      q: false,
+      et: 0,
+      prevIn: false,
+      stoppedAtMs: 0,
+    }),
+    tick(state, args, scanTimeMs, line) {
+      const inV = args.get('in');
+      const ptV = args.get('pt');
+      if (!inV || inV.type !== 'BOOL') {
+        throw new StRuntimeError(
+          'type-mismatch', line, 'TOF requires IN := <BOOL>',
+        );
+      }
+      if (!ptV || (ptV.type !== 'TIME' && typeof ptV.value !== 'number')) {
+        throw new StRuntimeError(
+          'type-mismatch', line, 'TOF requires PT := <TIME>',
+        );
+      }
+      const inB = inV.value as boolean;
+      const pt = Math.max(0, Math.trunc(ptV.value as number));
+
+      if (inB) {
+        // High — Q follows IN immediately, ET resets to 0.
+        state.q = true;
+        state.et = 0;
+      } else {
+        if (state.prevIn) {
+          // Falling edge — start the off-delay timer.
+          state.stoppedAtMs = scanTimeMs;
+        }
+        const elapsed = Math.max(0, scanTimeMs - (state.stoppedAtMs as number));
+        const et = Math.min(elapsed, pt);
+        state.et = et;
+        // Q goes FALSE only once ET has reached PT.
+        state.q = elapsed < pt;
+      }
+      state.prevIn = inB;
+    },
+    members: {
+      q:  { type: 'BOOL', read: (s) => s.q as boolean },
+      et: { type: 'TIME', read: (s) => s.et as number },
+    },
+  },
+
+  /**
+   * R_TRIG — Rising-edge detector. One scan of Q=TRUE on every
+   * 0→1 transition of CLK; otherwise Q=FALSE.
+   *
+   * State: just the previous CLK value.
+   */
+  R_TRIG: {
+    init: () => ({ q: false, prevClk: false }),
+    tick(state, args, _scanTimeMs, line) {
+      const clkV = args.get('clk');
+      if (!clkV || clkV.type !== 'BOOL') {
+        throw new StRuntimeError(
+          'type-mismatch', line, 'R_TRIG requires CLK := <BOOL>',
+        );
+      }
+      const clk = clkV.value as boolean;
+      state.q = clk && !(state.prevClk as boolean);
+      state.prevClk = clk;
+    },
+    members: {
+      q: { type: 'BOOL', read: (s) => s.q as boolean },
+    },
+  },
+
+  /**
+   * F_TRIG — Falling-edge detector. Mirror of R_TRIG.
+   */
+  F_TRIG: {
+    init: () => ({ q: false, prevClk: false }),
+    tick(state, args, _scanTimeMs, line) {
+      const clkV = args.get('clk');
+      if (!clkV || clkV.type !== 'BOOL') {
+        throw new StRuntimeError(
+          'type-mismatch', line, 'F_TRIG requires CLK := <BOOL>',
+        );
+      }
+      const clk = clkV.value as boolean;
+      state.q = !clk && (state.prevClk as boolean);
+      state.prevClk = clk;
+    },
+    members: {
+      q: { type: 'BOOL', read: (s) => s.q as boolean },
+    },
+  },
+};
+
+/** Construct a fresh FB instance for the env. */
+function makeFbInstance(fbType: FbTypeName): FbInstance {
+  const schema = FB_SCHEMAS[fbType];
+  if (!schema) {
+    throw new StRuntimeError(
+      'internal', 0,
+      `internal: no schema for FB type ${fbType}`,
+    );
+  }
+  return { kind: 'fb', fbType, state: schema.init() };
+}
+
+/** Read a member from an FB instance, e.g. `MyTimer.Q`. */
+function readFbMember(
+  inst: FbInstance, memberLower: string, memberOriginal: string, line: number,
+): ScalarValue {
+  const schema = FB_SCHEMAS[inst.fbType];
+  const m = schema.members[memberLower];
+  if (!m) {
+    const valid = Object.keys(schema.members).map((k) => k.toUpperCase()).join(', ');
+    throw new StRuntimeError(
+      'type-mismatch', line,
+      `unknown member ".${memberOriginal}" on ${inst.fbType} — try one of: ${valid}`,
+    );
+  }
+  return scalar(m.type, m.read(inst.state));
+}
+
+// --- Call dispatcher -----------------------------------------
+
+/**
+ * Top-level call evaluator. Decides whether `name(...)` is:
+ *
+ *   1. An FB-instance call — `name` resolves in env to an FB
+ *      instance. Args must all be named (`IN := bX`, possibly
+ *      `Q => bDone` for output bindings). The instance ticks.
+ *      Return value is BOOL TRUE (matches ST: an FB call as an
+ *      expression returns the FB's first output, but for v1 we
+ *      always return TRUE — bare-statement form is the common
+ *      use case and the return value is discarded).
+ *
+ *   2. A built-in function — looked up in BUILTINS. Args must
+ *      all be positional (named-args on built-ins are silently
+ *      ignored — IEC allows it but our table doesn't model
+ *      parameter names).
+ *
+ * Unknown names produce a runtime error.
+ */
+function evalCall(
   nameLower: string, originalName: string,
-  args: RuntimeValue[], line: number,
+  args: CallArg[], line: number, ctx: ScanContext,
 ): RuntimeValue {
+  const targetVar = ctx.env.get(nameLower);
+  if (targetVar && targetVar.kind === 'fb') {
+    return tickFbCall(targetVar, originalName, args, line, ctx);
+  }
+
+  // Built-in path. Reject named args (we don't model parameter
+  // names for built-ins — using `:=` here is a likely bug).
+  const positional: ScalarValue[] = [];
+  for (const a of args) {
+    if (a.kind !== 'positional') {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `function "${originalName}" doesn't accept named arguments`,
+      );
+    }
+    if (!a.value) {
+      throw new StRuntimeError(
+        'internal', line,
+        `internal: positional arg has no value`,
+      );
+    }
+    const v = evalExpr(a.value, ctx);
+    positional.push(asScalar(v, line, `argument to ${originalName}`));
+  }
   const fn = BUILTINS.get(nameLower);
   if (!fn) {
     throw new StRuntimeError(
@@ -1002,7 +1368,79 @@ function callBuiltin(
       `unknown function "${originalName}" (v1 supports a small set of built-ins — see modal docs)`,
     );
   }
-  return fn(args, line);
+  return fn(positional, line);
+}
+
+/**
+ * Run an FB instance for one tick from a call site. Reads named
+ * inputs, applies the schema's tick, then copies outputs to any
+ * `OUTPUT => target` bindings.
+ *
+ * Returns a sentinel BOOL TRUE — FB calls as expressions are
+ * unusual in v1; they're nearly always statement-level, where the
+ * return value is discarded.
+ */
+function tickFbCall(
+  inst: FbInstance, originalName: string, args: CallArg[],
+  line: number, ctx: ScanContext,
+): ScalarValue {
+  const inputs = new Map<string, ScalarValue>();
+  const outputBindings: Array<{ paramLower: string; target: VarRefExpr; line: number }> = [];
+
+  for (const a of args) {
+    if (a.kind === 'positional') {
+      throw new StRuntimeError(
+        'type-mismatch', a.line,
+        `FB instance "${originalName}" requires named arguments (e.g. IN := <expr>)`,
+      );
+    }
+    if (a.kind === 'named-in') {
+      if (!a.value) {
+        throw new StRuntimeError('internal', a.line, 'internal: named-in arg has no value');
+      }
+      const v = asScalar(evalExpr(a.value, ctx), a.line, `argument ${a.name}`);
+      inputs.set(a.nameLower, v);
+    } else {
+      // named-out
+      if (!a.target) {
+        throw new StRuntimeError('internal', a.line, 'internal: named-out arg has no target');
+      }
+      outputBindings.push({ paramLower: a.nameLower, target: a.target, line: a.line });
+    }
+  }
+
+  const schema = FB_SCHEMAS[inst.fbType];
+  schema.tick(inst.state, inputs, ctx.scanTimeMs, line);
+
+  // Copy outputs to bound variables. `Q => bDone` is equivalent
+  // to a post-call `bDone := MyTimer.Q;`.
+  for (const ob of outputBindings) {
+    const m = schema.members[ob.paramLower];
+    if (!m) {
+      const valid = Object.keys(schema.members).map((k) => k.toUpperCase()).join(', ');
+      throw new StRuntimeError(
+        'type-mismatch', ob.line,
+        `unknown output "${ob.paramLower.toUpperCase()}" on ${inst.fbType} — try one of: ${valid}`,
+      );
+    }
+    const outV = scalar(m.type, m.read(inst.state));
+    const targetVar = ctx.env.get(ob.target.nameLower);
+    if (!targetVar) {
+      throw new StRuntimeError(
+        'internal', ob.line,
+        `internal: unknown output target "${ob.target.name}"`,
+      );
+    }
+    if (targetVar.kind === 'fb') {
+      throw new StRuntimeError(
+        'type-mismatch', ob.line,
+        `cannot bind FB output to FB instance "${ob.target.name}"`,
+      );
+    }
+    ctx.env.set(ob.target.nameLower, coerceTo(outV, targetVar.type, ob.line));
+  }
+
+  return scalar('BOOL', true);
 }
 
 // --- Display helpers ------------------------------------------
@@ -1014,10 +1452,13 @@ function callBuiltin(
  *   reals → JS toString (good enough for v1)
  *   STRING → quoted with single quotes
  *   TIME → "T#1s500ms"-style
- *
- * Used by the inline-pill renderer and the modal's error banner.
+ *   FB instance → "<TON>" or similar tag — pills don't render
+ *                 for FB instances (the instance has no single
+ *                 value), but error formatting may need to print
+ *                 one.
  */
 export function formatRuntimeValue(v: RuntimeValue): string {
+  if (v.kind === 'fb') return `<${v.fbType}>`;
   switch (v.type) {
     case 'BOOL': return (v.value as boolean) ? 'TRUE' : 'FALSE';
     case 'STRING': return `'${v.value as string}'`;
@@ -1026,7 +1467,6 @@ export function formatRuntimeValue(v: RuntimeValue): string {
     case 'LREAL':
       return (v.value as number).toString();
     default: {
-      // Integer
       if (typeof v.value === 'bigint') return v.value.toString();
       return Math.trunc(v.value as number).toString();
     }
@@ -1065,4 +1505,175 @@ function formatTime(ms: number): string {
     parts.push(`${remaining}ms`);
   }
   return 'T#' + parts.join('');
+}
+
+// --- Variable poking (mid-run state edits from the UI) -------
+
+/**
+ * Parse a user-typed value string into a ScalarValue of the
+ * given target type. Returns either a parsed value or an error
+ * message; never throws.
+ *
+ * Accepted formats:
+ *   BOOL    — TRUE/FALSE/true/false/1/0 (case-insensitive)
+ *   integer — decimal (123, -45) or hex (16#FF) or binary
+ *             (2#1010); underscores allowed
+ *   real    — 1.5, 3.14e-2, etc.
+ *   STRING  — anything; if surrounded by single quotes they're
+ *             stripped, otherwise the raw input is used
+ *   TIME    — same syntax as a TIME literal: T#1s, T#100ms,
+ *             T#1h30m. A bare integer is interpreted as ms.
+ *
+ * The parsed value is then coerce-wrapped to the target type
+ * via the same coerceTo path that assignments use, so a BYTE
+ * receiving 256 gets clamped/wrapped per ST semantics.
+ */
+export function parsePokeInput(
+  raw: string, targetType: ScalarTypeName,
+): { ok: true; value: ScalarValue } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, error: 'empty value' };
+  }
+
+  try {
+    if (targetType === 'BOOL') {
+      const low = trimmed.toLowerCase();
+      if (low === 'true' || low === '1') {
+        return { ok: true, value: scalar('BOOL', true) };
+      }
+      if (low === 'false' || low === '0') {
+        return { ok: true, value: scalar('BOOL', false) };
+      }
+      return { ok: false, error: 'expected TRUE / FALSE / 1 / 0' };
+    }
+
+    if (targetType === 'STRING') {
+      let s = trimmed;
+      if ((s.startsWith("'") && s.endsWith("'")) ||
+          (s.startsWith('"') && s.endsWith('"'))) {
+        s = s.slice(1, -1);
+      }
+      return { ok: true, value: scalar('STRING', s) };
+    }
+
+    if (targetType === 'TIME') {
+      // Accept T#... or a bare integer (ms).
+      let body = trimmed;
+      const upper = body.toUpperCase();
+      if (upper.startsWith('T#')) {
+        body = body.slice(2);
+        const ms = parseTimeBody(body);
+        if (ms == null) return { ok: false, error: 'malformed TIME literal' };
+        return { ok: true, value: scalar('TIME', ms) };
+      }
+      if (upper.startsWith('TIME#')) {
+        body = body.slice(5);
+        const ms = parseTimeBody(body);
+        if (ms == null) return { ok: false, error: 'malformed TIME literal' };
+        return { ok: true, value: scalar('TIME', ms) };
+      }
+      const n = Number(trimmed);
+      if (!Number.isFinite(n)) {
+        return { ok: false, error: 'expected T#... or a number of ms' };
+      }
+      return { ok: true, value: scalar('TIME', Math.max(0, Math.trunc(n))) };
+    }
+
+    if (targetType === 'REAL' || targetType === 'LREAL') {
+      const n = Number(trimmed.replace(/_/g, ''));
+      if (!Number.isFinite(n)) return { ok: false, error: 'not a number' };
+      return { ok: true, value: scalar(targetType, n) };
+    }
+
+    // Integer types.
+    const cleaned = trimmed.replace(/_/g, '');
+    let asBig: bigint;
+    const baseMatch = cleaned.match(/^(-?)(2|8|16)#([0-9a-fA-F]+)$/);
+    if (baseMatch) {
+      const sign = baseMatch[1] === '-' ? -1n : 1n;
+      const base = parseInt(baseMatch[2], 10);
+      const digits = baseMatch[3];
+      asBig = sign * BigInt('0' + (base === 2 ? 'b' : base === 8 ? 'o' : 'x') + digits);
+    } else {
+      // Decimal (allow leading sign).
+      if (!/^-?\d+$/.test(cleaned)) {
+        return { ok: false, error: 'expected an integer' };
+      }
+      asBig = BigInt(cleaned);
+    }
+    const meta = TYPE_META[targetType];
+    const wrapped = wrapToRange(asBig, meta);
+    if (meta.repr === 'bigint') {
+      return { ok: true, value: scalar(targetType, wrapped) };
+    }
+    return { ok: true, value: scalar(targetType, Number(wrapped)) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Re-parse a TIME literal body like "1h30m500ms" into ms. Mirrors
+ * the lexer's parseTimeLiteral but kept local to avoid coupling
+ * the poke path to the lexer's internal API. Returns null on
+ * malformed input.
+ */
+function parseTimeBody(body: string): number | null {
+  if (body.length === 0) return null;
+  let i = 0;
+  const n = body.length;
+  let totalMs = 0;
+  while (i < n) {
+    let num = '';
+    while (i < n && (body[i] >= '0' && body[i] <= '9' || body[i] === '.')) {
+      num += body[i];
+      i++;
+    }
+    let suffix = '';
+    while (i < n && !(body[i] >= '0' && body[i] <= '9')) {
+      suffix += body[i].toLowerCase();
+      i++;
+    }
+    if (num.length === 0 || suffix.length === 0) return null;
+    const v = parseFloat(num);
+    let mul: number;
+    switch (suffix) {
+      case 'ms': mul = 1; break;
+      case 's':  mul = 1000; break;
+      case 'm':  mul = 60 * 1000; break;
+      case 'h':  mul = 60 * 60 * 1000; break;
+      case 'd':  mul = 24 * 60 * 60 * 1000; break;
+      default: return null;
+    }
+    totalMs += v * mul;
+  }
+  return Math.round(totalMs);
+}
+
+/**
+ * Apply a parsed poke to the env. Caller has already validated
+ * the variable is a scalar (FB instances aren't pokeable). The
+ * value is coerced to the variable's declared type one more time
+ * to enforce ST assignment semantics — the user typing 9999 into
+ * a BYTE wraps to 9999 mod 256.
+ */
+export function pokeVariable(
+  env: Environment, nameLower: string, value: ScalarValue, line: number,
+): { ok: true } | { ok: false; error: string } {
+  const v = env.get(nameLower);
+  if (!v) return { ok: false, error: `unknown variable "${nameLower}"` };
+  if (v.kind === 'fb') {
+    return { ok: false, error: `cannot poke FB instance "${nameLower}"` };
+  }
+  try {
+    const coerced = coerceTo(value, v.type, line);
+    env.set(nameLower, coerced);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof StRuntimeError) {
+      return { ok: false, error: e.message };
+    }
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }

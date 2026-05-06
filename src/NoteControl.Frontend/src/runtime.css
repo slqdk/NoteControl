@@ -294,12 +294,12 @@
  * ---------------------------------------------------------------- */
 .nc-runtime-pill {
   display: inline-block;
-  margin: 0 0 0 4px;
-  padding: 0 6px;
+  margin: 0 0 0 3px;
+  padding: 0 5px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.35;
   color: var(--nc-fg);
   background: var(--nc-bg);
   border: 1px solid var(--nc-border-strong);
@@ -326,6 +326,47 @@
   color: #ffffff;
   background: rgba(220, 38, 38, 0.85);
   border-color: rgba(220, 38, 38, 0.85);
+}
+
+/* Pokeable pills get a subtle hover + cursor change so the user
+ * sees they're editable. Click → replaces the pill with an input. */
+.nc-runtime-pill-pokeable {
+  cursor: text;
+  transition: filter 0.1s ease, box-shadow 0.1s ease;
+}
+.nc-runtime-pill-pokeable:hover {
+  filter: brightness(0.96);
+  box-shadow: 0 0 0 1px var(--nc-accent);
+}
+.nc-runtime-pill-pokeable:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nc-accent);
+}
+
+/* The inline input replacing a pill while editing. Sized to fit
+ * its content roughly. */
+.nc-runtime-pill-editing {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+}
+.nc-runtime-pill-input {
+  font: inherit;
+  font-size: 13px;
+  padding: 0 4px;
+  margin: 0;
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-accent);
+  border-radius: 3px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+  /* `size` attr drives width approximately; cap it. */
+  max-width: 14ch;
+}
+.nc-runtime-pill-input-err {
+  border-color: rgba(220, 38, 38, 0.85);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
 }
 
 /* ----------------------------------------------------------------
