@@ -103,17 +103,7 @@ the web UI. See [tray.md](tray.md).
 
 Layout: **3 panes**.
 
-- **Left rail (tree)**: collapsible (toggle in topbar). The
-  rail's header carries the per-vault action buttons (Daily+,
-  new-note, new-folder) plus a small **▾** chevron between
-  new-note and new-folder that opens an **Import .md or .zip…**
-  action. Import accepts a single `.md` or a `.zip` of `.md`
-  files (with optional `*.assets/` folders); the file lands in
-  the currently selected folder (or vault root if nothing is
-  selected). Conflicts get numeric-suffix renames
-  (`Foo.md` → `Foo (2).md`); a results modal lists per-file
-  outcomes after the import. **Desktop only** — the chevron is
-  hidden at narrow viewports.
+- **Left rail (tree)**: collapsible (toggle in topbar).
 - **Centre**: folder listing — current folder's contents as a
   list with name + kind + updated timestamp + size. Includes
   inline rows for "new folder" and "new note" prompts.
@@ -142,14 +132,16 @@ itself doesn't grow.
 The editor is **TipTap-based** with a custom extension set;
 features and shortcuts are documented in [notes.md](notes.md).
 
-A **bubble menu** appears above any text selection of 2+
-characters with: bold, italic, inline code, link, and (note
-editor only) **Save selection as template** (📋). The
-save-as-template button posts the selection's markdown to the
-server, which creates a new template with an auto-name and
-copies any referenced images into the template's asset folder.
-A toast confirms with the chosen name. See
-[notes.md](notes.md#templates) for the underlying contract.
+ST code blocks paired as `Declaration` + `Implementation` get
+an inline **Run** button that opens an overlay modal — the ST
+runtime sandbox. The modal is a self-contained interpreter; it
+makes no server calls and discards its state when closed. The
+component pair lives at `src/components/RuntimeModal.tsx` and
+`src/components/InlineSource.tsx`, with the parser/interpreter
+under `src/runtime/`. The behavioural contract (when the Run
+button appears, what the modal supports, how variable poking
+works, the statement budget) is in
+[notes.md](notes.md#st-runtime-sandbox).
 
 ## Properties panel
 
@@ -161,12 +153,7 @@ Shows the selected note or folder's metadata. For notes:
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
 - **Buttons**: Move (toggles move-mode), Delete (with
-  confirmation), and two export buttons —
-  **📄 Export as .docx** (Word document via the rich-conversion
-  pipeline) and **📥 Export as .md** (zip containing the note's
-  `.md` plus its `.assets/` folder if any; round-trips via the
-  tree rail's import action). Rename happens by editing the
-  name inline.
+  confirmation). Rename happens by editing the name inline.
 
 For folders: name, full path, contents count, created/updated
 timestamps. Move/Delete buttons available.
@@ -186,10 +173,6 @@ A few mobile-specific affordances:
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
-- **The tree rail's import chevron (▾) is hidden** on mobile —
-  import is a desktop-first workflow. Export from the
-  properties panel (both `.docx` and `.md`) still works on
-  mobile via `MobileNoteProperties`.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
@@ -223,14 +206,6 @@ The page is **two-column**:
   the restrictions documented in [notes.md](notes.md)). When
   nothing is selected, the pane shows an empty-state hint.
 
-Templates can include images. The slash-menu **Image** item
-in the template editor uploads via `POST /template/asset` into
-`{vault}/.notesapp/templates/<TemplateName>.assets/`. Image
-upload is **enabled only after the template's first save** —
-a brand-new unsaved draft has no name on disk to anchor the
-asset folder against. The parent re-mounts the editor with
-image support after the first save.
-
 ### Save semantics
 
 **No autosave.** A **Save** button at the bottom of the right
@@ -243,15 +218,12 @@ pane commits the draft. The button is enabled when:
 Save dispatches `POST /templates` for new drafts and
 `PUT /templates/{originalName}` for edits. A name change on an
 existing template uses the same `PUT` (the server treats a
-different name in the body as a rename, and also moves the
-`<name>.assets/` folder + rewrites image refs in the body so
-the pair stays consistent). After a successful save the page
-reloads the list and re-selects the (possibly renamed)
-template.
+different name in the body as a rename). After a successful
+save the page reloads the list and re-selects the (possibly
+renamed) template.
 
 A **Delete** button appears next to Save when editing an
-existing template — confirms, then `DELETE /templates/{name}`,
-which also removes the template's asset folder.
+existing template — confirms, then `DELETE /templates/{name}`.
 
 ### Cache refresh
 
@@ -290,20 +262,6 @@ alphabetically. The first row is **← Back**, which returns to
 the main menu. Picking a template inserts its body at the
 original `/` position; the popup closes.
 
-Insertion is **asynchronous** — the client calls
-`POST /templates/{name}/render?targetNotePath=...` so the
-server can copy any template-asset images into the target
-note's own asset folder and rewrite the markdown to point at
-the new location. Result: the inserted content is
-self-contained; deleting or renaming the source template later
-does not break the inserted content. For text-only templates
-the round-trip is fast; for image-bearing templates the copy
-work scales with the number/size of images. There is no
-loading indicator on the menu pick today — the popup just
-closes and the content appears shortly after. (Queue: surface
-a brief loading state when the render call takes more than a
-few hundred ms.)
-
 There is **no search box and no preview pane** in the
 submenu — by design, this is a flat clickable list. Filtering
 happens in the main menu (typing `/temp` narrows to the
@@ -321,17 +279,6 @@ remains reachable via the topbar link regardless.
 The template editor's own slash menu (when editing a template
 body) hides this Templates entry — see
 [notes.md](notes.md#templates) for why.
-
-## Toasts
-
-Brief, transient acknowledgements for actions that don't
-otherwise show their own UI feedback. Used today by
-"Save selection as template" (the bubble-menu button in the
-note editor). One toast at a time — a new toast replaces any
-visible older one rather than stacking. Auto-dismisses after
-~3 seconds; click to dismiss earlier. Imperative API
-(`showToast(message)`) so callers don't need to wire a React
-provider; the toast appends itself to `document.body`.
 
 ## Startpage
 

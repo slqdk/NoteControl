@@ -81,7 +81,11 @@ The editor is TipTap-based. What it supports out of the box:
 - **Code blocks** with editable language tag. Syntax
   highlighting via lowlight, with a custom **Structured Text
   (TwinCAT 3 ST)** language registered — the keywords for ST
-  are recognised case-insensitively.
+  are recognised case-insensitively. Code blocks tagged as
+  ST and titled `Implementation`, when paired with a sibling
+  Declaration block above them, show an inline **Run** button
+  that opens the ST runtime sandbox modal — see [ST runtime
+  sandbox](#st-runtime-sandbox) below.
 - **Tables** (3×3 default, header row, with a toolbar for
   add/remove rows and columns).
 - **Callouts** in 5 variants: error, warning, info, tip, note.
@@ -133,56 +137,10 @@ block-insertion shortcuts. Items shown in order:
 15. **Note callout**
 16. **Image** (only outside the templates editor; opens a file
     picker, uploads, inserts)
-17. **PLCOpen XML** (opens a file picker for a `.xml` PLCOpen
-    export; inserts each POU as a header paragraph plus a pair
-    of code blocks — see "PLCOpen XML import" below)
 
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
-
-### PLCOpen XML import
-
-Picking the **PLCOpen XML** slash item opens a file picker
-filtered to `.xml`. The selected file is parsed in the browser
-(no upload, no server round-trip) and each POU it contains is
-inserted at the cursor position as three blocks, in order:
-
-1. A bold paragraph header `**<pouName>** (<pouType>)`.
-2. A code block titled **Declaration** (language `st`)
-   containing the `PROGRAM ... VAR ... END_VAR` text.
-3. A code block titled **Implementation** (language `st`)
-   containing the body of `<body><ST>`.
-
-Multiple POUs in one file are inserted sequentially, separated
-by an empty paragraph. The whole import is one undo step.
-
-The titles "Declaration" and "Implementation" are non-default
-code-block titles, so they round-trip through markdown
-save/load via the `<pre data-title="...">` HTML form (the same
-mechanism used elsewhere for non-default code-block titles).
-Both blocks get ST syntax highlighting from the registered
-Structured Text language.
-
-Source-of-truth for the declaration text: when the file
-contains a Beckhoff-flavoured `InterfaceAsPlainText` addData
-block (TwinCAT 3 always emits one), its text is used verbatim,
-preserving the exporter's tabs, blank lines, and inline
-comments. When that block is absent (some non-TwinCAT
-exporters), a minimal declaration is synthesised by walking
-the structured `<interface>` elements — produces correct ST
-scaffolding but **drops initial values, `{attribute …}`
-pragmas, and inline comments inside variable declarations**.
-
-POU bodies in non-ST languages (LD, FBD, SFC) are skipped: a
-single import alert reports the names of skipped POUs, and any
-ST POUs in the same file are still imported. Errors (malformed
-XML, wrong root namespace, no POUs, file unreadable) surface
-via `window.alert` and insert nothing.
-
-The import is available in both the note editor and the
-template editor — the inserted blocks are plain text and code
-blocks, which templates already support.
 
 ### Bubble menu
 
@@ -246,6 +204,187 @@ notes. There is no UI for browsing or restoring trash today;
 files just accumulate. Manual cleanup is on the user. (Future
 queue item: trash UI + retention policy.)
 
+## ST runtime sandbox
+
+A lightweight in-browser interpreter for **Structured Text**
+(TwinCAT 3 dialect) lets the user run small ST programs
+directly inside a note, without the server or a real PLC. Think
+of it as a sandbox for working through example logic while
+writing a note about it — closer to a calculator than a
+debugger.
+
+### Invocation
+
+The Run button appears on a code block when **both** of these
+are true:
+
+1. The block's language tag is `st` (the editable language tag
+   on the code block — see the Editor section above).
+2. The block's title is `Implementation`, AND its **immediate
+   previous sibling** is another ST code block titled
+   `Declaration`.
+
+The Declaration block holds the `VAR ... END_VAR` block(s);
+the Implementation block holds the body. The runtime needs
+both to know what variables exist and what statements to run.
+
+There is no slash-menu item for inserting a Declaration +
+Implementation pair today — code blocks come from the slash
+menu's **Code block** entry, and the user types or pastes the
+declaration/implementation text and titles afterwards.
+
+Clicking Run opens a modal overlaying the editor. The modal is
+a self-contained sandbox: it holds its own copy of the program
+state, makes no server calls, and closes cleanly without
+touching the note.
+
+### Modal layout
+
+The modal contains:
+
+- A **toolbar** at the top: Run / Stop / Step / Reset buttons,
+  a cycle-time selector (10 / 50 / 100 / 500 ms or 1 s,
+  default 100 ms), a scan counter (`scan: N`), and a runtime
+  elapsed-time readout (`t: 1.5s`). Elapsed time is the
+  runtime's own clock, not wall time — frozen during Stop and
+  zeroed by Reset.
+- A **Declaration pane**: read-only display of the parsed
+  declaration source.
+- An **Implementation pane**: the implementation source with
+  inline value pills spliced in after every variable reference
+  and FB-member access. BOOL pills are coloured (blue =
+  `TRUE`, grey = `FALSE`); other types render as a neutral
+  bordered pill.
+- An **error banner** appears above the toolbar when a parse
+  or runtime error occurs, naming the offending line; the
+  matching source line in the Implementation pane is
+  highlighted.
+
+### Supported language scope
+
+What the v1 interpreter handles:
+
+- **Scalar types**: `BOOL`, `BYTE`, `WORD`, `DWORD`, `LWORD`,
+  `SINT`, `INT`, `DINT`, `LINT`, `USINT`, `UINT`, `UDINT`,
+  `ULINT`, `REAL`, `LREAL`, `STRING`, `TIME`. Integer
+  assignments wrap silently to the destination type's range
+  (two's complement for signed types) — matches real PLC
+  behaviour.
+- **Operators**: full ST precedence — `OR` > `XOR` > `AND` >
+  comparisons (`=`, `<>`, `<`, `<=`, `>`, `>=`) > additive
+  (`+`, `-`) > multiplicative (`*`, `/`, `MOD`) > exponent
+  (`**`) > unary (`NOT`, `+`, `-`).
+- **Statements**: `IF / ELSIF / ELSE / END_IF`, `CASE` with
+  range labels, `FOR / TO / BY / DO / END_FOR`, `WHILE / DO /
+  END_WHILE`, `REPEAT / UNTIL / END_REPEAT`, `EXIT`,
+  `CONTINUE`, `RETURN`, plain assignments and expression
+  statements.
+- **Built-in functions**: `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`,
+  `SHL`, `SHR`, `ROL`, `ROR`, and the full `<X>_TO_<Y>`
+  conversion family across the numeric types (e.g.
+  `INT_TO_REAL`, `REAL_TO_DINT`, `BOOL_TO_INT`).
+- **Built-in function blocks**: `TON`, `TOF`, `R_TRIG`,
+  `F_TRIG`. Declared as `MyTimer : TON;` (no init expression
+  allowed for FB instances — the parser rejects it). Called
+  with named arguments using `:=` for inputs and `=>` for
+  output bindings: `MyTimer(IN := bStart, PT := T#1s, Q =>
+  bDone);`. FB outputs are also readable via member access:
+  `MyTimer.Q`, `MyTimer.ET`. Timer elapsed time uses the
+  runtime's scan-time clock, so a Stop/Run pause doesn't
+  advance the timer.
+- **Literals**: decimal, hexadecimal (`16#FF`), binary
+  (`2#1010`), and octal (`8#777`) integers; typed-prefix
+  integers (`UDINT#42`); reals; BOOL `TRUE`/`FALSE`; string
+  literals in single quotes; TIME literals `T#1s500ms`,
+  `T#2h30m`, etc.
+
+### Variable poking
+
+When the modal is in `paused` or `running` mode (i.e. not in an
+error state), every scalar value pill in the Implementation
+pane is **clickable**. Hovering shows a faint blue ring and a
+text cursor; clicking opens an inline input field pre-filled
+with the current value, with the text selected.
+
+- **Enter** commits. The input is parsed against the
+  variable's declared type and coerced (so typing `9999` into
+  a BYTE wraps to `9999 mod 256`). Acceptable forms:
+  `TRUE`/`FALSE`/`1`/`0` for BOOL; decimal/hex/binary for
+  integers; standard JS-style for reals; `T#...` or a bare
+  number-of-ms for TIME; raw text or single-quoted for STRING.
+- **Esc** cancels.
+- **Blur** with no change cancels; blur with a change commits.
+- A parse failure leaves the input open with a red border.
+
+The user can poke variables freely while a scan is running —
+the next scan picks up the new value. The pill being edited is
+exempted from scan-driven re-renders so typing isn't
+overwritten mid-keystroke.
+
+FB instances are **not** pokeable (no single value to set);
+neither are FB-member pills (`MyTimer.Q`, `MyTimer.ET` are
+derived outputs).
+
+### Statement budget
+
+The interpreter caps each scan at **100 000 statements**.
+Exceeding the cap throws a runtime error (`execution budget
+exceeded — likely infinite loop`) and halts execution. This
+catches `WHILE TRUE` and similar constructs without locking up
+the browser tab. The cap resets per scan, so a long-running
+program with many small scans is unaffected.
+
+### Worked example
+
+A minimal on-delay timer the user can paste into a note:
+
+````
+```st
+PROGRAM TimerDemo
+VAR
+  myTimer : TON;
+  bStart : BOOL;
+  bDone : BOOL;
+  elapsed : TIME;
+END_VAR
+```
+
+```st
+myTimer(IN := bStart, PT := T#2s);
+bDone := myTimer.Q;
+elapsed := myTimer.ET;
+```
+````
+
+Set the **first block's title to `Declaration`** and the
+**second's to `Implementation`** (titles are editable on the
+code block UI). The Run button appears on the second block.
+Open the modal, click Run, then click the `bStart` pill and
+type `TRUE`. The `myTimer.ET` pill counts up; after 2 s,
+`bDone` flips to TRUE and stays latched until `bStart` goes
+back to FALSE.
+
+### Non-goals
+
+The runtime does **not** support, by design:
+
+- **User-defined function blocks.** `FUNCTION_BLOCK ...
+  END_FUNCTION_BLOCK` declarations are rejected. Only the
+  four built-in FBs above can be instantiated.
+- **Arrays, structs, enums, pointers, references.** Scalars
+  only.
+- **String functions** beyond literal assignment (no `CONCAT`,
+  `LEN`, `MID`, etc.).
+- **Real-time semantics.** Inputs aren't latched at scan
+  start; outputs aren't held at scan end. The interpreter
+  walks the body top-to-bottom each cycle.
+- **Persistent state across modal closes.** Closing the modal
+  discards the env entirely. Reopening starts fresh.
+- **Source-line highlighting during execution.** The error
+  banner highlights the failing line on a runtime error, but
+  there is no "executing line" cursor during a successful
+  scan.
+
 ## Daily notes
 
 Daily notes have a fixed on-disk layout:
@@ -306,7 +445,7 @@ editor:
 - The slash menu has the **Templates** submenu disabled
   (avoids template-of-template recursion in the picker).
 - Otherwise behaves the same: callouts, code blocks, lists,
-  tables, PLCOpen XML import, and so on are all available.
+  tables, and so on are all available.
 
 ## Tree view
 
