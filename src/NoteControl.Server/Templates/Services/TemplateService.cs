@@ -467,11 +467,12 @@ public sealed class TemplateService : ITemplateService
     }
 
     /// <summary>
-    /// Walk the markdown for image references, copy each referenced
-    /// image from the source folder into the destination
-    /// <c>&lt;destBasename&gt;.assets/</c> folder under
-    /// <see cref="destAssetsParent"/>, and rewrite the markdown
-    /// image paths to point at the new location.
+    /// Walk the body for image references — both CommonMark
+    /// <c>![alt](src)</c> and raw HTML <c>&lt;img src="..."/&gt;</c> —
+    /// copy each referenced image from the source folder into the
+    /// destination <c>&lt;destBasename&gt;.assets/</c> folder under
+    /// <see cref="destAssetsParent"/>, and rewrite the references
+    /// to point at the new location.
     ///
     /// Used by both Ship 98b ("save selection as template" — source
     /// is the source note's folder, destination is the new
@@ -479,39 +480,34 @@ public sealed class TemplateService : ITemplateService
     /// insert" — source is the templates folder, destination is the
     /// target note's asset folder).
     ///
-    /// Image refs supported: <c>![alt](src)</c> and
-    /// <c>![alt](src "title")</c>. Both standard CommonMark image
-    /// syntax forms.
+    /// Why both syntaxes: <see cref="ImageWithControls"/> emits raw
+    /// HTML when the image has a width or border attribute set
+    /// (which any resized image will), and CommonMark image syntax
+    /// otherwise. A walker that matched only the markdown form
+    /// silently missed every resized image in templates — the
+    /// Ship 98c bug fixed here in 98c-fix1.
     ///
     /// Per-image disposition:
     ///   - Absolute URLs (http://, https://, data:, blob:) are
     ///     preserved as-is.
     ///   - Relative paths that don't resolve to a file on disk,
-    ///     or that try to traverse outside <see cref="srcResolveFolder"/>,
-    ///     are dropped from the body (the entire <c>![alt](src)</c>
-    ///     reference) and a warning is logged. We deliberately don't
-    ///     keep the broken ref because a body with broken images is
-    ///     more confusing than one missing them.
+    ///     or that try to traverse outside <paramref name="srcResolveFolder"/>,
+    ///     are dropped from the body (the entire image reference)
+    ///     and a warning is logged. We deliberately don't keep the
+    ///     broken ref because a body with broken images is more
+    ///     confusing than one missing them.
     /// </summary>
     /// <param name="originalBody">The markdown to walk.</param>
-    /// <param name="destBasename">The basename of the destination
-    /// "owner" — for Ship B this is the new template's name; for
-    /// Ship C it's the target note's basename. Determines the
-    /// rewritten path's <c>&lt;basename&gt;.assets/</c> prefix.</param>
-    /// <param name="destAssetsParent">The folder under which the
-    /// destination <c>.assets/</c> folder lives. For Ship B this is
-    /// the templates folder; for Ship C it's the target note's
-    /// parent folder.</param>
-    /// <param name="srcResolveFolder">The folder against which
-    /// image refs in <paramref name="originalBody"/> are resolved.
-    /// For Ship B this is the source note's parent folder; for
-    /// Ship C it's the templates folder (since template refs are
-    /// relative to the template file itself).</param>
+    /// <param name="destBasename">Basename of the destination
+    /// "owner" — for Ship B the new template's name; for Ship C
+    /// the target note's basename. Determines the rewritten
+    /// path's <c>&lt;basename&gt;.assets/</c> prefix.</param>
+    /// <param name="destAssetsParent">Folder under which the
+    /// destination <c>.assets/</c> folder lives.</param>
+    /// <param name="srcResolveFolder">Folder against which image
+    /// refs in the body are resolved.</param>
     /// <param name="logContext">Free-text description of the
-    /// operation for log messages — e.g. "saving template 'Foo'"
-    /// or "rendering template 'Foo' for insert". Folded into the
-    /// warning lines so the operator can tell which call site
-    /// generated which warning.</param>
+    /// operation for log messages.</param>
     private async Task<(string body, bool copiedAny)> CopyAssetsAndRewriteAsync(
         string originalBody,
         string destBasename,
@@ -527,31 +523,93 @@ public sealed class TemplateService : ITemplateService
 
         var assetsFolderName = destBasename + AssetsFolderSuffix;
         var assetsAbsolute = Path.Combine(destAssetsParent, assetsFolderName);
-        // Don't pre-create the folder — only do it lazily inside
-        // the loop below if we actually find an image to copy.
-        // This keeps no-image bodies from leaving an empty .assets
-        // folder lying around.
+        // Don't pre-create the folder — only do it lazily in
+        // ResolveAndCopyAsset when an image actually copies. This
+        // keeps no-image bodies from leaving an empty .assets folder.
 
         var copiedAny = false;
         var rewritten = originalBody;
 
-        // Markdown image regex: ![alt](src) or ![alt](src "title").
-        // Captures: 1=alt text, 2=src, 3=optional title (with quotes).
+        // ---------- Pass 1: HTML <img ...> tags ----------
+        //
+        // ImageWithControls.serialize emits raw HTML whenever the
+        // image has width or border set — i.e. any resized image.
+        // Pattern matches <img>, <IMG>, self-closing or not, with
+        // src in either single or double quotes.
+        //
+        // We MUST run the HTML pass FIRST: a markdown ![](x) ref
+        // inside an HTML attribute would never appear in legal
+        // tiptap-markdown output, but if the markdown pass ran first
+        // and rewrote a literal `![](x)` somewhere, the offsets
+        // would shift before the HTML pass even started. Running
+        // HTML first means the HTML matches reflect the original
+        // indices too. Each pass uses reverse-iteration internally
+        // so its OWN matches don't need re-indexing as we splice.
+        var htmlImgRx = new System.Text.RegularExpressions.Regex(
+            @"<img\b[^>]*?\bsrc\s*=\s*(?:""(?<srcDq>[^""]*)""|'(?<srcSq>[^']*)')[^>]*?/?>",
+            System.Text.RegularExpressions.RegexOptions.Compiled |
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        var htmlMatches = htmlImgRx.Matches(rewritten)
+            .Cast<System.Text.RegularExpressions.Match>()
+            .OrderByDescending(m => m.Index)
+            .ToList();
+
+        foreach (var match in htmlMatches)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var srcDq = match.Groups["srcDq"];
+            var srcSq = match.Groups["srcSq"];
+            var src = srcDq.Success ? srcDq.Value : srcSq.Value;
+
+            if (IsAbsoluteOrDataUrl(src))
+            {
+                continue;
+            }
+
+            var newSrc = await ResolveAndCopyAssetAsync(
+                src: src,
+                srcResolveFolder: srcResolveFolder,
+                assetsAbsolute: assetsAbsolute,
+                assetsFolderName: assetsFolderName,
+                logContext: logContext,
+                ct: ct);
+
+            if (newSrc is null)
+            {
+                // Drop the whole <img ... /> tag — broken-image
+                // tags are more confusing than absence.
+                rewritten = rewritten.Remove(match.Index, match.Length);
+                continue;
+            }
+
+            // Rewrite ONLY the src attribute value, preserving the
+            // rest of the tag (width, alt, class, etc.). Use the
+            // capture group's index/length so we don't accidentally
+            // hit a "src=..." substring elsewhere in the tag.
+            var srcGroup = srcDq.Success ? srcDq : srcSq;
+            rewritten = rewritten
+                .Remove(srcGroup.Index, srcGroup.Length)
+                .Insert(srcGroup.Index, newSrc);
+            copiedAny = true;
+        }
+
+        // ---------- Pass 2: CommonMark ![alt](src "title") ----------
+        //
+        // Standard image syntax. Captures: alt, src, optional title.
         // Non-greedy on alt and src so a line with multiple images
         // doesn't gobble across boundaries.
         var mdImageRx = new System.Text.RegularExpressions.Regex(
             @"!\[(?<alt>[^\]]*)\]\((?<src>[^)\s]+)(?:\s+""(?<title>[^""]*)"")?\)",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
-        // We iterate matches in REVERSE order so that splice-out
-        // operations (when we drop a broken ref) don't shift
-        // subsequent match offsets.
-        var matches = mdImageRx.Matches(rewritten)
+        var mdMatches = mdImageRx.Matches(rewritten)
             .Cast<System.Text.RegularExpressions.Match>()
             .OrderByDescending(m => m.Index)
             .ToList();
 
-        foreach (var match in matches)
+        foreach (var match in mdMatches)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -559,86 +617,26 @@ public sealed class TemplateService : ITemplateService
             var alt = match.Groups["alt"].Value;
             var title = match.Groups["title"].Value;
 
-            // Absolute URL or data URL — leave untouched.
             if (IsAbsoluteOrDataUrl(src))
             {
                 continue;
             }
 
-            // Resolve the source file on disk. The src is
-            // URL-encoded (per the markdown convention); decode
-            // each segment before joining with the filesystem
-            // separator.
-            var decodedSrc = string.Join('/',
-                src.TrimStart('.', '/').Split('/').Select(seg =>
-                {
-                    try { return Uri.UnescapeDataString(seg); }
-                    catch { return seg; }
-                }));
+            var newSrc = await ResolveAndCopyAssetAsync(
+                src: src,
+                srcResolveFolder: srcResolveFolder,
+                assetsAbsolute: assetsAbsolute,
+                assetsFolderName: assetsFolderName,
+                logContext: logContext,
+                ct: ct);
 
-            string sourceAbsolute;
-            try
+            if (newSrc is null)
             {
-                var combined = Path.Combine(srcResolveFolder,
-                    decodedSrc.Replace('/', Path.DirectorySeparatorChar));
-                sourceAbsolute = Path.GetFullPath(combined);
-            }
-            catch
-            {
-                _log.LogWarning(
-                    "Could not resolve image src '{Src}' while {Op}; dropping.",
-                    src, logContext);
                 rewritten = rewritten.Remove(match.Index, match.Length);
                 continue;
             }
 
-            // Anti-traversal: source path must remain under the
-            // configured resolve folder.
-            if (!sourceAbsolute.StartsWith(srcResolveFolder, StringComparison.OrdinalIgnoreCase))
-            {
-                _log.LogWarning(
-                    "Image src '{Src}' resolves outside resolve folder while {Op}; dropping.",
-                    src, logContext);
-                rewritten = rewritten.Remove(match.Index, match.Length);
-                continue;
-            }
-
-            if (!File.Exists(sourceAbsolute))
-            {
-                _log.LogWarning(
-                    "Image src '{Src}' (resolved to '{Absolute}') does not exist on disk while {Op}; dropping.",
-                    src, sourceAbsolute, logContext);
-                rewritten = rewritten.Remove(match.Index, match.Length);
-                continue;
-            }
-
-            // Lazily create the destination asset folder on first
-            // successful resolve.
-            Directory.CreateDirectory(assetsAbsolute);
-
-            var originalFileName = Path.GetFileName(sourceAbsolute);
-            var safeName = AssetFileHelpers.SanitiseFileName(originalFileName);
-            if (string.IsNullOrEmpty(safeName)) safeName = "image";
-            var storedName = AssetFileHelpers.NextAvailableName(assetsAbsolute, safeName);
-            var destAbsolute = Path.Combine(assetsAbsolute, storedName);
-
-            try
-            {
-                File.Copy(sourceAbsolute, destAbsolute, overwrite: false);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex,
-                    "Failed to copy image '{Source}' → '{Dest}' while {Op}; dropping ref.",
-                    sourceAbsolute, destAbsolute, logContext);
-                rewritten = rewritten.Remove(match.Index, match.Length);
-                continue;
-            }
-
-            // Build the new markdown image ref. URL-encode segments
-            // to match the convention AssetService uses for its
-            // markdown emit.
-            var newSrc = $"{AssetFileHelpers.UrlEncodeSegment(assetsFolderName)}/{AssetFileHelpers.UrlEncodeSegment(storedName)}";
+            // Rebuild the entire ![alt](src "title") with the new src.
             var newImg = string.IsNullOrEmpty(title)
                 ? $"![{alt}]({newSrc})"
                 : $"![{alt}]({newSrc} \"{title}\")";
@@ -648,8 +646,97 @@ public sealed class TemplateService : ITemplateService
             copiedAny = true;
         }
 
-        await Task.CompletedTask;
         return (rewritten, copiedAny);
+    }
+
+    /// <summary>
+    /// Resolve a single image src (URL-decoded against
+    /// <paramref name="srcResolveFolder"/>), copy the file into
+    /// <paramref name="assetsAbsolute"/> with a collision-safe
+    /// name, and return the new URL-encoded relative src to write
+    /// back into the markdown / HTML.
+    ///
+    /// Returns <c>null</c> on any failure (path-traversal attempt,
+    /// file not on disk, copy fails) — callers drop the surrounding
+    /// image reference in that case. All failures log a warning so
+    /// the operator can see which image got dropped and why.
+    /// </summary>
+    private async Task<string?> ResolveAndCopyAssetAsync(
+        string src,
+        string srcResolveFolder,
+        string assetsAbsolute,
+        string assetsFolderName,
+        string logContext,
+        CancellationToken ct)
+    {
+        // URL-decode each path segment. Markdown emits paths like
+        // "MyTemplate.assets/My%20Picture.png"; the on-disk file is
+        // "My Picture.png" so we have to decode before resolving.
+        var decodedSrc = string.Join('/',
+            src.TrimStart('.', '/').Split('/').Select(seg =>
+            {
+                try { return Uri.UnescapeDataString(seg); }
+                catch { return seg; }
+            }));
+
+        string sourceAbsolute;
+        try
+        {
+            var combined = Path.Combine(srcResolveFolder,
+                decodedSrc.Replace('/', Path.DirectorySeparatorChar));
+            sourceAbsolute = Path.GetFullPath(combined);
+        }
+        catch
+        {
+            _log.LogWarning(
+                "Could not resolve image src '{Src}' while {Op}; dropping.",
+                src, logContext);
+            return null;
+        }
+
+        // Anti-traversal: source path must remain under the
+        // configured resolve folder.
+        if (!sourceAbsolute.StartsWith(srcResolveFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            _log.LogWarning(
+                "Image src '{Src}' resolves outside resolve folder while {Op}; dropping.",
+                src, logContext);
+            return null;
+        }
+
+        if (!File.Exists(sourceAbsolute))
+        {
+            _log.LogWarning(
+                "Image src '{Src}' (resolved to '{Absolute}') does not exist on disk while {Op}; dropping.",
+                src, sourceAbsolute, logContext);
+            return null;
+        }
+
+        // Lazily create the destination asset folder on first
+        // successful resolve so a no-image body doesn't leave an
+        // empty .assets folder.
+        Directory.CreateDirectory(assetsAbsolute);
+
+        var originalFileName = Path.GetFileName(sourceAbsolute);
+        var safeName = AssetFileHelpers.SanitiseFileName(originalFileName);
+        if (string.IsNullOrEmpty(safeName)) safeName = "image";
+        var storedName = AssetFileHelpers.NextAvailableName(assetsAbsolute, safeName);
+        var destAbsolute = Path.Combine(assetsAbsolute, storedName);
+
+        try
+        {
+            File.Copy(sourceAbsolute, destAbsolute, overwrite: false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "Failed to copy image '{Source}' → '{Dest}' while {Op}; dropping ref.",
+                sourceAbsolute, destAbsolute, logContext);
+            return null;
+        }
+
+        await Task.CompletedTask;
+        return $"{AssetFileHelpers.UrlEncodeSegment(assetsFolderName)}/{AssetFileHelpers.UrlEncodeSegment(storedName)}";
     }
 
     private static bool IsAbsoluteOrDataUrl(string src)
