@@ -82,13 +82,26 @@ export const CodeBlockWithTitle = CodeBlockLowlight.extend({
    * We insert 4 spaces (matching TwinCAT 3's default indent).
    * Shift-Tab removes up to 4 leading spaces from the LINE
    * containing the cursor — not the start of the whole code block.
+   *
+   * Important: the Tab insert dispatches a prosemirror transaction
+   * directly via `tr.insertText` rather than going through
+   * `editor.commands.insertContent('    ')`. The high-level command
+   * stringifies its input through HTML and runs it back through
+   * `DOMParser` + `parseSlice`. Somewhere along that round-trip
+   * the four-space text gets eaten — whether by HTML whitespace
+   * collapsing or by ProseMirror's slice-fitting heuristics in a
+   * code-block context, I haven't fully pinned down. Empirically
+   * the keystroke was consumed (focus stayed in the editor) but no
+   * indentation appeared. Direct `tr.insertText` skips the parser
+   * entirely and inserts the literal characters.
    */
   addKeyboardShortcuts() {
     return {
       ...this.parent?.(),
       Tab: ({ editor }) => {
         if (!editor.isActive(this.name)) return false;
-        editor.commands.insertContent('    ');
+        const { state, view } = editor;
+        view.dispatch(state.tr.insertText('    '));
         return true;
       },
       'Shift-Tab': ({ editor }) => {
