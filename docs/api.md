@@ -86,7 +86,8 @@ note path with `.md` extension.
 | PUT | `/note?path=` | vault:editor | Update note body and/or frontmatter. Refused if `locked: true`. |
 | DELETE | `/note?path=` | vault:editor | Move note to `.notesapp/trash/`. |
 | PUT | `/note/move` | vault:editor | Move/rename a note. Old + new paths in body. |
-| GET | `/note/export?path=&format=` | vault:viewer | Export a note. `format` is one of: `md`, `pdf`, `html`. |
+| GET | `/note/export?path=&format=` | vault:viewer | Export a note. `format` is one of: `docx` (default — Word document via the rich-conversion pipeline) or `md` (zip containing the note's `.md` plus its `.assets/` folder if any, suitable for round-trip via `/import`). `format=pdf` returns 501 (placeholder; not surfaced in the UI). |
+| POST | `/import` | vault:editor | Multipart upload that imports either a single `.md` file or a `.zip` of `.md` files (with optional `*.assets/` folders). Form fields: `targetFolder` (optional, vault-relative; empty = root), `file` (required). Conflict policy: numeric-suffix rename (`Foo.md` → `Foo (2).md`); a renamed note's body is rewritten to point at its renamed `.assets/` sibling so image references survive. Always returns 200 with a per-entry result list unless the request itself is malformed; per-file failures inside a multi-file import surface as `failed` entries rather than aborting the batch. |
 
 ## Folders
 

@@ -103,7 +103,17 @@ the web UI. See [tray.md](tray.md).
 
 Layout: **3 panes**.
 
-- **Left rail (tree)**: collapsible (toggle in topbar).
+- **Left rail (tree)**: collapsible (toggle in topbar). The
+  rail's header carries the per-vault action buttons (Daily+,
+  new-note, new-folder) plus a small **▾** chevron between
+  new-note and new-folder that opens an **Import .md or .zip…**
+  action. Import accepts a single `.md` or a `.zip` of `.md`
+  files (with optional `*.assets/` folders); the file lands in
+  the currently selected folder (or vault root if nothing is
+  selected). Conflicts get numeric-suffix renames
+  (`Foo.md` → `Foo (2).md`); a results modal lists per-file
+  outcomes after the import. **Desktop only** — the chevron is
+  hidden at narrow viewports.
 - **Centre**: folder listing — current folder's contents as a
   list with name + kind + updated timestamp + size. Includes
   inline rows for "new folder" and "new note" prompts.
@@ -151,7 +161,12 @@ Shows the selected note or folder's metadata. For notes:
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
 - **Buttons**: Move (toggles move-mode), Delete (with
-  confirmation). Rename happens by editing the name inline.
+  confirmation), and two export buttons —
+  **📄 Export as .docx** (Word document via the rich-conversion
+  pipeline) and **📥 Export as .md** (zip containing the note's
+  `.md` plus its `.assets/` folder if any; round-trips via the
+  tree rail's import action). Rename happens by editing the
+  name inline.
 
 For folders: name, full path, contents count, created/updated
 timestamps. Move/Delete buttons available.
@@ -171,6 +186,10 @@ A few mobile-specific affordances:
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
+- **The tree rail's import chevron (▾) is hidden** on mobile —
+  import is a desktop-first workflow. Export from the
+  properties panel (both `.docx` and `.md`) still works on
+  mobile via `MobileNoteProperties`.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
