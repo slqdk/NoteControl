@@ -1815,6 +1815,37 @@ body.nc-dragging * {
   padding: 0 !important;
 }
 
+/* ----- F2 autocomplete in ST code blocks --------------------------- */
+/*
+ * The popup body reuses the .nc-slash-menu / .nc-slash-row layout
+ * (one button per row, icon + title + subtitle). The .nc-st-ac
+ * tweaks add a small heading row at the top so users can see at a
+ * glance whether they're in declaration or implementation mode,
+ * and whether their typed query has narrowed the list.
+ */
+.nc-st-ac {
+  /* Slightly wider than the slash menu — the FB subtitles read
+     better with extra room. */
+  min-width: 300px;
+}
+
+.nc-st-ac-heading {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--nc-fg-muted);
+  border-bottom: 1px solid var(--nc-border);
+  margin-bottom: 4px;
+}
+
+.nc-st-ac-query {
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--nc-fg);
+  font-weight: 600;
+}
+
 /* ----- Code block with title (step 9-fix) -------------------------- */
 
 .nc-codeblock-wrap {

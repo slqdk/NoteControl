@@ -80,7 +80,8 @@ export const CodeBlockWithTitle = CodeBlockLowlight.extend({
    * Tab to indent.
    *
    * We insert 4 spaces (matching TwinCAT 3's default indent).
-   * Shift-Tab removes up to 4 leading spaces from the current line.
+   * Shift-Tab removes up to 4 leading spaces from the LINE
+   * containing the cursor — not the start of the whole code block.
    */
   addKeyboardShortcuts() {
     return {
@@ -96,16 +97,42 @@ export const CodeBlockWithTitle = CodeBlockLowlight.extend({
         // the cursor. Done at the prosemirror-transaction level
         // because TipTap commands don't have a built-in "outdent
         // line" for code blocks.
+        //
+        // Implementation note (was buggy until this version):
+        // a code block in ProseMirror is one node containing one
+        // flat text node. `$from.parentOffset` is the character
+        // offset within that text — measured from the start of
+        // the code block, NOT from the start of the current line.
+        // Earlier code treated the two as equivalent, so Shift-Tab
+        // only outdented the FIRST line of the block. Fix is to
+        // find the previous `\n` in the parent's textContent and
+        // measure the line start from there.
         const { state, view } = editor;
         const { from } = state.selection;
         const $from = state.doc.resolve(from);
-        const lineStart = from - $from.parentOffset;
-        const lineText = state.doc.textBetween(lineStart, from + $from.parent.content.size - $from.parentOffset, '\n', '\n');
-        // Count up to 4 leading spaces on the line.
+        const parentText = $from.parent.textContent;
+        const parentOffset = $from.parentOffset;
+
+        // Document position of the parent's first character.
+        const contentStart = from - parentOffset;
+
+        // Index of the line start within parentText (0-indexed).
+        const prevNewline = parentText.lastIndexOf('\n', parentOffset - 1);
+        const lineStartInText = prevNewline === -1 ? 0 : prevNewline + 1;
+
+        // Slice of the line from its start to the end of the
+        // parent — enough to inspect leading spaces.
+        const lineText = parentText.slice(lineStartInText);
+
         const match = lineText.match(/^(    | {1,3})/);
         if (!match) return true; // consume the keystroke either way
         const removeCount = match[1].length;
-        const tr = state.tr.delete(lineStart, lineStart + removeCount);
+
+        const lineStartDocPos = contentStart + lineStartInText;
+        const tr = state.tr.delete(
+          lineStartDocPos,
+          lineStartDocPos + removeCount,
+        );
         view.dispatch(tr);
         return true;
       },

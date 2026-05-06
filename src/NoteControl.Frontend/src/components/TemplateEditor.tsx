@@ -13,6 +13,7 @@ import { CalloutExtension } from '../editor/CalloutExtension';
 import { ImageWithControls } from '../editor/ImageWithControls';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
+import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { TableToolbar } from './TableToolbar';
 import { BubbleMenu } from './BubbleMenu';
@@ -153,6 +154,10 @@ export function TemplateEditor({
           templateName: enableImages === true ? templateName : undefined,
         },
       }),
+      // F2 autocomplete inside Structured Text code blocks. See
+      // StAutocompleteExtension for the mode-resolution rules
+      // (Declaration → types/FBs, Implementation → declared vars).
+      StAutocompleteExtension,
       MarkdownExtension,
     ],
     content: initialBody,

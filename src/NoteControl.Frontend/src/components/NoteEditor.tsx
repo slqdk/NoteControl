@@ -16,6 +16,7 @@ import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
+import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
@@ -276,6 +277,12 @@ export function NoteEditor({
             getNotePath: () => noteForUploadRef.current,
           },
         }),
+        // F2 autocomplete inside Structured Text code blocks.
+        // Declaration mode → built-in types + FB types (BOOL, INT,
+        // TON, ...). Implementation mode → variables parsed from
+        // the preceding Declaration block. See StAutocompleteExtension
+        // for the mode-resolution rules.
+        StAutocompleteExtension,
         MarkdownExtension,
       ],
       content: initialNote.body,
