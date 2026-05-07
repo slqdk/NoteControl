@@ -33,7 +33,11 @@ Everything renders inside `.nc-app-frame` — a centred band of
 configurable width:
 
 - **Width**: 1000–2400 px in steps of 50, default 1600. Set
-  globally per-browser, not per-vault.
+  globally per-browser, not per-vault. The top of the slider
+  range is a "Full width" sentinel — selecting it makes the
+  frame track the viewport width instead of capping at a px
+  value, so the app fills the browser regardless of how wide
+  the monitor is.
 - **Outside the frame**: a configurable preset gradient acts as
   a "desk surface" — visible as left/right gutters on monitors
   wider than the frame.
@@ -74,15 +78,22 @@ Two settings groups, both per-browser via localStorage:
 
 ### Appearance
 Configurable from the appearance cog in the top bar:
-- App frame width (1000–2400 px).
+- App frame width (1000–2400 px). Top of the slider is "Full
+  width" — see the **App frame** section above.
 - Gradient preset (6 presets: Slate, Sky, Mint, Peach, Lavender,
   Charcoal — each with light + dark variants).
 
 ### Note defaults
 Configurable from the same panel:
-- Default note width (700–2400 px, default 1000). Resolution
-  order: per-note frontmatter `width` → this default → CSS
-  baseline (700).
+- Default note width (700–2400 px, default 1000), as a slider.
+  Top of the slider is "Full width" — when picked, notes
+  without a per-note `width` fill the available editor area
+  (constrained by the app frame and rails, not the literal
+  viewport). Resolution order is unchanged: per-note
+  frontmatter `width` → this default → CSS baseline (700).
+  Per-note `width` in frontmatter is always a plain integer;
+  the "Full width" sentinel only applies to this global
+  default.
 - Default font (one of the system aliases: System UI, Sans-serif,
   Serif, Monospace, Inter, Rubik, JetBrains Mono — or "Default").
   Per-note frontmatter `font` overrides.
