@@ -24,10 +24,37 @@ import { useEffect, useState } from 'react';
 
 // Width range: 700 (current CSS default = .nc-editor's hard-coded
 // width) up to 2400 (matches APP_WIDTH_MAX in appearance.ts so the
-// note can be as wide as the app frame allows).
+// note can be as wide as the app frame allows). Step matches the
+// app-width slider so both controls feel consistent.
 export const NOTE_WIDTH_MIN = 700;
 export const NOTE_WIDTH_MAX = 2400;
+export const NOTE_WIDTH_STEP = 50;
 export const NOTE_WIDTH_DEFAULT = 1000;
+
+/**
+ * Slider value that means "fill the available editor area". Same
+ * sentinel pattern as APP_WIDTH_FULL in settings/appearance.ts:
+ * piggybacks on the max so the stored shape stays a plain integer
+ * (no migration), the slider is a single linear control, and the
+ * default-loader's existing clamp keeps any old saved 2400 working
+ * unchanged.
+ *
+ * This sentinel only applies to the GLOBAL default. Per-note widths
+ * in YAML frontmatter remain plain integers — keeps the on-disk
+ * format clean and self-explanatory. A user who wants a specific
+ * note to fill the editor area can either clear the per-note Width
+ * (so the note inherits the global) or set a per-note Width as
+ * large as they like.
+ *
+ * resolveNoteAppearance below translates the sentinel to the CSS
+ * keyword `100%` when there's no per-note override; numeric global
+ * defaults keep emitting `${px}px` as before.
+ */
+export const NOTE_WIDTH_FULL: number = NOTE_WIDTH_MAX;
+
+export function isFullNoteWidth(w: number): boolean {
+  return w >= NOTE_WIDTH_FULL;
+}
 
 // Font-size range mirrors per-note FontSize and tree font size.
 export const NOTE_FONT_SIZE_MIN = 10;
@@ -157,6 +184,12 @@ export function useNoteDefaults(): {
  * stays empty and the .nc-editor's CSS rule (`width: 700px`) is
  * the floor.
  *
+ * Width specifically: when per-note is null AND the global default
+ * is at the NOTE_WIDTH_FULL sentinel, the resolved width is the
+ * CSS keyword `100%` rather than a px value, so the editor card
+ * tracks the available editor area instead of a fixed pixel cap.
+ * Anything else stays a px value as before.
+ *
  * In practice the global defaults are always present (loaded from
  * localStorage with sensible fallbacks), so the only way to fall
  * through to the CSS baseline is if the user explicitly clears
@@ -179,8 +212,10 @@ export function resolveNoteAppearance(
   const width =
     perNote.width !== null
       ? `${perNote.width}px`
-      : global.width > 0
-        ? `${global.width}px`
-        : '';
+      : isFullNoteWidth(global.width)
+        ? '100%'
+        : global.width > 0
+          ? `${global.width}px`
+          : '';
   return { font, fontSize, width };
 }

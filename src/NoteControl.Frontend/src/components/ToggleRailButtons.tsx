@@ -21,6 +21,8 @@ import {
   NOTE_FONT_SIZE_MIN,
   NOTE_WIDTH_MAX,
   NOTE_WIDTH_MIN,
+  NOTE_WIDTH_STEP,
+  isFullNoteWidth,
   useNoteDefaults,
 } from '../settings/noteDefaults';
 import { useTreeBehaviour } from '../settings/treeBehaviour';
@@ -147,11 +149,17 @@ export function ToggleRailButtons({
     );
   }, [treeAppearance.fontSize]);
 
-  const [noteWidthDraft, setNoteWidthDraft] = useState<string>(
-    String(noteDefaults.defaults.width),
+  // Note width is a slider with the same commit-on-release pattern
+  // as the app-width slider above: drag updates only the popover's
+  // local draft, and the global setting (which triggers a real
+  // editor re-style on every change) only updates on release.
+  // Without that, every drag tick reflows the open editor —
+  // expensive, and visually distracting.
+  const [noteWidthDraft, setNoteWidthDraft] = useState<number>(
+    noteDefaults.defaults.width,
   );
   useEffect(() => {
-    setNoteWidthDraft(String(noteDefaults.defaults.width));
+    setNoteWidthDraft(noteDefaults.defaults.width);
   }, [noteDefaults.defaults.width]);
 
   const [noteSizeDraft, setNoteSizeDraft] = useState<string>(
@@ -185,25 +193,12 @@ export function ToggleRailButtons({
 
   // Note defaults can never be "null / blank" the way the tree's
   // font size can — they always have a numeric value because they
-  // ARE the default. Empty input on commit resets to the canonical
-  // default rather than to "no value".
+  // ARE the default. The note-width slider's draft is numeric and
+  // bounded by the slider min/max, so this only needs to push the
+  // current draft to the global setter when it actually changed.
   function commitNoteWidth() {
-    const trimmed = noteWidthDraft.trim();
-    if (trimmed === '') {
-      // Reset to canonical default (1000).
-      noteDefaults.setWidth(noteDefaults.defaults.width); // unchanged
-      setNoteWidthDraft(String(noteDefaults.defaults.width));
-      return;
-    }
-    const n = parseInt(trimmed, 10);
-    if (!Number.isFinite(n)) {
-      setNoteWidthDraft(String(noteDefaults.defaults.width));
-      return;
-    }
-    const clamped = Math.max(NOTE_WIDTH_MIN, Math.min(NOTE_WIDTH_MAX, n));
-    noteDefaults.setWidth(clamped);
-    if (clamped !== n) {
-      setNoteWidthDraft(String(clamped));
+    if (noteWidthDraft !== noteDefaults.defaults.width) {
+      noteDefaults.setWidth(noteWidthDraft);
     }
   }
 
@@ -362,30 +357,36 @@ export function ToggleRailButtons({
                   <div className="nc-variant-heading">
                     Note width
                     <span className="nc-settings-value">
-                      {noteDefaults.defaults.width}px
+                      {isFullNoteWidth(noteWidthDraft)
+                        ? 'Full width'
+                        : `${noteWidthDraft}px`}
                     </span>
                   </div>
                   <input
-                    type="number"
-                    className="nc-settings-number"
+                    type="range"
+                    className="nc-settings-slider"
                     min={NOTE_WIDTH_MIN}
                     max={NOTE_WIDTH_MAX}
-                    step={50}
+                    step={NOTE_WIDTH_STEP}
                     value={noteWidthDraft}
-                    onChange={(e) => setNoteWidthDraft(e.currentTarget.value)}
+                    onChange={(e) =>
+                      setNoteWidthDraft(parseInt(e.currentTarget.value, 10))
+                    }
+                    onMouseUp={commitNoteWidth}
+                    onTouchEnd={commitNoteWidth}
+                    onPointerUp={commitNoteWidth}
+                    onKeyUp={commitNoteWidth}
                     onBlur={commitNoteWidth}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        commitNoteWidth();
-                        (e.target as HTMLInputElement).blur();
-                      }
-                    }}
-                    aria-label="Default note width in pixels"
+                    aria-label="Default note width"
+                    aria-valuetext={
+                      isFullNoteWidth(noteWidthDraft)
+                        ? 'Full width'
+                        : `${noteWidthDraft} pixels`
+                    }
                   />
                   <div className="nc-settings-range-labels">
                     <span>{NOTE_WIDTH_MIN}px</span>
-                    <span>{NOTE_WIDTH_MAX}px</span>
+                    <span>Full</span>
                   </div>
                 </div>
 
