@@ -38,8 +38,8 @@ Frontmatter fields the server understands:
 | `tags` | string array | Comma-separable tag list. Lowercased on save. Indexed for search. |
 | `locked` | boolean | When true, the editor renders read-only and the save endpoint rejects writes. Toggleable from the properties panel. |
 | `version` | string (free-text) | Per-note version label. Defaults to `v0.0` when missing. The editor shows it in the properties panel; users edit it freely. |
-| `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. |
-| `fontSize` | integer | Optional font size in pixels. |
+| `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. This is the **note-level default**; per-selection font overrides via inline marks live in the body, not here. |
+| `fontSize` | integer | Optional font size in pixels. Note-level default; per-selection sizes live as inline marks in the body. |
 | `width` | integer | Optional page width in pixels (default 700). |
 
 Any other YAML keys are **preserved verbatim** through round-trip
@@ -76,7 +76,17 @@ The editor is TipTap-based. What it supports out of the box:
 - **Lists**: bullet, numbered, nested. Tab/Shift-Tab to
   indent/outdent.
 - **Inline marks**: bold, italic, underline, strikethrough,
-  inline code, links.
+  inline code, links, **per-selection font family**,
+  **per-selection font size**, and **per-selection text colour**.
+  Bold / italic / strike / inline code / links round-trip
+  through standard markdown syntax. Underline, font-family,
+  font-size, and colour have no native CommonMark equivalent
+  and round-trip as raw HTML spans (`<u>…</u>`,
+  `<span style="font-family: …">…</span>`,
+  `<span style="font-size: 14px">…</span>`,
+  `<span style="color: #c0392b">…</span>`). Multiple
+  appearance marks on the same range nest as separate spans;
+  bold/italic/underline stack with them on the same range.
 - **Blocks**: blockquote, horizontal rule, paragraph.
 - **Code blocks** with editable language tag. Syntax
   highlighting via lowlight, with a custom **Structured Text
@@ -99,6 +109,14 @@ The editor is TipTap-based. What it supports out of the box:
 - **Images**: inline, with hover controls (resize, replace,
   delete, alt-text).
 - **Videos**: inline, with hover controls (similar to images).
+
+The editor's font picker offers: Default, Inter, Segoe UI,
+Arial, Georgia, Cambria, Consolas, JetBrains Mono, Roboto Mono.
+Each option is a CSS font-family stack with sensible fallbacks
+so a system without the head font still renders something
+reasonable. The same list is used by the per-note font field
+in the properties panel and by the per-selection font dropdown
+in the bubble menu.
 
 What the editor does NOT do:
 
@@ -256,10 +274,50 @@ inserting. Backspace shrinks the filter query.
 
 ### Bubble menu
 
-Selection in the editor floats a small toolbar with: bold,
-italic, link (text input), inline code. The link button uses
-the browser's `window.prompt` today (queue item: replace with a
-proper modal).
+Selection in the editor floats a small toolbar arranged in two
+rows. Visibility: a non-empty selection of at least 2
+characters, outside any code block, with the editor focused.
+
+**Row 1 — selection mark toggles:**
+
+- **B** — bold (Ctrl+B)
+- **I** — italic (Ctrl+I)
+- **U** — underline (Ctrl+U)
+- **`<>`** — inline code
+- **🔗** — link (prompts for URL via `window.prompt`; queue
+  item: replace with a proper modal)
+- **📋** — save selection as a new template (note editor only;
+  hidden in the template editor)
+
+**Row 2 — per-selection appearance + Defaults:**
+
+- **Font** dropdown — applies a font-family mark to the
+  selection. "Default" removes the mark; the underlying note's
+  font (frontmatter or global default) takes over for that
+  range.
+- **Size** dropdown — applies a font-size mark to the
+  selection. "size" (the default option) removes the mark.
+  Available sizes: 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22,
+  24, 28, 32 px.
+- **A** with palette popover — applies a text-colour mark to
+  the selection. The palette opens on click and offers 8
+  swatches plus a ⊘ "no colour" button that strips the colour
+  mark.
+- **Defaults** — strips font / size / colour marks from the
+  selection. Bold / italic / underline / strike / code / link
+  are deliberately not cleared by Defaults; those are semantic
+  markup the user toggled on purpose, and each has its own
+  toggle button in row 1.
+
+Row 2 is hidden in the template editor (the marks are still
+registered there for paste round-trip, but the per-selection
+controls aren't surfaced).
+
+The popup never writes to frontmatter. The note-level font /
+size / width still live in frontmatter and are edited via the
+properties panel; the bubble menu only adds or removes
+**per-selection** marks that override the note default for the
+marked range.
 
 ### Paste
 
@@ -281,6 +339,33 @@ you're on plain HTTP from a remote host, paste-image won't
 work; the user is told nothing — pre-existing limitation.
 
 Generated paste filenames: `paste-<unix-ms>-<index>.<ext>`.
+
+Pasted **HTML text** is normalised before insertion. What
+survives:
+
+- Bold, italic, underline, strikethrough (the standard tags
+  and the equivalent inline-style declarations like
+  `font-weight: bold` or `text-decoration: underline`).
+- Inline code, links.
+- Font family, font size, and text colour — these arrive as
+  per-selection font-family / font-size / colour marks and
+  appear in the .md file as raw HTML spans.
+- Block structure (paragraphs, lists, headings, tables).
+
+What gets stripped:
+
+- `background` / `background-color` CSS declarations (Word's
+  highlight tinting otherwise persists as visible noise; there
+  is no Highlight mark to receive it).
+- Word's `mso-*` and `Mso-*` CSS declarations and class names —
+  these reference Word's own stylesheet which the app doesn't
+  ship.
+
+To wipe pasted appearance styling on a selection, use the
+**Defaults** button in the bubble menu — it strips the three
+appearance marks (font, size, colour) in one click, leaving
+the underlying text and any deliberately-applied bold / italic /
+underline alone.
 
 ### Drag and drop
 
@@ -576,6 +661,10 @@ editor:
   have no asset folder).
 - The slash menu has the **Templates** submenu disabled
   (avoids template-of-template recursion in the picker).
+- The bubble menu's row 2 (font / size / colour / Defaults)
+  is hidden — those marks still parse and round-trip if a
+  template body contains them, but there's no UI in the
+  template editor to apply them.
 - Otherwise behaves the same: callouts, code blocks, lists,
   tables, and so on are all available.
 
