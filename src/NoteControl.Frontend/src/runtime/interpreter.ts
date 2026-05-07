@@ -1184,36 +1184,231 @@ function bitShift(
   return scalar(v.type, r);
 }
 
-// Type conversions: register all <X>_TO_<Y> combos for the
-// numeric types. STRING ↔ numeric and TIME ↔ numeric are NOT
-// auto-registered — those edge cases would lie about behaviour
-// in v1.
-const NUMERIC_TYPES: ScalarTypeName[] = [
+// Type conversions.
+//
+// Two forms are accepted for each pair, matching IEC 61131-3 +
+// TwinCAT 3 conventions:
+//
+//   TO_<TARGET>(x)         — modern short form. Inferred-source.
+//   <SOURCE>_TO_<TARGET>(x) — legacy long form. Source spelled
+//                             out for clarity / older code.
+//
+// Both register through the same `convertScalar` helper. The
+// runtime accepts a value of any scalar type as the source; the
+// long form's "source" name in the function is purely
+// declarative — we don't enforce that the runtime value's type
+// matches the prefix. This matches TwinCAT, where `INT_TO_REAL`
+// applied to a UDINT just works (the function isn't actually
+// type-checked at the call site).
+//
+// Conversion rules per pair:
+//
+//   - Numeric → numeric: routed through coerceTo (wrap-on-overflow
+//     for ints, REAL/LREAL is unrestricted JS number).
+//
+//   - BOOL ↔ numeric: BOOL→numeric is 0/1; numeric→BOOL is "0 is
+//     false, anything else true". (This is more permissive than
+//     coerceTo's assignment rule, which only accepts 0/1 — TO_BOOL
+//     is an explicit conversion so non-0/1 mapping to TRUE matches
+//     the IEC spec and is what users expect from TO_BOOL.)
+//
+//   - TIME ↔ numeric: TIME values are already stored as ms, so
+//     TIME→numeric is "the ms count, coerced to the target type",
+//     and numeric→TIME is "the number, clamped to ≥0 ms".
+//
+//   - STRING ↔ scalar: STRING→numeric parses text (handles
+//     decimal, 16#FF, 2#1010, +/-, leading/trailing spaces);
+//     STRING→BOOL accepts TRUE/FALSE/1/0 case-insensitively;
+//     STRING→TIME accepts T#... and ms-as-number; numeric→STRING
+//     formats decimally; BOOL→STRING is "TRUE" / "FALSE";
+//     TIME→STRING is "T#..." form.
+//     STRING→STRING is identity.
+//
+// Failure modes throw StRuntimeError so the caller sees a
+// useful error in the modal banner.
+const ALL_TYPES: ScalarTypeName[] = [
   'BOOL', 'BYTE', 'WORD', 'DWORD', 'LWORD',
   'SINT', 'INT', 'DINT', 'LINT',
   'USINT', 'UINT', 'UDINT', 'ULINT',
   'REAL', 'LREAL',
+  'TIME', 'STRING',
 ];
-for (const from of NUMERIC_TYPES) {
-  for (const to of NUMERIC_TYPES) {
+
+function convertScalar(
+  v: ScalarValue, to: ScalarTypeName, line: number, fnName: string,
+): ScalarValue {
+  // Identity.
+  if (v.type === to) {
+    return scalar(to, v.value);
+  }
+
+  // ---- BOOL ↔ anything ----
+  if (to === 'BOOL') {
+    if (v.type === 'STRING') {
+      const s = (v.value as string).trim().toLowerCase();
+      if (s === 'true'  || s === '1') return scalar('BOOL', true);
+      if (s === 'false' || s === '0') return scalar('BOOL', false);
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${fnName}: cannot convert STRING "${v.value}" to BOOL (expected TRUE/FALSE/1/0)`,
+      );
+    }
+    if (v.type === 'TIME') {
+      // Non-zero TIME → TRUE, 0ms → FALSE. Matches the "non-zero
+      // is true" rule for the numeric path.
+      return scalar('BOOL', (v.value as number) !== 0);
+    }
+    // Numeric: 0 → false, anything else → true. (Different from
+    // coerceTo which is stricter; TO_BOOL is explicit.)
+    if (typeof v.value === 'bigint') {
+      return scalar('BOOL', v.value !== 0n);
+    }
+    if (typeof v.value === 'number') {
+      return scalar('BOOL', v.value !== 0);
+    }
+    throw new StRuntimeError(
+      'type-mismatch', line,
+      `${fnName}: cannot convert ${v.type} to BOOL`,
+    );
+  }
+  if (v.type === 'BOOL') {
+    const b = v.value as boolean;
+    if (to === 'STRING') return scalar('STRING', b ? 'TRUE' : 'FALSE');
+    if (to === 'TIME')   return scalar('TIME', b ? 1 : 0);
+    // Numeric: TRUE → 1, FALSE → 0, then coerce.
+    return coerceTo(scalar('INT', b ? 1 : 0), to, line);
+  }
+
+  // ---- TIME ↔ anything (numeric / STRING) ----
+  if (to === 'TIME') {
+    if (v.type === 'STRING') {
+      // Accept T#... form OR a bare integer (treated as ms).
+      const s = (v.value as string).trim();
+      const upper = s.toUpperCase();
+      if (upper.startsWith('T#') || upper.startsWith('TIME#')) {
+        const body = s.slice(upper.startsWith('TIME#') ? 5 : 2);
+        const ms = parseTimeBody(body);
+        if (ms == null) {
+          throw new StRuntimeError(
+            'type-mismatch', line,
+            `${fnName}: malformed TIME literal "${v.value}"`,
+          );
+        }
+        return scalar('TIME', ms);
+      }
+      const n = Number(s);
+      if (!Number.isFinite(n)) {
+        throw new StRuntimeError(
+          'type-mismatch', line,
+          `${fnName}: cannot convert STRING "${v.value}" to TIME`,
+        );
+      }
+      return scalar('TIME', Math.max(0, Math.trunc(n)));
+    }
+    // Numeric → TIME: clamp to ≥0 ms.
+    const n = typeof v.value === 'bigint' ? Number(v.value) : (v.value as number);
+    if (!Number.isFinite(n)) {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${fnName}: cannot convert ${v.type} to TIME`,
+      );
+    }
+    return scalar('TIME', Math.max(0, Math.trunc(n)));
+  }
+  if (v.type === 'TIME') {
+    const ms = v.value as number;
+    if (to === 'STRING') return scalar('STRING', formatTime(ms));
+    // Numeric: pass the ms count through coerceTo as a DINT so
+    // wrap-on-overflow rules apply to the target int type.
+    return coerceTo(scalar('DINT', ms), to, line);
+  }
+
+  // ---- STRING ↔ numeric ----
+  if (to === 'STRING') {
+    // Numeric → STRING. Use formatRuntimeValue's number formatting.
+    if (typeof v.value === 'bigint') {
+      return scalar('STRING', v.value.toString());
+    }
+    if (typeof v.value === 'number') {
+      // Integers print as integers; reals print with JS toString
+      // (matches what the watch panel shows).
+      const meta = TYPE_META[v.type];
+      if (meta.repr === 'number' && (v.type !== 'REAL' && v.type !== 'LREAL')) {
+        return scalar('STRING', Math.trunc(v.value).toString());
+      }
+      return scalar('STRING', v.value.toString());
+    }
+    throw new StRuntimeError(
+      'type-mismatch', line,
+      `${fnName}: cannot convert ${v.type} to STRING`,
+    );
+  }
+  if (v.type === 'STRING') {
+    // STRING → numeric. Tolerate decimal, hex/oct/bin (16#FF),
+    // signed, underscores, leading/trailing whitespace.
+    const cleaned = (v.value as string).trim().replace(/_/g, '');
+    if (cleaned.length === 0) {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${fnName}: cannot convert empty STRING to ${to}`,
+      );
+    }
+    // Hex / oct / bin?
+    const baseMatch = cleaned.match(/^(-?)(2|8|16)#([0-9a-fA-F]+)$/);
+    if (baseMatch) {
+      const sign = baseMatch[1] === '-' ? -1n : 1n;
+      const base = parseInt(baseMatch[2], 10);
+      const digits = baseMatch[3];
+      try {
+        const big = sign * BigInt('0' + (base === 2 ? 'b' : base === 8 ? 'o' : 'x') + digits);
+        return coerceTo(scalar('LINT', big), to, line);
+      } catch {
+        throw new StRuntimeError(
+          'type-mismatch', line,
+          `${fnName}: malformed integer literal "${v.value}"`,
+        );
+      }
+    }
+    const n = Number(cleaned);
+    if (!Number.isFinite(n)) {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${fnName}: cannot convert STRING "${v.value}" to ${to}`,
+      );
+    }
+    if (to === 'REAL' || to === 'LREAL') {
+      return scalar(to, n);
+    }
+    // Integer target: route through coerceTo for wrap semantics.
+    return coerceTo(scalar('LREAL', n), to, line);
+  }
+
+  // ---- Numeric → numeric: coerceTo handles wrapping. ----
+  return coerceTo(v, to, line);
+}
+
+// Register every <SOURCE>_TO_<TARGET> long form, plus every
+// TO_<TARGET> short form, for every scalar type combination.
+// The short form ignores the source label and just dispatches on
+// the runtime value's type — matches how TwinCAT treats it.
+for (const to of ALL_TYPES) {
+  const shortName = `TO_${to}`;
+  reg(shortName, (args, line) => {
+    if (args.length !== 1) {
+      throw new StRuntimeError('type-mismatch', line, `${shortName} expects 1 argument`);
+    }
+    return convertScalar(args[0], to, line, shortName);
+  });
+  for (const from of ALL_TYPES) {
     if (from === to) continue;
-    const fnName = `${from}_TO_${to}`;
-    reg(fnName, (args, line) => {
+    const longName = `${from}_TO_${to}`;
+    reg(longName, (args, line) => {
       if (args.length !== 1) {
-        throw new StRuntimeError('type-mismatch', line, `${fnName} expects 1 argument`);
+        throw new StRuntimeError('type-mismatch', line, `${longName} expects 1 argument`);
       }
-      const v = args[0];
-      // BOOL→numeric: false=0, true=1.
-      if (v.type === 'BOOL') {
-        return coerceTo(scalar('INT', (v.value as boolean) ? 1 : 0), to, line);
-      }
-      if (to === 'BOOL') {
-        // Numeric→BOOL: 0 = false, anything else = true.
-        const n = asNumOrBig(v, line);
-        const isTrue = typeof n === 'bigint' ? n !== 0n : n !== 0;
-        return scalar('BOOL', isTrue);
-      }
-      return coerceTo(v, to, line);
+      // The "from" prefix in the function name is informational
+      // only — runtime dispatches on the actual value type.
+      return convertScalar(args[0], to, line, longName);
     });
   }
 }
