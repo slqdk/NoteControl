@@ -607,7 +607,7 @@ function renderPill(
   );
 }
 
-function PillEditor({
+export function PillEditor({
   nameLower, memberLower, pokeKind, currentText, env, onCommit,
 }: {
   nameLower: string;
@@ -708,7 +708,7 @@ function PillEditor({
   );
 }
 
-function formatTimeForPill(ms: number): string {
+export function formatTimeForPill(ms: number): string {
   if (ms === 0) return 'T#0ms';
   let r = Math.max(0, Math.round(ms));
   const parts: string[] = [];

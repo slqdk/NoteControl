@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { InlineSource } from './InlineSource';
+import { WatchTable } from './WatchTable';
 import type { ParsedProgram } from '../runtime/ast';
 import type { Environment } from '../runtime/interpreter';
 import { createEnvironment, runScan } from '../runtime/interpreter';
@@ -174,6 +175,28 @@ export function RuntimeModal({
   }
 
   const [state, dispatch] = useReducer(reducer, INITIAL);
+
+  // --- Declaration pane view ('source' = raw text, 'watch' =
+  //     live variable table). Defaults to 'source' on first
+  //     mount, auto-flips to 'watch' on the first successful
+  //     scan UNLESS the user has manually toggled in this session.
+  //     Once they toggle, their choice is honoured for the rest
+  //     of the modal session.
+  const [declView, setDeclView] = useState<'source' | 'watch'>('source');
+  const userToggledViewRef = useRef<boolean>(false);
+
+  function manualSetDeclView(next: 'source' | 'watch') {
+    userToggledViewRef.current = true;
+    setDeclView(next);
+  }
+  // Auto-flip on first scan: when scanCount goes from 0 to 1 we
+  // promote the user from "looking at the code" to "watching it
+  // run", unless they already picked a view themselves.
+  useEffect(() => {
+    if (state.scanCount === 1 && !userToggledViewRef.current) {
+      setDeclView('watch');
+    }
+  }, [state.scanCount]);
 
   // --- Scan loop ----------------------------------------------
   const intervalRef = useRef<number | null>(null);
@@ -397,13 +420,60 @@ export function RuntimeModal({
 
         <div className="nc-runtime-modal-body">
           <div className="nc-runtime-modal-pane">
-            <div className="nc-runtime-modal-pane-title">Declaration</div>
-            <pre className="nc-runtime-modal-source">
-              <code>{declarationText}</code>
-            </pre>
+            <div className="nc-runtime-modal-pane-title">
+              <span>Declaration</span>
+              {parsed.ok && (
+                <div
+                  className="nc-runtime-modal-pane-toggle"
+                  role="tablist"
+                  aria-label="Declaration view"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={declView === 'source'}
+                    className={
+                      'nc-runtime-modal-pane-toggle-btn' +
+                      (declView === 'source' ? ' nc-runtime-modal-pane-toggle-btn-active' : '')
+                    }
+                    onClick={() => manualSetDeclView('source')}
+                    title="Show the raw declaration text"
+                  >
+                    Source
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={declView === 'watch'}
+                    className={
+                      'nc-runtime-modal-pane-toggle-btn' +
+                      (declView === 'watch' ? ' nc-runtime-modal-pane-toggle-btn-active' : '')
+                    }
+                    onClick={() => manualSetDeclView('watch')}
+                    title="Show a live watch table of all declared variables"
+                  >
+                    Watch
+                  </button>
+                </div>
+              )}
+            </div>
+            {parsed.ok && env && declView === 'watch' ? (
+              <WatchTable
+                program={parsed.program}
+                env={env}
+                envVersion={state.envVersion}
+                pokeEnabled={state.mode !== 'error'}
+              />
+            ) : (
+              <pre className="nc-runtime-modal-source">
+                <code>{declarationText}</code>
+              </pre>
+            )}
           </div>
           <div className="nc-runtime-modal-pane">
-            <div className="nc-runtime-modal-pane-title">Implementation</div>
+            <div className="nc-runtime-modal-pane-title">
+              <span>Implementation</span>
+            </div>
             {parsed.ok && env ? (
               <InlineSource
                 source={implementationText}

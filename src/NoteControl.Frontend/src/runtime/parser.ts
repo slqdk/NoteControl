@@ -34,7 +34,7 @@
  */
 
 import {
-  type ParsedProgram, type ProgramDecl, type VarDecl, type TypeRef,
+  type ParsedProgram, type ProgramDecl, type VarDecl, type VarSection, type TypeRef,
   type Statement, type Expr, type CaseLabel, type CaseBranch,
   type IfBranch, type LiteralExpr, type VarRefExpr, type BinaryOp,
   type CallArg,
@@ -197,13 +197,19 @@ class Parser {
     // appends to the same flat `vars` list. All variables become
     // local-scope at runtime — no input/output distinction is
     // observable.
-    const VAR_OPENERS = new Set([
-      'var', 'var_input', 'var_output', 'var_in_out',
-      'var_temp', 'var_global', 'var_external',
+    const VAR_OPENERS = new Map<string, VarSection>([
+      ['var',          'LOCAL'],
+      ['var_input',    'INPUT'],
+      ['var_output',   'OUTPUT'],
+      ['var_in_out',   'IN_OUT'],
+      ['var_temp',     'TEMP'],
+      ['var_global',   'GLOBAL'],
+      ['var_external', 'EXTERNAL'],
     ]);
     while (true) {
       const t = this.peek();
-      if (t.kind === 'KEYWORD' && VAR_OPENERS.has(t.value)) {
+      const sectionTag = t.kind === 'KEYWORD' ? VAR_OPENERS.get(t.value) : undefined;
+      if (sectionTag) {
         this.consume();
         // Some VAR_INPUT / VAR_OUTPUT sections have modifier
         // keywords like `CONSTANT`, `RETAIN`, `PERSISTENT` after
@@ -219,7 +225,7 @@ class Parser {
           }
           break;
         }
-        this.parseVarSection(vars);
+        this.parseVarSection(vars, sectionTag);
         continue;
       }
       break;
@@ -235,7 +241,7 @@ class Parser {
    *
    * Per-line syntax:  Name [, Name2 ...] : TYPE [:= INIT] ;
    */
-  private parseVarSection(vars: VarDecl[]): void {
+  private parseVarSection(vars: VarDecl[], section: VarSection): void {
     while (true) {
       const t = this.peek();
       if (t.kind === 'KEYWORD' && t.value === 'end_var') {
@@ -312,6 +318,7 @@ class Parser {
           name: n.name,
           nameLower: n.nameLower,
           type: typeRef,
+          section,
           initial,
           line: n.tok.line,
         });

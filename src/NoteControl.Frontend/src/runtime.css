@@ -209,12 +209,52 @@
 }
 
 .nc-runtime-modal-pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 600;
   color: var(--nc-fg-muted);
   background: var(--nc-bg-elev-2);
   border-bottom: 1px solid var(--nc-border);
+}
+
+/* Source / Watch tab-style toggle inside the pane title. Two
+ * tiny pill buttons. The active one is filled with the accent
+ * background; the inactive one is hollow. Sits inline at the
+ * right edge of the title bar. */
+.nc-runtime-modal-pane-toggle {
+  display: inline-flex;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  padding: 1px;
+  gap: 1px;
+}
+.nc-runtime-modal-pane-toggle-btn {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--nc-fg-muted);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.nc-runtime-modal-pane-toggle-btn:hover {
+  color: var(--nc-fg);
+}
+.nc-runtime-modal-pane-toggle-btn-active {
+  background: var(--nc-accent);
+  color: var(--nc-accent-fg, #fff);
+}
+.nc-runtime-modal-pane-toggle-btn-active:hover {
+  color: var(--nc-accent-fg, #fff);
+  filter: brightness(1.05);
 }
 
 .nc-runtime-modal-source {
@@ -424,4 +464,180 @@
   font-size: 11px;
   color: var(--nc-fg-muted);
   font-style: italic;
+}
+
+/* ----------------------------------------------------------------
+ * Watch table — Declaration pane "online" view.
+ *
+ * A scrollable HTML table replacing the raw declaration text. One
+ * row per declared variable, with an expand chevron for FB
+ * instances (built-in TON/TOF/R_TRIG/F_TRIG and unknown user-
+ * defined types) so the user can drill into member values. The
+ * value cell pokes through the same path as the inline pills.
+ *
+ * Layout strategy:
+ *   - The wrap is a flex item that fills the pane and scrolls
+ *     vertically (table itself stays full-width). Horizontal
+ *     scrolling is suppressed in favour of letting the value
+ *     and type columns wrap at a sensible width.
+ *   - First column (name) gets most of the elastic width, the
+ *     others are content-fit. Section column right-aligns to
+ *     keep the pill close to the row's right edge.
+ *   - Section pills use small caps for compactness; the colour
+ *     is enough to identify the section, the text is just
+ *     reinforcement.
+ * ---------------------------------------------------------------- */
+.nc-runtime-watch-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: var(--nc-bg-elev);
+}
+.nc-runtime-watch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.nc-runtime-watch-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--nc-bg-elev-2);
+  z-index: 1;
+}
+.nc-runtime-watch-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--nc-border);
+  user-select: none;
+}
+.nc-runtime-watch-table tbody tr {
+  border-bottom: 1px solid var(--nc-border-subtle, rgba(0, 0, 0, 0.06));
+}
+.nc-runtime-watch-table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+.nc-runtime-watch-table td {
+  padding: 4px 10px;
+  vertical-align: middle;
+}
+.nc-runtime-watch-col-name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.nc-runtime-watch-col-type {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.nc-runtime-watch-col-value {
+  /* Value cells widen to fit the pill; cap so a really long
+   * STRING doesn't push other columns off-screen. */
+  max-width: 260px;
+}
+.nc-runtime-watch-col-section {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Chevron for FB-instance rows. Rotates 90° when expanded. */
+.nc-runtime-watch-chevron {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  padding: 0;
+  font-size: 9px;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+.nc-runtime-watch-chevron:hover {
+  color: var(--nc-fg);
+}
+.nc-runtime-watch-chevron-open {
+  transform: rotate(90deg);
+}
+/* Spacer so non-expandable rows align with expandable ones. */
+.nc-runtime-watch-chevron-spacer {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+}
+
+/* Indented child rows (FB members). The indent is a wide
+ * non-breaking space-equivalent before the dot + member name.
+ * Subtle background tint so the indent reads as a group. */
+.nc-runtime-watch-row-child {
+  background: rgba(0, 0, 0, 0.02);
+}
+.nc-runtime-watch-row-child:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+.nc-runtime-watch-indent {
+  display: inline-block;
+  width: 28px;
+}
+.nc-runtime-watch-member-dot {
+  display: inline-block;
+  margin-right: 1px;
+  color: var(--nc-fg-muted);
+}
+.nc-runtime-watch-parent-hint {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 9px;
+  color: var(--nc-fg-muted);
+  user-select: none;
+}
+
+/* Empty-state hint row inside an expanded unknown FB. */
+.nc-runtime-watch-row-hint td {
+  font-style: italic;
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+}
+.nc-runtime-watch-empty-hint {
+  font-style: italic;
+}
+
+/* Section tag — the small colored pill in the rightmost column. */
+.nc-runtime-watch-section {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 10px;
+  /* Resting style — subdued, the colour comes from the section
+   * variant classes below. */
+  color: #fff;
+  background: var(--nc-fg-muted);
+}
+.nc-runtime-watch-section-input    { background: #2563eb; } /* blue   */
+.nc-runtime-watch-section-output   { background: #d97706; } /* amber  */
+.nc-runtime-watch-section-inout    { background: #7c3aed; } /* purple */
+.nc-runtime-watch-section-local    { background: #6b7280; } /* gray   */
+.nc-runtime-watch-section-temp     { background: #0891b2; } /* cyan   */
+.nc-runtime-watch-section-global   { background: #059669; } /* green  */
+.nc-runtime-watch-section-external { background: #be185d; } /* pink   */
+.nc-runtime-watch-section-member   {
+  background: transparent;
+  color: var(--nc-fg-muted);
+  border: 1px dashed var(--nc-border);
+  font-weight: 500;
+}
+
+/* When the row's underlying var is unknown-typed, fade the row
+ * so the user sees it's "on hold". Pill keeps its own
+ * unknown-styling from the existing rules. */
+.nc-runtime-watch-row-unknown .nc-runtime-watch-col-name,
+.nc-runtime-watch-row-unknown .nc-runtime-watch-col-type {
+  opacity: 0.7;
 }

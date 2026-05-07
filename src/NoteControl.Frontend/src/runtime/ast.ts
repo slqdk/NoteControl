@@ -80,12 +80,36 @@ export type TypeRef =
 
 // --- Declarations ----------------------------------------------
 
+/**
+ * Which VAR-section a declared variable came from. The runtime
+ * collapses the semantic distinction (every variable ends up as
+ * a local-scope slot in env) but the watch-table view in the
+ * Declaration pane shows this so users can see the original
+ * intent.
+ *
+ * `LOCAL` covers a plain `VAR` block. The other values map 1:1
+ * to the IEC section keywords. We don't subdivide further (e.g.
+ * VAR_INPUT CONSTANT) — the constancy attribute is dropped at
+ * parse time since the runtime doesn't enforce it.
+ */
+export type VarSection =
+  | 'LOCAL'      // VAR
+  | 'INPUT'      // VAR_INPUT
+  | 'OUTPUT'     // VAR_OUTPUT
+  | 'IN_OUT'     // VAR_IN_OUT
+  | 'TEMP'       // VAR_TEMP
+  | 'GLOBAL'     // VAR_GLOBAL
+  | 'EXTERNAL';  // VAR_EXTERNAL
+
 export interface VarDecl {
   /** Original spelling, e.g. "Counter". */
   name: string;
   /** Lowercased for symbol-table keys, e.g. "counter". */
   nameLower: string;
   type: TypeRef;
+  /** Which VAR_* section the declaration was in. Display-only;
+   *  the runtime treats every section the same. */
+  section: VarSection;
   /** Optional initial-value expression. Parser already
    *  evaluates literals where it can; the interpreter treats this
    *  as just an expression to evaluate when entering scan 0. */
