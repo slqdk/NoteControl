@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/core';
 
 import { ApiError, notesApi, templatesApi } from '../api/client';
@@ -184,6 +184,14 @@ export function BubbleMenu({
   const [active, setActive] = useState(false);
   const [position, setPosition] = useState<BubblePosition | null>(null);
 
+  // Ref to the menu's root div, used by update() to keep the menu
+  // visible when focus has moved INTO the menu itself (e.g. the
+  // user clicked the Font <select>, which steals focus from the
+  // editor). Without this check, hasFocus() would flip to false
+  // the instant a dropdown opens and the menu would unmount mid-
+  // pick. Set via the ref attribute on the root div below.
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
   // Ship 98b: busy state for "save selection as template". Hoisted
   // up here (alongside the other useState calls) and BEFORE any
   // conditional early returns so the hook is always called in the
@@ -223,7 +231,18 @@ export function BubbleMenu({
       // may be stale and we don't want the toolbar appearing for a
       // selection in an inactive editor (e.g. user clicked away to
       // focus the breadcrumb input).
-      if (!editor.view.hasFocus()) {
+      //
+      // EXCEPTION: if focus has moved INTO the bubble menu itself
+      // (e.g. the Font/Size <select> stole it when its dropdown
+      // opened), keep the menu visible. The editor's selection is
+      // preserved across this kind of focus loss because TipTap's
+      // chain().focus() on commit restores it. Without this check,
+      // opening the Font dropdown would unmount the menu before
+      // the user could click an option.
+      const focusedEl = document.activeElement as HTMLElement | null;
+      const focusInsideMenu =
+        !!focusedEl && !!menuRef.current && menuRef.current.contains(focusedEl);
+      if (!editor.view.hasFocus() && !focusInsideMenu) {
         setActive(false);
         return;
       }
@@ -649,6 +668,7 @@ export function BubbleMenu({
 
   return (
     <div
+      ref={menuRef}
       className="nc-bubble-menu"
       style={{
         // translateX(-50%) horizontally centers the menu on the
@@ -670,7 +690,27 @@ export function BubbleMenu({
       // the user mouses down on it. Without this, mousedown clears
       // the selection before the click handler runs, so the
       // toggle*() commands act on an empty range.
-      onMouseDown={(e) => e.preventDefault()}
+      //
+      // EXCEPT for native <select> and <input> — those need the
+      // real mousedown to open their dropdown / show a caret. With
+      // preventDefault swallowing the mousedown, clicks on the
+      // Font and Size dropdowns simply did nothing. We still
+      // preventDefault for buttons because their onClick already
+      // calls editor.chain().focus() to restore focus + selection
+      // explicitly (TipTap's chain remembers the last selection
+      // across the focus loss), so swallowing mousedown there is
+      // safe AND keeps the menu from disappearing mid-click.
+      //
+      // Why only on the root, not per-element: the root catches
+      // mousedown on the empty padding/borders of the menu (where
+      // there's no specific control) which we DO want to swallow.
+      // The closest-check below threads the needle: native
+      // controls work, dead space stays sticky.
+      onMouseDown={(e) => {
+        const t = e.target as HTMLElement | null;
+        if (t && t.closest('select, input')) return;
+        e.preventDefault();
+      }}
     >
       {/* Row 1 — selection-mark toggles */}
       <div className="nc-bubble-row">
@@ -746,6 +786,12 @@ export function BubbleMenu({
               const opt = FONT_OPTIONS.find((f) => f.id === e.currentTarget.value);
               if (!opt) return;
               void saveNoteAppearance('font', opt.stack);
+              // Restore focus to the editor so the user's prior
+              // selection is visible again and they can keep
+              // formatting without re-selecting. TipTap's chain
+              // remembers the last selection across the focus
+              // round-trip via the select dropdown.
+              editor.chain().focus().run();
             }}
             disabled={savingNoteAppearance}
             title="Note font"
@@ -769,12 +815,15 @@ export function BubbleMenu({
               const v = e.currentTarget.value;
               if (v === '') {
                 void saveNoteAppearance('fontSize', 0);
-                return;
+              } else {
+                const n = parseInt(v, 10);
+                if (Number.isFinite(n)) {
+                  void saveNoteAppearance('fontSize', n);
+                }
               }
-              const n = parseInt(v, 10);
-              if (Number.isFinite(n)) {
-                void saveNoteAppearance('fontSize', n);
-              }
+              // Same focus restoration as the Font dropdown — see
+              // comment above.
+              editor.chain().focus().run();
             }}
             disabled={savingNoteAppearance}
             title="Note font size"
