@@ -463,9 +463,12 @@ export function NoteEditor({
    * so we don't need to remount the editor or re-fetch the whole
    * note here.
    *
-   * The values are applied as inline CSS on the editor's root DOM
-   * element (the .nc-editor div). Inline style beats the stylesheet
-   * default, so unset fields fall back to whatever the CSS picks.
+   * The values are written as CSS custom properties on the
+   * .nc-editor-shell wrapper (see the effect further down). The
+   * .nc-editor stylesheet rule reads them via var() with sensible
+   * fallbacks. We use vars on a stable wrapper rather than inline
+   * styles on view.dom because ProseMirror occasionally rebuilds
+   * the contenteditable element.
    */
   const [appearance, setAppearance] = useState<{
     font: string | null;
@@ -532,13 +535,23 @@ export function NoteEditor({
   // set globally in the ⚙️ popover.
   const noteDefaults = useNoteDefaults();
 
-  // Apply the current appearance to the editor's root DOM element.
-  // Setting style props on .nc-editor cascades into paragraphs and
-  // headings: font-family inherits, font-size inherits (headings use
-  // em which scales relative), width sets the page itself.
+  // Apply the current appearance as CSS custom properties on the
+  // editor shell wrapper. The .nc-editor rule (in styles.css)
+  // consumes them via var(...) with sensible fallbacks.
+  //
+  // Why CSS variables on a stable wrapper instead of inline styles
+  // on editor.view.dom: ProseMirror replaces or rewrites the
+  // contenteditable element on certain transactions (extension
+  // re-init, content-type swaps, locked/unlocked toggles), which
+  // silently drops inline styles set on view.dom. The shell <div>
+  // is a stable React-managed node, so the CSS vars survive any
+  // editor-side DOM churn. The .nc-editor rule re-reads them on
+  // every render via var(), so visible width/font/size always
+  // tracks the latest setting.
+  const shellRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!editor) return;
-    const dom = editor.view.dom as HTMLElement;
+    const shell = shellRef.current;
+    if (!shell) return;
     // Resolve through global defaults so notes without per-note
     // values pick up whatever's in localStorage. Empty strings
     // clear the inline value and fall back to the CSS baseline,
@@ -551,11 +564,24 @@ export function NoteEditor({
       },
       noteDefaults.defaults,
     );
-    dom.style.fontFamily = resolved.font;
-    dom.style.fontSize = resolved.fontSize;
-    dom.style.width = resolved.width;
+    // setProperty with empty string removes the custom property,
+    // letting the CSS fallback (700px / 15px / system stack) win.
+    if (resolved.width) {
+      shell.style.setProperty('--nc-note-width', resolved.width);
+    } else {
+      shell.style.removeProperty('--nc-note-width');
+    }
+    if (resolved.fontSize) {
+      shell.style.setProperty('--nc-note-font-size', resolved.fontSize);
+    } else {
+      shell.style.removeProperty('--nc-note-font-size');
+    }
+    if (resolved.font) {
+      shell.style.setProperty('--nc-note-font', resolved.font);
+    } else {
+      shell.style.removeProperty('--nc-note-font');
+    }
   }, [
-    editor,
     appearance.font,
     appearance.fontSize,
     appearance.width,
@@ -565,7 +591,7 @@ export function NoteEditor({
   ]);
 
   return (
-    <div className="nc-editor-shell">
+    <div className="nc-editor-shell" ref={shellRef}>
       {/*
         Page area: holds the white "page" centered. The page itself
         (.nc-editor) is fixed at 700px wide. Background here is the

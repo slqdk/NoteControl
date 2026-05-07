@@ -1570,6 +1570,18 @@ body.nc-dragging * {
    parent (.nc-editor-page-area), with a subtle border + drop
    shadow to read as a printed page floating on the app background.
 
+   Width / font / font-size are driven by CSS custom properties
+   set on the .nc-editor-shell wrapper by NoteEditor.tsx:
+     --nc-note-width      per-note frontmatter width → global default → 700px
+     --nc-note-font       per-note font → global default → system stack
+     --nc-note-font-size  per-note size → global default → 15px
+   The vars exist on the stable shell wrapper rather than on
+   ProseMirror's view.dom because ProseMirror occasionally
+   rebuilds the contenteditable element and drops inline styles
+   set on it directly. var() with a sensible fallback keeps the
+   page rendering correctly even if the wrapper's vars haven't
+   been written yet (initial mount, or non-editor consumers).
+
    Using an explicit width (not max-width) so the page is always
    the same shape regardless of the window — what you see is what
    you'll get when exporting to docx. On screens narrower than
@@ -1582,7 +1594,7 @@ body.nc-dragging * {
    want some breathing room inside the white page so text doesn't
    sit on the edge. 28px ≈ 0.75 cm comfort padding. */
 .nc-editor {
-  width: 700px;
+  width: var(--nc-note-width, 700px);
   max-width: 100%;
   margin: 0 auto;
   padding: 28px 32px;
@@ -1592,7 +1604,8 @@ body.nc-dragging * {
      half-viewport pad of empty space below short notes. */
   min-height: 200px;
   outline: none;
-  font-size: 15px;
+  font-family: var(--nc-note-font, inherit);
+  font-size: var(--nc-note-font-size, 15px);
   line-height: 1.55;
   background: var(--nc-bg);
   border: 1px solid var(--nc-border);
