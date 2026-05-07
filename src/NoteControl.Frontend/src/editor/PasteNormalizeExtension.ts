@@ -2,35 +2,38 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 /**
- * Strip font-family / font-size / colour-related styling from pasted
- * HTML so pasted text inherits the note's defaults (frontmatter font /
- * fontSize, plus the editor's default text colour).
+ * Strip Word-specific clutter from pasted HTML so pasted text
+ * inherits the note's defaults — but keep font/size/colour so
+ * those round-trip when the user copies between NoteControl notes
+ * (since those are now per-selection marks under Option 1).
  *
  * What we keep:
- *   - bold       (<b>, <strong>)
- *   - italic     (<i>, <em>)
+ *   - bold       (<b>, <strong>, font-weight: bold)
+ *   - italic     (<i>, <em>, font-style: italic)
  *   - underline  (<u>, text-decoration: underline)
  *   - strike     (<s>, <del>, <strike>, text-decoration: line-through)
  *   - inline code (<code>)
  *   - links      (<a href>)
+ *   - colour     (color: …) — applied as ColorMark on parse
+ *   - font family (font-family: …) — applied as FontFamilyMark
+ *   - font size (font-size: …px) — applied as FontSizeMark
  *   - block structure (paragraphs, lists, headings, tables)
  *
  * What we strip:
- *   - inline `font-family`     CSS declarations
- *   - inline `font-size`       CSS declarations
- *   - inline `color`           CSS declarations  (per the user's design
- *                              decision: text colour is per-selection
- *                              applied via the popup, not pasted in)
- *   - inline `background-color`/`background` CSS declarations (Word's
- *                              default highlight tinting otherwise
- *                              persists into the note)
- *   - legacy `<font face="…" size="…" color="…">` attributes — we keep
- *                              the element so its child text survives,
- *                              but drop the styling attrs
- *   - `class` attributes that smell like Word's mso-* clutter
- *     (mso-, MsoNormal, etc) — these reference Word's own stylesheet
- *     which we don't ship, so they're dead weight that mainly serves
- *     to confuse the schema parser.
+ *   - inline `background` / `background-color` (Word's default
+ *     highlight tinting otherwise persists into the note as a
+ *     visible coloured stripe; we have no Highlight mark so the
+ *     style would just live as raw HTML noise)
+ *   - mso-* and Mso-prefixed CSS declarations (Word stylesheet
+ *     references that we don't ship)
+ *   - mso-* and Mso-prefixed class names (same reason)
+ *
+ * That's it. Previously we also stripped font-family / font-size /
+ * color, but with Option 1 (per-selection marks for those) the
+ * stripping breaks internal copy/paste between NoteControl notes
+ * — colours and fonts disappear on round-trip through the HTML
+ * clipboard. The user's "Defaults" button in the bubble menu is
+ * the escape hatch for getting rid of unwanted pasted styling.
  *
  * Why a transformPastedHTML plugin and not a TipTap parseHTML rule:
  * parseHTML rules run AFTER ProseMirror's schema has accepted the
@@ -58,9 +61,9 @@ const PLUGIN_KEY = new PluginKey('pasteNormalize');
 
 // Style declarations that are removed from every pasted element.
 const STRIP_PROPERTIES = new Set([
-  'font-family',
-  'font-size',
-  'color',
+  // Word's grey/yellow background tint behind highlighted text.
+  // We have no Highlight mark, so keeping it would just leave
+  // raw HTML noise.
   'background',
   'background-color',
   // Mso-* lookalikes — these reference Word's own stylesheet which
@@ -115,8 +118,6 @@ export function normalizePastedHtml(html: string): string {
 }
 
 function cleanElement(el: HTMLElement): void {
-  const tag = el.tagName.toLowerCase();
-
   // Strip mso-* and Word's own classes — they reference an absent
   // stylesheet. We keep classes that look genuinely user-applied
   // (no mso prefix, not "MsoNormal", etc).
@@ -135,8 +136,8 @@ function cleanElement(el: HTMLElement): void {
   }
 
   // Strip the offending CSS declarations from the inline `style`
-  // attribute, leaving anything else (e.g. text-align, which we
-  // don't currently support but might eventually) intact.
+  // attribute, leaving anything else (colour, font-family,
+  // font-size, font-weight, text-decoration, …) intact.
   const style = el.getAttribute('style');
   if (style) {
     const cleaned = filterStyleDeclarations(style);
@@ -145,15 +146,6 @@ function cleanElement(el: HTMLElement): void {
     } else {
       el.removeAttribute('style');
     }
-  }
-
-  // Legacy `<font>` attributes — drop the styling but keep the
-  // element so its children survive. ProseMirror's parser tolerates
-  // unknown elements and unwraps them around their content.
-  if (tag === 'font') {
-    el.removeAttribute('face');
-    el.removeAttribute('size');
-    el.removeAttribute('color');
   }
 }
 
@@ -197,9 +189,12 @@ export const PasteNormalizeExtension = Extension.create({
         key: PLUGIN_KEY,
         props: {
           // transformPastedHTML runs on the HTML string of a paste
-          // BEFORE ProseMirror's DOMParser turns it into nodes. That
-          // gives us the chance to strip styling so the resulting
-          // marks/nodes already inherit the note's defaults.
+          // BEFORE ProseMirror's DOMParser turns it into nodes.
+          // After Option 1 it does much less: only Word's mso-*
+          // clutter and background fills are removed. Font /
+          // size / colour pass through and end up applied as
+          // FontFamilyMark / FontSizeMark / ColorMark by their
+          // parseHTML rules.
           //
           // This hook does NOT fire for plain-text pastes (no HTML
           // on the clipboard) — those have no styling to strip
@@ -214,3 +209,4 @@ export const PasteNormalizeExtension = Extension.create({
     ];
   },
 });
+

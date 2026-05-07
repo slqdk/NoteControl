@@ -19,6 +19,8 @@ import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { UnderlineMark } from '../editor/UnderlineMark';
 import { ColorMark } from '../editor/ColorMark';
+import { FontFamilyMark } from '../editor/FontFamilyMark';
+import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
 import { TableToolbar } from './TableToolbar';
 import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
@@ -132,15 +134,18 @@ export function TemplateEditor({
         },
       }),
       // Same set of paste-/format-related extensions the NoteEditor
-      // registers. Templates have no frontmatter Font/FontSize —
-      // there's no per-template appearance to fall back to — but
-      // the BUBBLE-MENU mark toggles (Bold / Italic / Underline /
-      // Code / Link) and the paste normalizer still apply. The
-      // BubbleMenu in the template editor mounts without
-      // showAppearanceControls, so the second row (Font/Size/
-      // colour/Defaults) stays hidden.
+      // registers. Bold / italic / underline / strike / code /
+      // link toggles still apply via row 1 of the bubble menu.
+      // FontFamilyMark / FontSizeMark / ColorMark are registered
+      // so any pasted-from-NoteControl content round-trips
+      // correctly, but the bubble menu's row 2 (Font/Size/colour/
+      // Defaults) stays hidden in templates because we pass
+      // showAppearanceControls={false} below — keeps the
+      // template editor's surface unchanged.
       UnderlineMark,
       ColorMark,
+      FontFamilyMark,
+      FontSizeMark,
       PasteNormalizeExtension,
       Placeholder.configure({
         placeholder: "Write the template body. Use '/' for commands.",

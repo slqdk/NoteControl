@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/core';
 
-import { ApiError, notesApi, templatesApi } from '../api/client';
+import { ApiError, templatesApi } from '../api/client';
 import { refreshTemplates } from '../editor/templateCache';
 import { showToast } from '../utils/toast';
 import { FONT_OPTIONS, fontStackToId } from './EditableNoteAppearance';
@@ -38,26 +38,29 @@ import { FONT_OPTIONS, fontStackToId } from './EditableNoteAppearance';
  *   Row 1 — per-selection mark toggles:
  *     Bold | Italic | Underline | inline Code | Link | (Save as template)
  *
- *   Row 2 — note-level + colour + defaults (only when
+ *   Row 2 — per-selection font/size/colour + defaults (only when
  *     showAppearanceControls is true):
  *     Font ▼ | Size ▼ | colour swatches | Defaults
  *
- *   Font and Size are NOTE-LEVEL: changing them in the popup
- *   writes to the note's frontmatter (same shape as the
- *   properties panel). They're intentionally not per-selection
- *   marks — markdown notes pollute fast if every paragraph can
- *   carry its own font-family span. Colour IS per-selection, via
- *   the ColorMark; that's the one piece of inline styling that
- *   genuinely earns the on-disk cost of an inline span.
+ *   Font, Size, and Colour are PER-SELECTION marks — they apply
+ *   to whatever the user has selected, NOT to the whole note.
+ *   This is the Word-style model the user asked for after seeing
+ *   that whole-note Font/Size felt too wide. The cost: the .md
+ *   file accumulates `<span style="...">` wrappers for any
+ *   styling the user applies. Markdown notes are no longer purely
+ *   markdown when these marks are in use, but the file still
+ *   round-trips and renders fine in any HTML-aware viewer.
  *
- *   Defaults clears the selection's colour mark AND, if the
- *   selection covers the whole document, clears the note's per-
- *   note font + fontSize so the global defaults take over.
- *   "Selection covers the whole document" is the only safe
- *   trigger for note-level resets, since the user might be
- *   trying to "reset just this paragraph" and only the colour
- *   reset can honour that — note font/size has no per-paragraph
- *   counterpart.
+ *   Defaults strips Colour, FontFamily, and FontSize marks from
+ *   the selection. Bold / Italic / Underline / Strike are NOT
+ *   stripped — those are semantic markup the user toggled on
+ *   purpose, and they have their own buttons in row 1.
+ *
+ *   Note-level defaults (the per-note frontmatter font/size/width
+ *   keys) are unchanged: the properties panel still edits them,
+ *   the resolver still falls through per-note → global → CSS
+ *   baseline. Any text WITHOUT a per-selection mark inherits
+ *   those note defaults.
  */
 export interface BubbleMenuProps {
   editor: Editor | null;
@@ -73,26 +76,20 @@ export interface BubbleMenuProps {
   getNotePath?: () => string;
   /**
    * When true, render the second row (Font / Size / colour /
-   * Defaults). The TemplateEditor passes false because templates
-   * have no frontmatter — there's no per-note appearance for
-   * Font/Size to write to. Colour-only mode could still make
-   * sense for templates eventually, but is out of scope for the
-   * first cut: keeping the entire row hidden in TemplateEditor
-   * keeps the wiring obvious.
+   * Defaults). The TemplateEditor passes false so the row stays
+   * hidden — templates have no asset folder and editing styling
+   * inside a template is out of scope for the first cut.
+   *
+   * Switched in the Option 1 redesign: previously this prop
+   * gated note-level frontmatter writes; now Font/Size/Colour
+   * are pure per-selection marks, so showing the row in the
+   * template editor would actually work correctly. We still
+   * gate it here so the visual surface stays the same as
+   * before — bubble menu in templates remains the simple
+   * one-row toolbar. If template font/size/colour is wanted
+   * later, flipping this prop is sufficient.
    */
   showAppearanceControls?: boolean;
-  /**
-   * Current note font stack (verbatim from frontmatter, null when
-   * the note has no override). Drives the Font dropdown's
-   * displayed value. Updates live as the user changes the field
-   * elsewhere (properties panel) since the parent re-renders.
-   */
-  currentNoteFont?: string | null;
-  /**
-   * Current note font size in pixels (verbatim from frontmatter,
-   * null when the note has no override). Drives the Size dropdown.
-   */
-  currentNoteFontSize?: number | null;
 }
 
 /**
@@ -178,8 +175,6 @@ export function BubbleMenu({
   vaultId,
   getNotePath,
   showAppearanceControls,
-  currentNoteFont,
-  currentNoteFontSize,
 }: BubbleMenuProps) {
   const [active, setActive] = useState(false);
   const [position, setPosition] = useState<BubblePosition | null>(null);
@@ -224,11 +219,6 @@ export function BubbleMenu({
   // adjusting a multi-line range and expects the palette to stay
   // open across re-positions.
   const [paletteOpen, setPaletteOpen] = useState(false);
-
-  // Saving spinner for the note-level Font/Size writes. Gated on
-  // a single boolean since the saves are sequential — the popup
-  // doesn't try to fire two in flight at once.
-  const [savingNoteAppearance, setSavingNoteAppearance] = useState(false);
 
   // Recompute visibility + position from the editor's current state
   // and the selection's bounding rect. Called on every selection
@@ -483,54 +473,6 @@ export function BubbleMenu({
     if (!active) setPaletteOpen(false);
   }, [active]);
 
-  // ---- Note-level Font / Size save -----------------------------------
-  //
-  // Same shape as PropertiesPanel's saveAppearance — call notesApi.update
-  // with `body: <current markdown>` plus the changed field, then
-  // dispatch nc:note-appearance-changed so the open editor picks up
-  // the new value without a remount.
-  const saveNoteAppearance = useCallback(
-    async (
-      field: 'font' | 'fontSize',
-      value: string | number,
-    ) => {
-      if (!editor || !vaultId || !getNotePath) return;
-      const path = getNotePath();
-      if (!path) return;
-      // Read the editor's CURRENT in-memory body so the field write
-      // doesn't accidentally roll back unsaved keystrokes.
-      // editor.storage.markdown.getMarkdown() is the same source the
-      // autosave uses.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const md = (editor.storage as any).markdown?.getMarkdown?.();
-      if (typeof md !== 'string') {
-        showToast('Could not read note body.');
-        return;
-      }
-      const patch =
-        field === 'font'
-          ? { body: md, font: value as string }
-          : { body: md, fontSize: value as number };
-      setSavingNoteAppearance(true);
-      try {
-        await notesApi.update(vaultId, path, patch);
-        // The editor's appearance state listens for this event and
-        // re-renders the note's font/size live.
-        window.dispatchEvent(
-          new CustomEvent('nc:note-appearance-changed', {
-            detail: { path, field, value },
-          }),
-        );
-      } catch (e) {
-        const msg = e instanceof ApiError ? e.message : 'Could not save note appearance.';
-        showToast(msg, 5000);
-      } finally {
-        setSavingNoteAppearance(false);
-      }
-    },
-    [editor, vaultId, getNotePath],
-  );
-
   if (!editor || !active || !position) return null;
 
   // ---- Action handlers ---------------------------------------------------
@@ -674,46 +616,24 @@ export function BubbleMenu({
 
   // ---- Defaults handler ----------------------------------------------
   //
-  // "Defaults" has two effects, in order:
+  // Strip Colour, FontFamily, and FontSize marks from the
+  // selection. The underlying note inherits whatever defaults are
+  // set in the properties panel / global settings — that's
+  // unaffected.
   //
-  //   1. Strip the selection's colour mark — same as ⊘ in the
-  //      palette, but always (even if the palette is closed).
-  //
-  //   2. If the selection covers the entire document AND the note
-  //      has per-note Font/FontSize set, clear those frontmatter
-  //      fields so the global defaults take over.
-  //
-  // The whole-document gate exists because there's no per-paragraph
-  // Font/FontSize granularity — clearing them mid-selection would
-  // affect the whole note, which is surprising. Restricting the
-  // reset to "user has explicitly selected everything" matches the
-  // mental model: "make my entire note use the defaults again".
-  // Users with a partial selection still get the colour cleared,
-  // which is the most common ask anyway.
+  // We deliberately don't strip Bold / Italic / Underline / Strike
+  // here: those are semantic markup the user added on purpose, and
+  // they have their own toggle buttons in row 1. "Defaults" is
+  // about appearance (font / size / colour), not about wiping
+  // formatting.
   const handleDefaults = () => {
-    // Step 1 — colour mark
-    editor.chain().focus().unsetColor().run();
-
-    // Step 2 — note-level reset, only if selection covers the doc
-    // (or close enough — ProseMirror's whole-doc range includes the
-    // start/end document edges, so we test inclusive of those).
-    const { from, to } = editor.state.selection;
-    const docSize = editor.state.doc.content.size;
-    const coversWholeDoc = from <= 1 && to >= docSize - 1;
-
-    if (!coversWholeDoc) return;
-    if (!showAppearanceControls || !vaultId || !getNotePath) return;
-
-    // Fire-and-forget the two saves. saveNoteAppearance handles its
-    // own busy/toast state. We send empty-string / 0 sentinels per
-    // the API contract: those tell the server "remove this field
-    // from frontmatter".
-    if (currentNoteFont) {
-      void saveNoteAppearance('font', '');
-    }
-    if (currentNoteFontSize) {
-      void saveNoteAppearance('fontSize', 0);
-    }
+    editor
+      .chain()
+      .focus()
+      .unsetColor()
+      .unsetFontFamily()
+      .unsetFontSize()
+      .run();
   };
 
   // Pre-compute active states so each button can show its
@@ -726,10 +646,18 @@ export function BubbleMenu({
   const activeColour =
     (editor.getAttributes('nccolor') as { color?: string | null } | undefined)?.color ?? null;
 
-  // Selected ids for the dropdowns. Both fall back to '' when the
-  // note has no override, which selects the (Default) option.
-  const selectedFontId = fontStackToId(currentNoteFont ?? null);
-  const selectedFontSize = currentNoteFontSize ?? 0;
+  // Selected dropdown values reflect the SELECTION's current
+  // marks. getAttributes returns the attrs of the active mark of
+  // the named type at the selection — empty object if no mark of
+  // that type is active (i.e. user hasn't applied font/size to
+  // this range). Empty maps to the (Default) / 'size' options
+  // respectively.
+  const activeFont =
+    (editor.getAttributes('ncfont') as { font?: string | null } | undefined)?.font ?? null;
+  const activeFontSize =
+    (editor.getAttributes('ncsize') as { size?: number | null } | undefined)?.size ?? 0;
+  const selectedFontId = fontStackToId(activeFont);
+  const selectedFontSize = activeFontSize;
 
   return (
     <div
@@ -857,21 +785,22 @@ export function BubbleMenu({
             onChange={(e) => {
               const opt = FONT_OPTIONS.find((f) => f.id === e.currentTarget.value);
               if (!opt) return;
-              void saveNoteAppearance('font', opt.stack);
+              // Apply or clear the per-selection FontFamily mark.
+              // The "Default" option (opt.stack === '') maps to
+              // unsetFontFamily — it strips the mark from the
+              // selection so the underlying note default takes over.
+              if (opt.stack === '') {
+                editor.chain().focus().unsetFontFamily().run();
+              } else {
+                editor.chain().focus().setFontFamily(opt.stack).run();
+              }
               // The user has finished interacting with the menu.
               // Clear the flag so a later focus shift away from the
               // editor can hide the menu normally.
               interactingRef.current = false;
-              // Restore focus to the editor so the user's prior
-              // selection is visible again and they can keep
-              // formatting without re-selecting. TipTap's chain
-              // remembers the last selection across the focus
-              // round-trip via the select dropdown.
-              editor.chain().focus().run();
             }}
-            disabled={savingNoteAppearance}
-            title="Note font"
-            aria-label="Note font"
+            title="Font family"
+            aria-label="Font family"
           >
             {FONT_OPTIONS.map((opt) => (
               <option key={opt.id} value={opt.id}>
@@ -880,31 +809,27 @@ export function BubbleMenu({
             ))}
           </select>
 
-          {/* Font size dropdown — sets the note's frontmatter
-              fontSize. The "(default)" option sends 0, which the
-              server reads as "remove the key" — the resolver then
-              uses the global default. */}
+          {/* Font size dropdown — applies a per-selection FontSize
+              mark via setFontSize / unsetFontSize. The "(default)"
+              option (empty value) clears the mark so the
+              underlying note default takes over. */}
           <select
             className="nc-bubble-select nc-bubble-select-narrow"
             value={selectedFontSize === 0 ? '' : String(selectedFontSize)}
             onChange={(e) => {
               const v = e.currentTarget.value;
               if (v === '') {
-                void saveNoteAppearance('fontSize', 0);
+                editor.chain().focus().unsetFontSize().run();
               } else {
                 const n = parseInt(v, 10);
                 if (Number.isFinite(n)) {
-                  void saveNoteAppearance('fontSize', n);
+                  editor.chain().focus().setFontSize(n).run();
                 }
               }
-              // Same flag-clear + focus restoration as the Font
-              // dropdown — see comment there.
               interactingRef.current = false;
-              editor.chain().focus().run();
             }}
-            disabled={savingNoteAppearance}
-            title="Note font size"
-            aria-label="Note font size"
+            title="Font size"
+            aria-label="Font size"
           >
             <option value="">size</option>
             {FONT_SIZE_OPTIONS.map((s) => (
@@ -964,17 +889,17 @@ export function BubbleMenu({
 
           <span className="nc-bubble-divider" aria-hidden="true" />
 
-          {/* Defaults — clears the selection's colour, AND if the
-              selection covers the whole document, clears the
-              note's per-note Font/FontSize. Tooltip leans into
-              the colour case since that's the more common
-              partial-selection scenario. */}
+          {/* Defaults — strips Colour, FontFamily, and FontSize
+              marks from the selection so it inherits the note's
+              defaults again. Bold / italic / underline / strike
+              are deliberately NOT cleared — those are semantic
+              markup the user added on purpose; the user can
+              toggle each off individually. */}
           <button
             type="button"
             className="nc-bubble-button nc-bubble-button-defaults"
             onClick={handleDefaults}
-            disabled={savingNoteAppearance}
-            title="Clear formatting on the selection (and reset note Font/Size if the whole note is selected)"
+            title="Clear font, size, and colour on the selection"
           >
             Defaults
           </button>

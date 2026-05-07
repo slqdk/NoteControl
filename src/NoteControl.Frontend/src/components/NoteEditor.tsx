@@ -23,6 +23,8 @@ import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { UnderlineMark } from '../editor/UnderlineMark';
 import { ColorMark } from '../editor/ColorMark';
+import { FontFamilyMark } from '../editor/FontFamilyMark';
+import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
@@ -262,17 +264,24 @@ export function NoteEditor({
         UnderlineMark,
         // Per-selection text colour. Renders as
         // <span style="color: …">…</span>. The colour palette in
-        // the bubble menu sets / clears it. The on-disk shape is
-        // raw HTML inside markdown — the user accepted this cost
-        // when designing the popup as Option 2 (colour
-        // per-selection, font/size per-note).
+        // the bubble menu sets / clears it.
         ColorMark,
+        // Per-selection font family / size — applied via the
+        // bubble menu's Font and Size dropdowns. Same render
+        // shape as ColorMark (single-attribute span). The
+        // surrounding text inherits the note default; only the
+        // marked range overrides.
+        FontFamilyMark,
+        FontSizeMark,
         // Strip font-family / font-size / colour styling from
         // pasted HTML so pasted text inherits the note's defaults.
         // Bold / italic / underline / strike / code / link marks
         // are preserved by the schema as usual — the normalizer
         // only removes inline-style declarations and Word's
-        // mso-* clutter, never the elements themselves.
+        // mso-* clutter, never the elements themselves. The
+        // user's OWN clicks (font/size/colour from the popup)
+        // come through chain commands, never the paste path,
+        // so the normalizer has no effect on those.
         PasteNormalizeExtension,
         Placeholder.configure({
           placeholder: 'Start typing…',
@@ -743,8 +752,6 @@ export function NoteEditor({
           vaultId={vaultId}
           getNotePath={() => noteForUploadRef.current}
           showAppearanceControls
-          currentNoteFont={appearance.font}
-          currentNoteFontSize={appearance.fontSize}
         />
       </div>
       {/*
