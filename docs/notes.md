@@ -38,8 +38,8 @@ Frontmatter fields the server understands:
 | `tags` | string array | Comma-separable tag list. Lowercased on save. Indexed for search. |
 | `locked` | boolean | When true, the editor renders read-only and the save endpoint rejects writes. Toggleable from the properties panel. |
 | `version` | string (free-text) | Per-note version label. Defaults to `v0.0` when missing. The editor shows it in the properties panel; users edit it freely. |
-| `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. This is the **note-level default**; per-selection font overrides via inline marks live in the body, not here. |
-| `fontSize` | integer | Optional font size in pixels. Note-level default; per-selection sizes live as inline marks in the body. |
+| `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. |
+| `fontSize` | integer | Optional font size in pixels. |
 | `width` | integer | Optional page width in pixels (default 700). |
 
 Any other YAML keys are **preserved verbatim** through round-trip
@@ -76,47 +76,25 @@ The editor is TipTap-based. What it supports out of the box:
 - **Lists**: bullet, numbered, nested. Tab/Shift-Tab to
   indent/outdent.
 - **Inline marks**: bold, italic, underline, strikethrough,
-  inline code, links, **per-selection font family**,
-  **per-selection font size**, and **per-selection text colour**.
-  Bold / italic / strike / inline code / links round-trip
-  through standard markdown syntax. Underline, font-family,
-  font-size, and colour have no native CommonMark equivalent
-  and round-trip as raw HTML spans (`<u>…</u>`,
-  `<span style="font-family: …">…</span>`,
-  `<span style="font-size: 14px">…</span>`,
-  `<span style="color: #c0392b">…</span>`). Multiple
-  appearance marks on the same range nest as separate spans;
-  bold/italic/underline stack with them on the same range.
+  inline code, links.
 - **Blocks**: blockquote, horizontal rule, paragraph.
 - **Code blocks** with editable language tag. Syntax
   highlighting via lowlight, with a custom **Structured Text
   (TwinCAT 3 ST)** language registered — the keywords for ST
-  are recognised case-insensitively. Code blocks tagged as
-  ST and titled `Implementation`, when paired with a sibling
-  Declaration block above them, show an inline **Run** button
-  that opens the ST runtime sandbox modal — see [ST runtime
-  sandbox](#st-runtime-sandbox) below.
-- **Tables**: insertion goes through a small modal that lets the
-  user pick rows, columns, header-row presence, and an optional
-  per-table row height (defaults: 3×3, header row, no fixed
-  height). Inside a table, a floating popup above the table offers
-  add/remove row/column, header-row toggle, and a `•••` button
-  that opens an options panel with row height (number + presets),
-  cell alignment (left/center/right), header-column toggle, and
-  cell merge/split. See [Tables in detail](#tables-in-detail).
+  are recognised case-insensitively.
+- **Tables** (3×3 default, header row, with a toolbar for
+  add/remove rows and columns). Column widths set by dragging
+  the column resize handle persist across saves; row height
+  is configurable per table via the toolbar's More-options
+  panel.
 - **Callouts** in 5 variants: error, warning, info, tip, note.
-  Each is a colour-coded box with an icon.
+  Each is a colour-coded box with an icon. Callouts can
+  contain any block content — paragraphs, lists, headings,
+  code blocks, tables — and inline marks (bold, italic, etc.)
+  inside the body round-trip correctly through save/reload.
 - **Images**: inline, with hover controls (resize, replace,
   delete, alt-text).
 - **Videos**: inline, with hover controls (similar to images).
-
-The editor's font picker offers: Default, Inter, Segoe UI,
-Arial, Georgia, Cambria, Consolas, JetBrains Mono, Roboto Mono.
-Each option is a CSS font-family stack with sensible fallbacks
-so a system without the head font still renders something
-reasonable. The same list is used by the per-note font field
-in the properties panel and by the per-selection font dropdown
-in the bubble menu.
 
 What the editor does NOT do:
 
@@ -126,6 +104,24 @@ What the editor does NOT do:
   filesystem mtime gives you. (Backups are how you go back.)
 - No outline / minimap.
 
+### Cursor escape from trailing blocks
+
+The doc always ends with an empty paragraph the user can click
+into when its last block is a "trapping" block — one whose
+node-view occupies a full row and doesn't itself accept a click
+below as "outside the block". This covers callouts, tables,
+code blocks, horizontal rules, images, and videos. The
+guarantee holds both on initial load (a saved note that ended
+with a callout reopens with a clickable line beneath it) and
+during editing (deleting the paragraph below a callout
+re-creates an empty one).
+
+The trailing paragraph is part of the editor state only — it
+serialises to nothing in markdown — so it doesn't show up in
+the saved `.md` file and doesn't appear when the file is
+viewed outside NoteControl. It also can't be undone away with
+Ctrl+Z.
+
 ### Keyboard shortcuts
 
 The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
@@ -133,13 +129,7 @@ The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
 
 - **Ctrl+S** — force-save (debounced auto-save runs anyway).
 - **Tab / Shift-Tab** in lists — indent / outdent.
-- **Tab / Shift-Tab** in code blocks — insert four spaces /
-  remove up to four leading spaces from the current line. Works
-  in code blocks of any language. The four-space width matches
-  TwinCAT 3's default ST indent.
 - **/** at the start of a paragraph — open the slash menu.
-- **F2** inside a Structured Text code block — open the
-  autocomplete popup (see below).
 - **Ctrl+Backspace** in a table cell — delete the cell's row
   if at start, otherwise delete word (TipTap default). The
   table delete shortcut also handles cleaning up empty tables.
@@ -156,14 +146,10 @@ block-insertion shortcuts. Items shown in order:
 4. **Heading 3**
 5. **Bullet list**
 6. **Numbered list**
-7. **Code block** (inserts a paragraph header plus paired
-   `Declaration` and `Implementation` ST code blocks — the
-   shape the [ST runtime sandbox](#st-runtime-sandbox) reads
-   to enable the **Run ▶** button)
+7. **Code block**
 8. **Quote**
 9. **Divider**
-10. **Table** (opens an insert dialog — see [Tables in
-    detail](#tables-in-detail))
+10. **Table** (3×3 with header)
 11. **Error callout**
 12. **Warning callout**
 13. **Info callout**
@@ -176,148 +162,23 @@ The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
 
-### Tables in detail
-
-Tables are markdown-flavoured by default but carry NoteControl-
-specific decoration when needed. The editor offers controls in
-two places: an insert dialog (when creating a table) and a
-floating popup (when the cursor is inside one).
-
-**Insert dialog.** Picking Table from the slash menu opens a
-modal with fields for rows, columns, an "include header row"
-checkbox, and an optional row height (number input plus presets:
-Auto, 24, 32, 48, 64). Defaults are 3×3, header row on, no fixed
-height — matches the pre-dialog default. Enter on a dimensions
-field submits; Escape or click-outside cancels.
-
-**Floating popup.** When the cursor is inside any cell, a
-toolbar floats above the table. Two layers:
-
-- **Always-visible row** — add row above/below, add column
-  left/right, delete row, delete column, toggle header row, and
-  a `•••` button to reveal the options panel.
-- **Options panel** (toggled by `•••`) — row height with the
-  same number+presets controls as the insert dialog, cell
-  alignment (left/center/right, toggle off by clicking active),
-  header column toggle, and merge/split (disabled when the
-  current selection wouldn't allow the action).
-
-Row height is a per-table attribute. Cell alignment is
-per-cell. Header row and header column are independent toggles.
-
-**Deleting a table.** Drag-select all cells (top-left to
-bottom-right), then press Del or Backspace. The popup does not
-include a delete-table button — the deliberate-selection gesture
-guards against accidental destructive actions.
-
-**Markdown round-trip.** A table is saved to disk as one of two
-forms, picked per-table at save time:
-
-- **GFM pipe syntax** when the table is "plain" — no per-table
-  row height, no per-cell alignment, no merged cells, no header
-  column, no multi-block content inside any cell.
-- **Raw HTML** otherwise. The `<table>` carries
-  `data-row-height` plus a matching `style` for the row-height
-  CSS variable; cells carry `data-align` plus a matching
-  `text-align` style. Plain markdown viewers (GitHub, VS Code
-  preview, Obsidian) render the HTML form correctly because GFM
-  permits inline HTML; the `data-*` attributes are how
-  NoteControl reads the values back on load.
-
-The HTML form preserves cell text but **drops inline marks
-inside cells** (bold/italic/inline code/links). If a table
-needs both a custom row height and rich cell formatting,
-clearing the row height (set to Auto) reverts the table to pipe
-syntax which preserves marks.
-
-### F2 autocomplete (Structured Text)
-
-Press F2 with the cursor inside a code block whose language is
-`st` (the default for new blocks) to open an autocomplete popup.
-The popup runs in one of two modes, picked automatically from the
-surrounding document:
-
-- **Declaration mode** — when the active block's title is
-  `Declaration` (case-insensitive), or when the block isn't
-  paired with a Declaration sibling. The popup lists built-in
-  scalar types (BOOL, BYTE, WORD, DWORD, LWORD, SINT, USINT,
-  INT, UINT, DINT, UDINT, LINT, ULINT, REAL, LREAL, STRING,
-  TIME) and common function-block types (TON, TOF, TP, R_TRIG,
-  F_TRIG, CTU, CTD, CTUD, RS, SR). Picking an item inserts the
-  type/FB name at the cursor.
-
-- **Implementation mode** — when the active block's title is
-  `Implementation` AND the immediately-preceding sibling block
-  is an `st` code block titled `Declaration` (the shape the
-  PLCOpen XML import produces; same rule the Run button uses).
-  The popup lists every variable scanned out of that Declaration
-  block, with its type as a subtitle. Picking a scalar variable
-  inserts its name. Picking a variable whose type is a known FB
-  inserts a full call signature with the formal parameters in
-  source order — for example `Timer01(IN := , PT := , Q => , ET
-  => )` for a `Timer01 : TON` instance — and places the caret
-  right after the first input's `:= ` so the user can type the
-  value immediately.
-
-The declaration scanner is deliberately lenient: it survives
-mid-typing (missing semicolons, no `END_VAR` yet), comments,
-TwinCAT pragmas, `AT %ADDR` direct addresses, multi-name
-declarations (`a, b, c : INT;`), and `POINTER TO` / `REFERENCE
-TO` wrappers. Variables whose type isn't recognisable are
-silently skipped rather than failing the whole popup.
-
-Inside the popup: type letters/digits/underscore to filter
-(prefix-then-infix scoring against the title and keywords),
-ArrowUp/ArrowDown to navigate, Enter or Tab to insert the
-highlighted item, Escape or click-outside to dismiss without
-inserting. Backspace shrinks the filter query.
-
 ### Bubble menu
 
-Selection in the editor floats a small toolbar arranged in two
-rows. Visibility: a non-empty selection of at least 2
-characters, outside any code block, with the editor focused.
+Selection in the editor floats a small toolbar with: bold,
+italic, link (text input), inline code, and **Save selection
+as template**. The link button uses the browser's
+`window.prompt` today (queue item: replace with a proper
+modal).
 
-**Row 1 — selection mark toggles:**
-
-- **B** — bold (Ctrl+B)
-- **I** — italic (Ctrl+I)
-- **U** — underline (Ctrl+U)
-- **`<>`** — inline code
-- **🔗** — link (prompts for URL via `window.prompt`; queue
-  item: replace with a proper modal)
-- **📋** — save selection as a new template (note editor only;
-  hidden in the template editor)
-
-**Row 2 — per-selection appearance + Defaults:**
-
-- **Font** dropdown — applies a font-family mark to the
-  selection. "Default" removes the mark; the underlying note's
-  font (frontmatter or global default) takes over for that
-  range.
-- **Size** dropdown — applies a font-size mark to the
-  selection. "size" (the default option) removes the mark.
-  Available sizes: 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22,
-  24, 28, 32 px.
-- **A** with palette popover — applies a text-colour mark to
-  the selection. The palette opens on click and offers 8
-  swatches plus a ⊘ "no colour" button that strips the colour
-  mark.
-- **Defaults** — strips font / size / colour marks from the
-  selection. Bold / italic / underline / strike / code / link
-  are deliberately not cleared by Defaults; those are semantic
-  markup the user toggled on purpose, and each has its own
-  toggle button in row 1.
-
-Row 2 is hidden in the template editor (the marks are still
-registered there for paste round-trip, but the per-selection
-controls aren't surfaced).
-
-The popup never writes to frontmatter. The note-level font /
-size / width still live in frontmatter and are edited via the
-properties panel; the bubble menu only adds or removes
-**per-selection** marks that override the note default for the
-marked range.
+The "Save selection as template" button takes the current
+selection and creates a new template from it. If the selection
+crosses a table boundary on either side (a common case where
+ProseMirror's table plugin would otherwise restrict the
+selection to either a CellSelection or a paragraph-only
+range), the saved range is expanded outward to enclose the
+whole table — the user gets "what I selected, plus any table
+I touched", never a selection that visibly contained a table
+but was saved without it.
 
 ### Paste
 
@@ -339,33 +200,6 @@ you're on plain HTTP from a remote host, paste-image won't
 work; the user is told nothing — pre-existing limitation.
 
 Generated paste filenames: `paste-<unix-ms>-<index>.<ext>`.
-
-Pasted **HTML text** is normalised before insertion. What
-survives:
-
-- Bold, italic, underline, strikethrough (the standard tags
-  and the equivalent inline-style declarations like
-  `font-weight: bold` or `text-decoration: underline`).
-- Inline code, links.
-- Font family, font size, and text colour — these arrive as
-  per-selection font-family / font-size / colour marks and
-  appear in the .md file as raw HTML spans.
-- Block structure (paragraphs, lists, headings, tables).
-
-What gets stripped:
-
-- `background` / `background-color` CSS declarations (Word's
-  highlight tinting otherwise persists as visible noise; there
-  is no Highlight mark to receive it).
-- Word's `mso-*` and `Mso-*` CSS declarations and class names —
-  these reference Word's own stylesheet which the app doesn't
-  ship.
-
-To wipe pasted appearance styling on a selection, use the
-**Defaults** button in the bubble menu — it strips the three
-appearance marks (font, size, colour) in one click, leaving
-the underlying text and any deliberately-applied bold / italic /
-underline alone.
 
 ### Drag and drop
 
@@ -400,207 +234,6 @@ Operations:
 notes. There is no UI for browsing or restoring trash today;
 files just accumulate. Manual cleanup is on the user. (Future
 queue item: trash UI + retention policy.)
-
-## ST runtime sandbox
-
-A lightweight in-browser interpreter for **Structured Text**
-(TwinCAT 3 dialect) lets the user run small ST programs
-directly inside a note, without the server or a real PLC. Think
-of it as a sandbox for working through example logic while
-writing a note about it — closer to a calculator than a
-debugger.
-
-### Invocation
-
-The Run button appears on a code block when **both** of these
-are true:
-
-1. The block's language tag is `st` (the editable language tag
-   on the code block — see the Editor section above).
-2. The block's title is `Implementation`, AND its **immediate
-   previous sibling** is another ST code block titled
-   `Declaration`.
-
-The Declaration block holds the `VAR ... END_VAR` block(s);
-the Implementation block holds the body. The runtime needs
-both to know what variables exist and what statements to run.
-
-The slash menu's **Code block** item inserts this Declaration +
-Implementation pair directly (a header paragraph + the two
-correctly-titled ST code blocks). Users can also build the
-pair by hand from two separate code blocks if they want — the
-runtime keys off the title + language attributes, not how the
-blocks were created.
-
-Clicking Run opens a modal overlaying the editor. The modal is
-a self-contained sandbox: it holds its own copy of the program
-state, makes no server calls, and closes cleanly without
-touching the note.
-
-### Modal layout
-
-The modal contains:
-
-- A **toolbar** at the top: Run / Stop / Step / Reset buttons,
-  a cycle-time selector (10 / 50 / 100 / 500 ms or 1 s,
-  default 10 ms), a scan counter (`scan: N`), and a runtime
-  elapsed-time readout (`t: 1.5s`). Elapsed time is the
-  runtime's own clock, not wall time — frozen during Stop and
-  zeroed by Reset.
-- A **Declaration pane**: read-only display of the parsed
-  declaration source.
-- An **Implementation pane**: the implementation source with
-  inline value pills spliced in after every variable reference
-  and FB-member access. Non-BOOL pills sit on a warm cream
-  background (matching TwinCAT's online-view look). BOOL pills
-  reverse out for stronger signal: `TRUE` is white text on
-  blue, `FALSE` is white text on black.
-- An **error banner** appears above the toolbar when a parse
-  or runtime error occurs, naming the offending line; the
-  matching source line in the Implementation pane is
-  highlighted.
-
-### Supported language scope
-
-What the v1 interpreter handles:
-
-- **Scalar types**: `BOOL`, `BYTE`, `WORD`, `DWORD`, `LWORD`,
-  `SINT`, `INT`, `DINT`, `LINT`, `USINT`, `UINT`, `UDINT`,
-  `ULINT`, `REAL`, `LREAL`, `STRING`, `TIME`. Integer
-  assignments wrap silently to the destination type's range
-  (two's complement for signed types) — matches real PLC
-  behaviour.
-- **Operators**: full ST precedence — `OR` > `XOR` > `AND` >
-  comparisons (`=`, `<>`, `<`, `<=`, `>`, `>=`) > additive
-  (`+`, `-`) > multiplicative (`*`, `/`, `MOD`) > exponent
-  (`**`) > unary (`NOT`, `+`, `-`).
-- **Statements**: `IF / ELSIF / ELSE / END_IF`, `CASE` with
-  range labels, `FOR / TO / BY / DO / END_FOR`, `WHILE / DO /
-  END_WHILE`, `REPEAT / UNTIL / END_REPEAT`, `EXIT`,
-  `CONTINUE`, `RETURN`, plain assignments and expression
-  statements. The trailing `;` after `END_IF` / `END_CASE` /
-  `END_FOR` / `END_WHILE` / `END_REPEAT` is **optional** —
-  both `END_IF` and `END_IF;` parse.
-- **Built-in functions**: `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`,
-  `SHL`, `SHR`, `ROL`, `ROR`, and the full `<X>_TO_<Y>`
-  conversion family across the numeric types (e.g.
-  `INT_TO_REAL`, `REAL_TO_DINT`, `BOOL_TO_INT`).
-- **Built-in function blocks**: `TON`, `TOF`, `R_TRIG`,
-  `F_TRIG`. Declared as `MyTimer : TON;` (no init expression
-  allowed for FB instances — the parser rejects it). Called
-  with named arguments using `:=` for inputs and `=>` for
-  output bindings: `MyTimer(IN := bStart, PT := T#1s, Q =>
-  bDone);`. The `PT` argument **must be a TIME value** —
-  `PT := 1000` is rejected with a type-mismatch; write
-  `PT := T#1s` (or any other `T#…` literal). FB outputs are
-  also readable via member access: `MyTimer.Q`, `MyTimer.ET`.
-  Timer elapsed time uses the runtime's scan-time clock, so a
-  Stop/Run pause doesn't advance the timer.
-- **Literals**: decimal, hexadecimal (`16#FF`), binary
-  (`2#1010`), and octal (`8#777`) integers; typed-prefix
-  integers (`UDINT#42`); reals; BOOL `TRUE`/`FALSE`; string
-  literals in single quotes; TIME literals `T#1s500ms`,
-  `T#2h30m`, etc.
-- **BOOL assignment from integer**: `bFlag := 1` and
-  `bFlag := 0` are accepted (mapping to `TRUE` / `FALSE`),
-  in both `:= initial` declarations and assignment
-  statements. Other integer values are rejected — write
-  `<> 0` or similar if you want C-style "non-zero is true"
-  semantics. The reverse direction (assigning a BOOL into an
-  integer variable) is still rejected; use `BOOL_TO_INT` for
-  that.
-
-### Variable poking
-
-When the modal is in `paused` or `running` mode (i.e. not in an
-error state), every scalar value pill in the Implementation
-pane is **clickable**. Hovering shows a faint blue ring and a
-text cursor; clicking opens an inline input field pre-filled
-with the current value, with the text selected.
-
-- **Enter** commits. The input is parsed against the
-  variable's declared type and coerced (so typing `9999` into
-  a BYTE wraps to `9999 mod 256`). Acceptable forms:
-  `TRUE`/`FALSE`/`1`/`0` for BOOL; decimal/hex/binary for
-  integers; standard JS-style for reals; `T#...` or a bare
-  number-of-ms for TIME; raw text or single-quoted for STRING.
-- **Esc** cancels.
-- **Blur** with no change cancels; blur with a change commits.
-- A parse failure leaves the input open with a red border.
-
-The user can poke variables freely while a scan is running —
-the next scan picks up the new value. The pill being edited is
-exempted from scan-driven re-renders so typing isn't
-overwritten mid-keystroke.
-
-FB instances are **not** pokeable (no single value to set);
-neither are FB-member pills (`MyTimer.Q`, `MyTimer.ET` are
-derived outputs).
-
-### Statement budget
-
-The interpreter caps each scan at **100 000 statements**.
-Exceeding the cap throws a runtime error (`execution budget
-exceeded — likely infinite loop`) and halts execution. This
-catches `WHILE TRUE` and similar constructs without locking up
-the browser tab. The cap resets per scan, so a long-running
-program with many small scans is unaffected.
-
-### Worked example
-
-A minimal on-delay timer the user can paste into a note:
-
-````
-```st
-PROGRAM TimerDemo
-VAR
-  myTimer : TON;
-  bStart : BOOL;
-  bDone : BOOL;
-  elapsed : TIME;
-END_VAR
-```
-
-```st
-myTimer(IN := bStart, PT := T#2s);
-bDone := myTimer.Q;
-elapsed := myTimer.ET;
-```
-````
-
-The fastest way to get this set up is the slash menu's
-**Code block** entry, which inserts the Declaration +
-Implementation skeleton with the right titles already on it
-— then replace the seed `Program1` declaration and empty
-implementation with the bodies above. (You can also build
-the pair by hand from two separate code blocks; titles are
-editable on the code block UI.) The Run button appears on
-the Implementation block once both blocks are in place.
-Open the modal, click Run, then click the `bStart` pill and
-type `TRUE`. The `myTimer.ET` pill counts up; after 2 s,
-`bDone` flips to TRUE and stays latched until `bStart` goes
-back to FALSE.
-
-### Non-goals
-
-The runtime does **not** support, by design:
-
-- **User-defined function blocks.** `FUNCTION_BLOCK ...
-  END_FUNCTION_BLOCK` declarations are rejected. Only the
-  four built-in FBs above can be instantiated.
-- **Arrays, structs, enums, pointers, references.** Scalars
-  only.
-- **String functions** beyond literal assignment (no `CONCAT`,
-  `LEN`, `MID`, etc.).
-- **Real-time semantics.** Inputs aren't latched at scan
-  start; outputs aren't held at scan end. The interpreter
-  walks the body top-to-bottom each cycle.
-- **Persistent state across modal closes.** Closing the modal
-  discards the env entirely. Reopening starts fresh.
-- **Source-line highlighting during execution.** The error
-  banner highlights the failing line on a runtime error, but
-  there is no "executing line" cursor during a successful
-  scan.
 
 ## Daily notes
 
@@ -661,10 +294,6 @@ editor:
   have no asset folder).
 - The slash menu has the **Templates** submenu disabled
   (avoids template-of-template recursion in the picker).
-- The bubble menu's row 2 (font / size / colour / Defaults)
-  is hidden — those marks still parse and round-trip if a
-  template body contains them, but there's no UI in the
-  template editor to apply them.
 - Otherwise behaves the same: callouts, code blocks, lists,
   tables, and so on are all available.
 
