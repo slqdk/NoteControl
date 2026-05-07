@@ -17,6 +17,7 @@ import { MarkdownExtension } from '../markdown/markdownExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
+import { TrailingParagraph } from '../editor/TrailingParagraph';
 import { UnderlineMark } from '../editor/UnderlineMark';
 import { ColorMark } from '../editor/ColorMark';
 import { FontFamilyMark } from '../editor/FontFamilyMark';
@@ -199,6 +200,11 @@ export function TemplateEditor({
       // (Declaration → types/FBs, Implementation → declared vars).
       StAutocompleteExtension,
       MarkdownExtension,
+      // Same trailing-paragraph guarantee NoteEditor uses — keeps
+      // a clickable line below callouts/tables/etc. so the user
+      // can escape downward to add more content. See
+      // TrailingParagraph for full rationale.
+      TrailingParagraph,
     ],
     content: initialBody,
     // Templates are always editable. There's no locked-mode

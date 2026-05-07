@@ -17,6 +17,7 @@ import { VideoExtension } from '../editor/VideoExtension';
 import { CodeBlockWithTitle } from '../editor/CodeBlockWithTitle';
 import { CalloutExtension } from '../editor/CalloutExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
+import { TrailingParagraph } from '../editor/TrailingParagraph';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
@@ -348,6 +349,12 @@ export function NoteEditor({
         // for the mode-resolution rules.
         StAutocompleteExtension,
         MarkdownExtension,
+        // Ensure the doc always ends in a paragraph so the cursor
+        // can escape downward from a trailing callout / table /
+        // code block / horizontal rule / image / video. See
+        // TrailingParagraph for the rationale and why this doesn't
+        // pollute markdown saves or undo history.
+        TrailingParagraph,
       ],
       content: initialNote.body,
       // When a note is marked locked in its frontmatter, the editor
