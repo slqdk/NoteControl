@@ -131,9 +131,49 @@ the tree on the left and the properties panel on the right, so
 navigation between notes feels like a real desktop app — no
 re-mount, no full-page reload.
 
-Auto-save is **debounced ~1.5s after the last keystroke**. A
-small badge in the topbar shows save state (Saved, Saving,
-Error). Ctrl+S forces an immediate save.
+Auto-save is **debounced ~800 ms after the last keystroke**. A
+small badge in the breadcrumb row above the editor shows save
+state (Saved, Saving, Unsaved changes, Save failed, or
+Conflict). The save also fires immediately on:
+
+- **editor blur** — clicking outside the editor surface (the
+  properties panel, the tree, the breadcrumb);
+- **tab/window hidden** — switching tabs or minimising;
+- **unmount** — navigating away from the editor route;
+- **Ctrl+S / Cmd+S** — explicit force-save;
+- **Retry button** on the badge after a failure.
+
+When a save fails (network, server error, expired session, etc.)
+the badge turns red, a Retry button appears next to it, and a
+toast surfaces the error message at the bottom-right for ~6
+seconds. The next keystroke also re-arms the debounce, so
+typing through a transient failure recovers automatically. A
+**conflict** (412 from the server — another device or tab saved
+the same note) renders an equally loud red chip but no Retry
+button; the user has to reload the note to recover.
+
+**Click-away navigation guard.** When the user clicks a
+different note in the tree, or the breadcrumb's vault link, with
+unsaved changes pending, the editor flushes the save before
+allowing the navigation. If the flush fails, a centred modal
+appears with two choices:
+
+- **Stay and retry** — closes the modal without navigating; the
+  user remains on the current note with their unsaved text
+  intact, and can use the Retry button or keep typing to try
+  again.
+- **Discard changes and leave** — proceeds with the navigation;
+  the unsaved text is lost.
+
+A click on the dimmed backdrop equals Stay (the safer default
+for a stray click). The guard's scope is the tree's note/folder
+clicks and the editor's breadcrumb back-to-vault link. Top-bar
+navigation (brand, vault picker, Templates link), the account
+menu's Sign out, and search-result clicks are NOT gated yet;
+they take effect immediately like any other route change.
+Browser back/forward and tab close also fall through, with the
+browser's generic `beforeunload` "Leave site?" prompt as the
+only safety net.
 
 The editor renders the note inside a fixed-width "page" surface
 (default 700 px, configurable via frontmatter or the global

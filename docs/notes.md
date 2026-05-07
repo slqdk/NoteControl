@@ -127,7 +127,11 @@ Ctrl+Z.
 The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
 (italic), Ctrl+U (underline), Ctrl+K (link), etc. Plus:
 
-- **Ctrl+S** — force-save (debounced auto-save runs anyway).
+- **Ctrl+S** — force-save. Bypasses the debounce and also
+  cancels any pending debounced save so there's no double-PUT.
+  Suppresses the browser's "Save page as..." dialog. See
+  [frontend.md](frontend.md#editor-view) for the full list of
+  flush triggers and the navigation-guard behaviour.
 - **Tab / Shift-Tab** in lists — indent / outdent.
 - **/** at the start of a paragraph — open the slash menu.
 - **Ctrl+Backspace** in a table cell — delete the cell's row
