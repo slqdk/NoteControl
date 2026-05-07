@@ -3189,11 +3189,18 @@ body.nc-dragging * {
    slightly more compact (smaller buttons, tighter padding) since
    the bubble menu hovers right next to the user's selection where
    visual weight matters. Position is set inline by the React
-   component; this rule provides visual style only. */
+   component; this rule provides visual style only.
+
+   Layout: a vertical flex stack of rows. Row 1 is the
+   selection-mark toggles; row 2 (only present in the note
+   editor) holds note-level Font / Size, the colour swatch, and
+   the Defaults button. Each row is itself a horizontal flex of
+   buttons. */
 .nc-bubble-menu {
   display: inline-flex;
-  align-items: center;
-  gap: 2px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   padding: 3px;
   background: var(--nc-bg);
   border: 1px solid var(--nc-border);
@@ -3203,6 +3210,21 @@ body.nc-dragging * {
   user-select: none;
   /* Don't show a text cursor over the menu; it isn't editable. */
   cursor: default;
+}
+
+.nc-bubble-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Visually separate the second row (Font/Size/colour/Defaults)
+   from the first (Bold/Italic/etc) with a hairline divider above
+   it. Looks cleaner than a literal <hr> and uses one less DOM
+   node. */
+.nc-bubble-row-secondary {
+  border-top: 1px solid var(--nc-border);
+  padding-top: 3px;
 }
 
 .nc-bubble-button {
@@ -3247,6 +3269,125 @@ body.nc-dragging * {
   border: 0;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Defaults button gets a dedicated label-style — it's wider than
+   the icon buttons because it carries text. Lower visual weight
+   than active marks; nudges into solid only on hover. */
+.nc-bubble-button-defaults {
+  padding: 0 10px;
+  font-size: 12px;
+  min-width: auto;
+}
+
+/* Native <select>s in the second row. Constrained height to
+   match the icon buttons; constrained width via the -narrow
+   modifier for the size dropdown so it doesn't take up half the
+   menu. We let the browser draw its own caret/chevron — styling
+   <select> options is a quagmire and the system look is fine. */
+.nc-bubble-select {
+  font: inherit;
+  font-size: 12px;
+  height: 26px;
+  padding: 0 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+  max-width: 130px;
+}
+.nc-bubble-select:hover {
+  border-color: var(--nc-accent);
+}
+.nc-bubble-select-narrow {
+  max-width: 76px;
+}
+
+/* Vertical hairline divider between groups in the second row.
+   Implemented as a 1px-wide block element; height matches the
+   button height so the visual rhythm is consistent. */
+.nc-bubble-divider {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--nc-border);
+}
+
+/* Colour-swatch button is just an .nc-bubble-button (so all
+   hover / active rules carry over) plus a relatively-positioned
+   wrapper for the popup palette below. */
+.nc-bubble-colour {
+  position: relative;
+  display: inline-flex;
+}
+
+/* The "A" letter inside the colour button. The letter's `color`
+   is set inline by the React component to match the active mark
+   colour — when no mark is applied, color: inherit falls back to
+   the button's normal foreground. Using a real letter (rather
+   than a coloured rectangle) makes it obvious this is a
+   text-colour control, not a background tint. */
+.nc-bubble-colour-letter {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1;
+  /* Tiny shadow so a light yellow A stays legible on a white
+     background. Subtle enough that darker colours look unchanged. */
+  text-shadow: 0 0 0.5px rgba(0, 0, 0, 0.3);
+}
+
+/* Popover palette positioned below the colour button. Floating
+   via absolute positioning on the .nc-bubble-colour wrapper so
+   it doesn't displace any of the row's existing buttons. The
+   palette appears below the button regardless of the bubble
+   menu's own placement (above/below selection) — the bubble menu
+   has already chosen a placement that gives the user a clear
+   sight line, and the palette opening "downward" from the row
+   keeps the relationship to its trigger button consistent. */
+.nc-bubble-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+}
+
+/* Individual colour swatch. Round, no border by default; the
+   background colour is set inline. Hover bumps a subtle ring
+   so the user knows which one they're about to pick. */
+.nc-bubble-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-bubble-swatch:hover {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+}
+
+/* The "no colour" / clear swatch shows a ⊘ glyph instead of a
+   filled circle. */
+.nc-bubble-swatch-clear {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* ----- Table column resize handles (step 10 fix2) ------------------ */

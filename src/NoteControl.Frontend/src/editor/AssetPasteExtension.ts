@@ -2,6 +2,7 @@ import { Extension, type CommandProps } from '@tiptap/core';
 import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi } from '../api/client';
+import { normalizePastedHtml } from './PasteNormalizeExtension';
 
 /**
  * TipTap extension that intercepts pasted / dropped files and turns
@@ -435,14 +436,24 @@ async function uploadAndInsertOfficeHtml(
   // conditional comments automatically — we don't need to clean
   // them up first. The body's innerHTML has the visible content.
   //
+  // Run our paste normalizer over the rewritten HTML so the same
+  // font-family / font-size / colour / background-color stripping
+  // applies as in the regular text-paste path. Without this, the
+  // Office-image branch would slip a fully-styled Word paste
+  // straight past the editor's normalisation rules.
+  // PasteNormalizeExtension's transformPastedHTML hook doesn't fire
+  // here because we're inserting via insertContentAt, not via the
+  // browser's paste pipeline.
+  //
   // If the user had a selection at paste time (insertPos < insertEnd),
   // .deleteRange replaces it — standard paste behaviour. Empty
   // selection is a no-op delete, then a regular insert.
+  const cleanedHtml = normalizePastedHtml(doc.body.innerHTML);
   editor
     .chain()
     .focus()
     .deleteRange({ from: insertPos, to: insertEnd })
-    .insertContentAt(insertPos, doc.body.innerHTML)
+    .insertContentAt(insertPos, cleanedHtml)
     .run();
 
   // Best-effort: if there were leftover blobs we couldn't map,

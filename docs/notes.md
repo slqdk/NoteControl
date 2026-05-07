@@ -86,8 +86,14 @@ The editor is TipTap-based. What it supports out of the box:
   Declaration block above them, show an inline **Run** button
   that opens the ST runtime sandbox modal — see [ST runtime
   sandbox](#st-runtime-sandbox) below.
-- **Tables** (3×3 default, header row, with a toolbar for
-  add/remove rows and columns).
+- **Tables**: insertion goes through a small modal that lets the
+  user pick rows, columns, header-row presence, and an optional
+  per-table row height (defaults: 3×3, header row, no fixed
+  height). Inside a table, a floating popup above the table offers
+  add/remove row/column, header-row toggle, and a `•••` button
+  that opens an options panel with row height (number + presets),
+  cell alignment (left/center/right), header-column toggle, and
+  cell merge/split. See [Tables in detail](#tables-in-detail).
 - **Callouts** in 5 variants: error, warning, info, tip, note.
   Each is a colour-coded box with an icon.
 - **Images**: inline, with hover controls (resize, replace,
@@ -138,7 +144,8 @@ block-insertion shortcuts. Items shown in order:
    to enable the **Run ▶** button)
 8. **Quote**
 9. **Divider**
-10. **Table** (3×3 with header)
+10. **Table** (opens an insert dialog — see [Tables in
+    detail](#tables-in-detail))
 11. **Error callout**
 12. **Warning callout**
 13. **Info callout**
@@ -150,6 +157,60 @@ block-insertion shortcuts. Items shown in order:
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
+
+### Tables in detail
+
+Tables are markdown-flavoured by default but carry NoteControl-
+specific decoration when needed. The editor offers controls in
+two places: an insert dialog (when creating a table) and a
+floating popup (when the cursor is inside one).
+
+**Insert dialog.** Picking Table from the slash menu opens a
+modal with fields for rows, columns, an "include header row"
+checkbox, and an optional row height (number input plus presets:
+Auto, 24, 32, 48, 64). Defaults are 3×3, header row on, no fixed
+height — matches the pre-dialog default. Enter on a dimensions
+field submits; Escape or click-outside cancels.
+
+**Floating popup.** When the cursor is inside any cell, a
+toolbar floats above the table. Two layers:
+
+- **Always-visible row** — add row above/below, add column
+  left/right, delete row, delete column, toggle header row, and
+  a `•••` button to reveal the options panel.
+- **Options panel** (toggled by `•••`) — row height with the
+  same number+presets controls as the insert dialog, cell
+  alignment (left/center/right, toggle off by clicking active),
+  header column toggle, and merge/split (disabled when the
+  current selection wouldn't allow the action).
+
+Row height is a per-table attribute. Cell alignment is
+per-cell. Header row and header column are independent toggles.
+
+**Deleting a table.** Drag-select all cells (top-left to
+bottom-right), then press Del or Backspace. The popup does not
+include a delete-table button — the deliberate-selection gesture
+guards against accidental destructive actions.
+
+**Markdown round-trip.** A table is saved to disk as one of two
+forms, picked per-table at save time:
+
+- **GFM pipe syntax** when the table is "plain" — no per-table
+  row height, no per-cell alignment, no merged cells, no header
+  column, no multi-block content inside any cell.
+- **Raw HTML** otherwise. The `<table>` carries
+  `data-row-height` plus a matching `style` for the row-height
+  CSS variable; cells carry `data-align` plus a matching
+  `text-align` style. Plain markdown viewers (GitHub, VS Code
+  preview, Obsidian) render the HTML form correctly because GFM
+  permits inline HTML; the `data-*` attributes are how
+  NoteControl reads the values back on load.
+
+The HTML form preserves cell text but **drops inline marks
+inside cells** (bold/italic/inline code/links). If a table
+needs both a custom row height and rich cell formatting,
+clearing the row height (set to Auto) reverts the table to pipe
+syntax which preserves marks.
 
 ### F2 autocomplete (Structured Text)
 
