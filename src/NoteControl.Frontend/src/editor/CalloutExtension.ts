@@ -197,8 +197,21 @@ export const CalloutExtension = Node.create<CalloutOptions>({
    * The HTML is intentionally simple:
    *
    *   <div class="nc-callout nc-callout-error" data-variant="error">
-   *     ...rendered child blocks as HTML...
+   *
+   *   ...rendered child blocks as markdown...
+   *
    *   </div>
+   *
+   * BLANK LINES MATTER. CommonMark only switches the parser back
+   * to block-mode markdown inside a raw HTML block after a blank
+   * line. Without one, the inner text is treated as raw HTML and
+   * `**bold**` survives as literal asterisks instead of becoming
+   * a <strong>. The earlier version of this serializer used
+   * `state.write('') ; state.ensureNewLine()` to try to emit the
+   * gap, but `write('')` is a no-op and `ensureNewLine` is
+   * idempotent at line start, so the result was a single newline
+   * (no blank line) and the body never round-tripped formatting.
+   * Now we emit `\n\n` after the open tag and before the close.
    *
    * Plain markdown viewers will render the inner content as HTML
    * (most do); ones that strip HTML will see the body text only.
@@ -218,22 +231,28 @@ export const CalloutExtension = Node.create<CalloutOptions>({
         ) {
           const variant = ((node.attrs.variant as string) ?? 'note').toLowerCase();
 
-          // Open the wrapping div with a blank line after, so that
-          // markdown parsers treat the body as block-level rather
-          // than as inline content of the div.
+          // Open the wrapping div, followed by a newline + blank
+          // line. The blank line is the one that puts markdown-it
+          // back in block mode for the body content.
           state.write(
             `<div class="nc-callout nc-callout-${variant}" data-variant="${variant}">`,
           );
           state.ensureNewLine();
-          // Blank line ensures markdown parsers re-enter block mode
-          // for the body content.
-          state.write('');
-          state.ensureNewLine();
+          // Literal '\n' to ACTUALLY emit a blank line. (write('')
+          // and ensureNewLine alone don't — the latter is a no-op
+          // when already at line start.) See top-of-method comment.
+          state.write('\n');
 
           state.renderContent(node);
 
-          // Close the div on its own line.
+          // Close: ensure we're at line start, then a blank line,
+          // then the closing tag. The blank line on this side is
+          // belt-and-braces — markdown-it accepts the close tag
+          // at the start of a line either way, but symmetric
+          // spacing keeps the on-disk markdown readable and matches
+          // the open side.
           state.ensureNewLine();
+          state.write('\n');
           state.write('</div>');
           state.closeBlock(node);
         },

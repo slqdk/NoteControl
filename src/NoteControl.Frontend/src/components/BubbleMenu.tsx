@@ -563,9 +563,31 @@ export function BubbleMenu({
       showToast('Could not serialise selection.');
       return;
     }
+
+    // Expand the cut range to include any table the selection
+    // touches. Why: ProseMirror's tables plugin coerces text
+    // selections that cross a table boundary — a drag from a
+    // paragraph above through the table down to a paragraph below
+    // typically becomes either a CellSelection (whose from/to
+    // sit INSIDE cells, missing the surrounding <table> wrapper)
+    // or a TextSelection whose endpoint clamps to the table edge.
+    // In both cases a naive doc.cut(from, to) drops the table
+    // structure: the inner cell text walks out as bare paragraphs,
+    // or the table is excluded entirely.
+    //
+    // Fix: walk the resolved positions at each end of the
+    // selection. If either resolves inside a `table` node, expand
+    // that side outward to the table's start/end boundary. Then
+    // cut on the expanded range. The user's slight loss of control
+    // ("I selected half the table, you saved all of it") is
+    // strictly less surprising than the previous behaviour
+    // ("I selected the table, you saved nothing").
+    const { doc } = editor.state;
+    const expanded = expandRangeAroundTables(doc, from, to);
+
     let markdown: string;
     try {
-      const slice = editor.state.doc.cut(from, to);
+      const slice = doc.cut(expanded.from, expanded.to);
       markdown = markdownStorage.serializer.serialize(slice) as string;
     } catch {
       showToast('Could not serialise selection.');
@@ -907,4 +929,93 @@ export function BubbleMenu({
       )}
     </div>
   );
+}
+
+// ---- Selection helpers ---------------------------------------------
+
+/**
+ * Expand a (from, to) range outward so any table the range
+ * touches is included whole.
+ *
+ * Why this exists: ProseMirror's tables plugin coerces selections
+ * that cross a table boundary. A user drag from a paragraph
+ * above through a table and into a paragraph below typically
+ * results in either:
+ *
+ *   - a CellSelection — from/to point INSIDE cells, missing the
+ *     <table> wrapper. doc.cut(from, to) returns just the cell
+ *     contents, no table structure.
+ *   - a TextSelection clamped to the table edge — the table is
+ *     fully outside the cut range and gets dropped.
+ *
+ * Both cases break "save as template": the user sees a table on
+ * screen, picks Save, and the saved markdown has no table.
+ *
+ * Strategy: resolve each endpoint position; walk its ancestor
+ * chain looking for a `table` node. If found, set that side of
+ * the range to the table's outer boundary (start/end). The
+ * resulting cut includes the entire table. Inputs that don't
+ * touch any table are returned unchanged.
+ *
+ * Edge cases:
+ *   - Both endpoints inside the SAME table (e.g. the user
+ *     drag-selected from one cell to another): the expanded
+ *     range covers the whole table. Saving that table as a
+ *     template is the obvious user intent.
+ *   - Endpoints inside DIFFERENT tables: each side expands to
+ *     its own table; everything between is included. Rare but
+ *     handled.
+ *   - Resolved positions from a slice that's been mutated since
+ *     selection: we use editor.state.doc, the same doc the
+ *     selection refers to, so positions are always valid here.
+ */
+function expandRangeAroundTables(
+  doc: { resolve: (pos: number) => unknown },
+  from: number,
+  to: number,
+): { from: number; to: number } {
+  // Resolved positions expose .depth and .node(d) / .start(d) /
+  // .end(d) / .before(d) / .after(d) — all the tools we need to
+  // find an ancestor and its outer boundary. Typed as `unknown`
+  // here because prosemirror-model's ResolvedPos isn't re-
+  // exported through @tiptap/core in a way that's easy to
+  // import without pulling another dep into this file.
+  const $from = doc.resolve(from) as ResolvedPosLike;
+  const $to = doc.resolve(to) as ResolvedPosLike;
+
+  let expandedFrom = from;
+  let expandedTo = to;
+
+  // Walk $from's ancestors from deepest to shallowest. The first
+  // table we find is the innermost containing table for the
+  // start endpoint. Use its `before(depth)` for the new from —
+  // that's the position immediately before the table opens, so
+  // doc.cut starts AT the <table> node.
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type.name === 'table') {
+      expandedFrom = Math.min(expandedFrom, $from.before(d));
+      break;
+    }
+  }
+
+  // Same on the end side: walk $to's ancestors and use
+  // `after(depth)` to land just past the table's closing tag.
+  for (let d = $to.depth; d > 0; d--) {
+    if ($to.node(d).type.name === 'table') {
+      expandedTo = Math.max(expandedTo, $to.after(d));
+      break;
+    }
+  }
+
+  return { from: expandedFrom, to: expandedTo };
+}
+
+// Minimal duck-typed shape for prosemirror-model's ResolvedPos.
+// Avoiding the import keeps this file's deps lean and skips a
+// potentially fragile path through @tiptap/pm/* re-exports.
+interface ResolvedPosLike {
+  depth: number;
+  node: (depth: number) => { type: { name: string } };
+  before: (depth: number) => number;
+  after: (depth: number) => number;
 }
