@@ -20,10 +20,12 @@ import type {
  *     member's current value.
  *   - BOOLs get a coloured fill (blue=TRUE, grey=FALSE). Other
  *     types get a neutral border-only style.
- *   - Pills are clickable when poking is enabled — click to edit
- *     the variable's value mid-run. FB-instance and FB-member
- *     pills are read-only (member values are derived; the user
- *     can't poke an FB output).
+ *   - Pills are clickable when poking is enabled — single-click
+ *     opens an inline editor for any scalar type. BOOLs ALSO
+ *     accept a double-click that toggles their value directly
+ *     (no editor — fast path for "flip this bit"). FB-instance
+ *     and FB-member pills are read-only (member values are
+ *     derived; the user can't poke an FB output).
  */
 export interface InlineSourceProps {
   source: string;
@@ -360,10 +362,78 @@ function renderPill(
     d.payload.kind === 'var' && pillType !== null;
   if (canPoke) cls += ' nc-runtime-pill-pokeable';
 
-  const tooltip = d.payload.kind === 'var'
-    ? `${d.payload.name} : ${pillType ?? '?'}` +
-      (canPoke ? ' (click to edit)' : '')
-    : `${d.payload.objectName}.${d.payload.memberName} : ${pillType ?? '?'}`;
+  // BOOL var pills support a double-click toggle as a fast path.
+  // FB-member BOOLs (e.g. Timer01.Q) are NOT toggleable — they're
+  // derived outputs of the FB and would be overwritten next scan
+  // anyway, so letting the user "toggle" them would be a lie.
+  const canToggleBool =
+    canPoke && d.payload.kind === 'var' && pillType === 'BOOL';
+
+  // Tooltip text — surfaces both interaction affordances when
+  // they're present so the double-click toggle is discoverable
+  // (it has no other visual cue).
+  let tooltip: string;
+  if (d.payload.kind === 'var') {
+    tooltip = `${d.payload.name} : ${pillType ?? '?'}`;
+    if (canToggleBool) {
+      tooltip += ' (double-click to toggle, click to edit)';
+    } else if (canPoke) {
+      tooltip += ' (click to edit)';
+    }
+  } else {
+    tooltip = `${d.payload.objectName}.${d.payload.memberName} : ${pillType ?? '?'}`;
+  }
+
+  // Single-click handler: open the inline editor. Same as before.
+  // Note we use onClick (not onMouseDown) so the browser's native
+  // double-click detection still works — onClick fires for both
+  // halves of a double-click, which is fine because the editor's
+  // "open" is idempotent (setEditing on the same target is a no-op
+  // beyond the first call within the same render cycle, and React
+  // batches state updates anyway).
+  const handleClick = canPoke && d.payload.kind === 'var'
+    ? () => {
+        if (d.payload.kind === 'var') {
+          setEditing({
+            line: lineNum,
+            column: d.column,
+            nameLower: d.payload.nameLower,
+          });
+        }
+      }
+    : undefined;
+
+  // Double-click handler: BOOLs toggle directly via pokeVariable.
+  // We swallow the event so the single-click path's editor doesn't
+  // remain open underneath — but importantly we close it explicitly
+  // after the toggle, since the first click of the double-click
+  // pair will have opened the editor. The forceRender() at the end
+  // makes the new BOOL value paint immediately rather than waiting
+  // for the next scan tick.
+  const handleDoubleClick = canToggleBool && d.payload.kind === 'var'
+    ? (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (d.payload.kind !== 'var') return;
+        const current = env.get(d.payload.nameLower);
+        if (!current || current.kind !== 'scalar' || current.type !== 'BOOL') {
+          return;
+        }
+        const flipped = current.value === true ? false : true;
+        const result = pokeVariable(
+          env, d.payload.nameLower,
+          { kind: 'scalar', type: 'BOOL', value: flipped },
+          0,
+        );
+        if (result.ok) {
+          // If the editor was opened by the first click of the
+          // double-click pair, close it so we don't strand an
+          // input field on top of the toggled pill.
+          setEditing(null);
+          forceRender();
+        }
+      }
+    : undefined;
 
   return (
     <span
@@ -372,17 +442,8 @@ function renderPill(
       title={tooltip}
       role={canPoke ? 'button' : undefined}
       tabIndex={canPoke ? 0 : undefined}
-      onClick={canPoke
-        ? () => {
-            if (d.payload.kind === 'var') {
-              setEditing({
-                line: lineNum,
-                column: d.column,
-                nameLower: d.payload.nameLower,
-              });
-            }
-          }
-        : undefined}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
     >
       {formattedValue}
     </span>
