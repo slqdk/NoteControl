@@ -1,5 +1,6 @@
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
+import type { Editor } from '@tiptap/core';
 
 /**
  * Ensures the document always ends with an empty paragraph when
@@ -24,50 +25,68 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
  *   nothing — so once the doc is saved and reloaded, the trailing
  *   paragraph is gone.
  *
- * The fix:
+ * The fix has TWO entry points, both of which call the same
+ * helper:
  *
- *   A ProseMirror plugin's appendTransaction hook runs after every
- *   transaction. We inspect the doc's last child; if it's a
- *   trapping block AND there's no trailing paragraph, we append
- *   one. This runs on initial load (the editor's first transaction
- *   sets the loaded doc) and after any edit, so the invariant
- *   "the doc ends in a paragraph" always holds.
+ *   1. onCreate (TipTap lifecycle hook) — fires once after the
+ *      editor mounts and the initial doc is loaded. THIS IS THE
+ *      CRITICAL PATH for the user's bug, because the most common
+ *      trapping case is opening an existing note that already
+ *      ends with a callout. EditorState.create does NOT call
+ *      appendTransaction (only applyTransaction does), so without
+ *      onCreate the loaded doc would never get the trailing
+ *      paragraph and clicking below the callout would still go
+ *      nowhere.
  *
- * Why a transaction-time fix and not a NodeView-level "click
- * spacer below"? Several reasons:
+ *   2. appendTransaction (ProseMirror plugin hook) — fires after
+ *      every subsequent transaction. Catches the case where the
+ *      user creates / pastes / converts content during editing
+ *      such that the last block becomes trapping (e.g. delete a
+ *      paragraph that previously sat below a callout). Without
+ *      this, edits that produce a trapping last block during
+ *      live editing would still trap the user.
  *
- *   - It's general. Any block-leaf (callout, table, code block,
+ * Earlier ship attempted appendTransaction only and left the
+ * onCreate path out, on the assumption that the editor's initial
+ * content load would itself fire a transaction. It does not —
+ * EditorState.create initialises plugin state via field.init,
+ * not via dispatched transactions. The user reproed exactly this
+ * gap: opened a note ending with a callout, saw no trailing
+ * paragraph, clicks went nowhere.
+ *
+ * Why a schema-level fix and not a per-NodeView "click below to
+ * add line" affordance:
+ *
+ *   - General. Any block-leaf (callout, table, code block,
  *     horizontal rule, image, video) needs the same affordance.
- *     A schema-level fix covers all of them with one rule; a
- *     per-NodeView fix needs to be wired into every node view
- *     individually and re-checked on every refactor.
+ *     One rule covers all; per-NodeView wiring needs to be
+ *     re-implemented for each node type.
  *
- *   - It's standard. The prosemirror-trailing-node package does
+ *   - Standard. The prosemirror-trailing-node package does
  *     exactly this. We re-implement instead of adding a dep
  *     because the logic is small (this file) and avoiding new
  *     deps matches the working agreement.
  *
- *   - It composes with the existing slash-menu trailing-paragraph
- *     logic. Both end up wanting "doc ends in paragraph", and
- *     this hook is the canonical place to express that — the
- *     slash-menu's manual paragraph insertion becomes redundant
- *     but harmless.
+ *   - Composes with the existing slash-menu trailing-paragraph
+ *     logic. Both want "doc ends in paragraph"; this hook is
+ *     where that invariant lives.
  *
  * Why it doesn't pollute saves:
  *
  *   An empty trailing paragraph serialises to nothing in
- *   markdown (paragraph serializer writes inline content then
- *   closeBlock; empty inline writes nothing, and closeBlock at
- *   the very end of the doc never gets flushed). So
+ *   markdown (the paragraph serializer writes inline content
+ *   then closeBlock; empty inline writes nothing, and the final
+ *   closeBlock at the very end of the doc is never flushed). So
  *   getMarkdown() returns the same string before and after the
  *   trailing paragraph is added. The dirty-check in NoteEditor's
- *   onUpdate compares strings, so adding the paragraph doesn't
- *   trigger a save. Verified by inspection of
+ *   onUpdate compares strings, so the onCreate-dispatched
+ *   transaction triggers onUpdate but the equality check passes
+ *   and no save is scheduled. Verified by inspection of
  *   prosemirror-markdown's paragraph serializer.
  *
  * Why it doesn't pollute history:
  *
- *   We mark the appended transaction with `addToHistory: false`
+ *   Both code paths set `addToHistory: false` on the transaction,
  *   so undo/redo skips over it. Without this, pressing Ctrl+Z
  *   right after load would remove the trailing paragraph and
  *   trap the user again — exactly the behaviour we're fixing.
@@ -78,8 +97,12 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
  *   one it returned, so returning a transaction here doesn't
  *   re-trigger the hook on the same transaction. We also gate
  *   on "is the last node already a paragraph?" so a no-op
- *   appendTransaction returns null and the transaction chain
- *   stops cleanly.
+ *   appendTransaction returns null and the chain stops cleanly.
+ *
+ *   For onCreate's dispatch: that fires only once per editor
+ *   mount, and the resulting transaction's appendTransaction
+ *   pass sees the freshly added paragraph as the last node and
+ *   returns null.
  */
 
 /**
@@ -91,18 +114,13 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
  *   (b) doesn't itself accept a click below its content as
  *       "click outside the block".
  *
- * Paragraphs are excluded — paragraph already IS the escape
- * affordance, so a trailing paragraph means the user already
- * has somewhere to land.
- *
- * heading is excluded — clicking below a heading already lands
- * the cursor at the end of the heading line (browsers and
- * ProseMirror handle this fine for inline-content blocks).
- *
- * blockquote / lists are excluded — same reason as heading
- * (their last child is itself a paragraph, so the user can
- * always escape by clicking at the very bottom of that paragraph
- * and pressing Enter; there's no node-view boundary in the way).
+ * Excluded:
+ *   - paragraph — already IS the escape affordance.
+ *   - heading — clicking below a heading lands the cursor at the
+ *     end of the heading line; no trapping problem.
+ *   - blockquote / lists — their last child is itself a paragraph,
+ *     so clicking at the bottom of that paragraph and pressing
+ *     Enter creates a new line; no NodeView boundary in the way.
  *
  * If a future block type joins this list (e.g. a chart or
  * embedded form node), add its node name here.
@@ -121,55 +139,75 @@ const trailingParagraphPluginKey = new PluginKey('trailingParagraph');
 export const TrailingParagraph = Extension.create({
   name: 'trailingParagraph',
 
+  /**
+   * Dispatches the fix-up transaction once after the editor is
+   * created with its initial content. See top-of-file comment
+   * for why this matters more than the appendTransaction hook.
+   */
+  onCreate() {
+    ensureTrailingParagraph(this.editor);
+  },
+
   addProseMirrorPlugins() {
     return [
       new Plugin({
         key: trailingParagraphPluginKey,
-
         appendTransaction(_transactions, _oldState, newState) {
-          const { doc, schema, tr } = newState;
-          const paragraphType = schema.nodes.paragraph;
-          if (!paragraphType) return null;   // schema without paragraph — nothing to do
-
-          // Empty doc is fine — the schema's `block+` content match
-          // already requires at least one block, which the editor
-          // initialises as a paragraph. Defensive guard regardless.
-          if (doc.childCount === 0) return null;
-
-          const last = doc.lastChild;
-          if (!last) return null;
-
-          // Already ends in a paragraph (any paragraph — empty or
-          // not). The user has somewhere to land; do nothing.
-          if (last.type.name === 'paragraph') return null;
-
-          // Last block isn't trapping — leave the doc alone.
-          // Examples: heading, blockquote, bulletList, orderedList.
-          // Their last leaf is itself an inline-content block the
-          // user can click into.
-          if (!TRAPPING_BLOCKS.has(last.type.name)) return null;
-
-          // Append an empty paragraph at the very end of the doc.
-          // doc.content.size is the position immediately after
-          // the doc's last node — the canonical "end of doc"
-          // insertion point.
-          const insertPos = doc.content.size;
-          const para = paragraphType.create();
-          tr.insert(insertPos, para);
-
-          // Don't pollute history — the user shouldn't be able to
-          // Ctrl+Z away the escape paragraph and re-trap themselves.
-          tr.setMeta('addToHistory', false);
-
-          // Don't move the cursor. The user might be mid-edit
-          // somewhere; appending a node at the end shouldn't snap
-          // the selection. ProseMirror preserves the existing
-          // selection through tr.insert at a position past the
-          // selection, so we don't need to do anything explicit.
-
-          return tr;
+          return computeTrailingParagraphTr(newState) ?? undefined;
         },
       }),
     ];
   },
 });
+
+// ---- Shared logic ---------------------------------------------------
+
+/**
+ * If the doc's last child is a trapping block and there's no
+ * trailing paragraph, return a transaction that appends one.
+ * Returns null when no change is needed.
+ *
+ * Shared between the appendTransaction plugin (ongoing edits)
+ * and the onCreate hook (initial loaded doc), so both code paths
+ * use exactly the same rule.
+ */
+function computeTrailingParagraphTr(state: EditorState): Transaction | null {
+  const { doc, schema, tr } = state;
+  const paragraphType = schema.nodes.paragraph;
+  if (!paragraphType) return null;     // schema without paragraph — bail
+
+  if (doc.childCount === 0) return null;
+  const last = doc.lastChild;
+  if (!last) return null;
+
+  // Already ends in a paragraph — escape line is present.
+  if (last.type.name === 'paragraph') return null;
+
+  // Last block isn't trapping (heading, list, blockquote, ...).
+  if (!TRAPPING_BLOCKS.has(last.type.name)) return null;
+
+  const insertPos = doc.content.size;
+  const para = paragraphType.create();
+  tr.insert(insertPos, para);
+
+  // Don't pollute history — the user shouldn't be able to Ctrl+Z
+  // away the escape paragraph and re-trap themselves.
+  tr.setMeta('addToHistory', false);
+
+  // Tag the transaction so other observers can recognise it as
+  // a no-op fix-up (currently unused, but useful for debugging
+  // or a future "ignore-in-dirty-check" optimisation).
+  tr.setMeta(trailingParagraphPluginKey, true);
+
+  return tr;
+}
+
+/**
+ * Editor-level helper for the onCreate path. Computes the fix-up
+ * transaction from editor.state and dispatches it through the
+ * view if needed. No-op when the doc is already well-formed.
+ */
+function ensureTrailingParagraph(editor: Editor): void {
+  const tr = computeTrailingParagraphTr(editor.state);
+  if (tr) editor.view.dispatch(tr);
+}
