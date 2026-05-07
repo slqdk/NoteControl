@@ -1397,21 +1397,25 @@ body.nc-dragging * {
 
 /* ---------- Editor ------------------------------------------------- */
 
-/* Editor shell: outer container that holds the toolbar at the top
-   and the page-area below. The shell itself is a grey backdrop —
-   the page (white) floats inside it. This mirrors how Word and
-   similar document editors present a "paper" surface against a
-   slightly darker app background.
+/* Editor shell: structural container only — holds the page-area
+   below and any floating toolbars. Pre-Step-46, the shell carried
+   its own background + border + radius so the .nc-page-editor
+   wrapper (then capped at 760px, later 960px via inherited .nc-page)
+   would frame the centred white card with a subtle "page workbench"
+   surround. That look stopped working when .nc-page-editor was
+   uncapped to let the per-note Width setting actually take effect:
+   the shell stretched edge-to-edge of the content area and the
+   surround read as a wide band of background colour around a
+   small 700px card.
 
-   No min-height: the card hugs whatever the page-area below it
-   wants. Short notes → small card. Long notes → tall card. The
-   user sees an even gap around the page on all four sides. */
+   The card (.nc-editor) already carries its own 1px border,
+   border-radius, and drop shadow — that's the real visible page
+   frame. The shell's decoration was redundant once the wrapper
+   uncap landed. Keeping flex column for layout; everything
+   visual is now on the card. */
 .nc-editor-shell {
-  background: var(--nc-bg-elev);
   display: flex;
   flex-direction: column;
-  border-radius: var(--nc-radius);
-  border: 1px solid var(--nc-border);
 }
 .nc-editor-toolbar {
   border-bottom: 1px solid var(--nc-border);
