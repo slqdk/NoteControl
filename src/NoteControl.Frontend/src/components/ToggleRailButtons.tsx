@@ -12,6 +12,7 @@ import {
   APP_WIDTH_MIN,
   APP_WIDTH_STEP,
   GRADIENT_PRESETS,
+  isFullWidth,
   resetAllSettingsAndReload,
   useAppearance,
 } from '../settings/appearance';
@@ -449,7 +450,9 @@ export function ToggleRailButtons({
                 <div className="nc-settings-section">
                   <div className="nc-variant-heading">
                     App width
-                    <span className="nc-settings-value">{widthDraft}px</span>
+                    <span className="nc-settings-value">
+                      {isFullWidth(widthDraft) ? 'Full width' : `${widthDraft}px`}
+                    </span>
                   </div>
                   <input
                     type="range"
@@ -467,10 +470,13 @@ export function ToggleRailButtons({
                     onKeyUp={commitWidth}
                     onBlur={commitWidth}
                     aria-label="App frame width"
+                    aria-valuetext={
+                      isFullWidth(widthDraft) ? 'Full width' : `${widthDraft} pixels`
+                    }
                   />
                   <div className="nc-settings-range-labels">
                     <span>{APP_WIDTH_MIN}px</span>
-                    <span>{APP_WIDTH_MAX}px</span>
+                    <span>Full</span>
                   </div>
                 </div>
 

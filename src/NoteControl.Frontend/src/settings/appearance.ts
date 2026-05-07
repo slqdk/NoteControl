@@ -3,7 +3,11 @@
  *
  * Two preferences:
  *   - appWidth: the maximum width of the centered app frame, in px.
- *               1000–2400, step 50, default 1600.
+ *               1000–2400, step 50, default 1600. The TOP of the
+ *               range (APP_WIDTH_MAX = 2400) is a sentinel meaning
+ *               "Full width" — the frame fills the browser viewport
+ *               instead of being capped at a pixel value. See
+ *               isFullWidth() and applyAppearanceCss() below.
  *   - gradientId: which preset gradient fills the body BEHIND the
  *               centered app frame (visible as left+right gutters
  *               on monitors wider than appWidth).
@@ -33,6 +37,26 @@ export const APP_WIDTH_MIN = 1000;
 export const APP_WIDTH_MAX = 2400;
 export const APP_WIDTH_STEP = 50;
 export const APP_WIDTH_DEFAULT = 1600;
+
+/**
+ * Slider value that means "full width / fill the viewport". We piggy-
+ * back on APP_WIDTH_MAX rather than introducing a separate boolean
+ * field — keeps the stored shape unchanged (no migration), and the
+ * slider stays a single linear control. Anyone who previously had
+ * 2400 saved as their cap now gets full-width behaviour, which is
+ * the practical intent of "drag it as far right as it goes" anyway.
+ *
+ * Trade-off: a user who specifically wanted the literal 2400 px cap
+ * can no longer get it — they'd have to settle for 2350 (one step
+ * down) or full-width. On any monitor narrower than 2400 the visual
+ * result is identical; only on 4K-and-up displays does full-width
+ * actually paint wider than 2400 would have.
+ */
+export const APP_WIDTH_FULL: AppWidth = APP_WIDTH_MAX;
+
+export function isFullWidth(w: AppWidth): boolean {
+  return w >= APP_WIDTH_FULL;
+}
 
 export interface GradientPreset {
   /** Stable id stored in settings. Don't rename without a migration. */
@@ -239,7 +263,11 @@ export function useAppearance(): {
  * Write the current settings to CSS custom properties on the root
  * element. The styles in styles.css consume these via var().
  *
- * --nc-app-width drives the .nc-app-frame max-width.
+ * --nc-app-width drives the .nc-app-frame max-width. When the user
+ * picks the sentinel "full width" value (APP_WIDTH_FULL) we write
+ * the keyword `100%` instead of a px value so the frame fills the
+ * viewport at any monitor size.
+ *
  * --nc-page-bg-light / --nc-page-bg-dark drive the body background;
  *   CSS picks the right one via prefers-color-scheme.
  */
@@ -249,7 +277,15 @@ export function applyAppearanceCss(settings: AppearanceSettings): void {
     GRADIENT_PRESETS.find((p) => p.id === settings.gradientId) ??
     GRADIENT_PRESETS[0];
   const root = document.documentElement.style;
-  root.setProperty('--nc-app-width', `${settings.appWidth}px`);
+
+  // Full-width sentinel: emit `100%` so .nc-app-frame.max-width
+  // tracks the viewport. Below the sentinel, emit a px cap as
+  // before. CSS happily accepts either as a max-width value.
+  const widthValue = isFullWidth(settings.appWidth)
+    ? '100%'
+    : `${settings.appWidth}px`;
+  root.setProperty('--nc-app-width', widthValue);
+
   root.setProperty('--nc-page-bg-light', preset.light);
   root.setProperty('--nc-page-bg-dark', preset.dark);
 
