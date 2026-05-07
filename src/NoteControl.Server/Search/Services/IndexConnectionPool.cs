@@ -98,6 +98,16 @@ public sealed class IndexConnectionPool : IIndexConnectionPool
             await entry.Gate.WaitAsync().ConfigureAwait(false);
             try
             {
+                // Microsoft.Data.Sqlite pools the underlying native handle
+                // by connection string. Plain Dispose returns it to the
+                // pool with the file locks still held; the OS won't let
+                // anyone Move/Delete the index.db (or its parent folder)
+                // until the pooled handle is actually closed. ClearPool
+                // forces that close. This matters for vault-delete: we
+                // call EvictAsync immediately before Directory.Move on
+                // the vault folder, and without ClearPool the move
+                // fails with "Access to the path ... is denied".
+                SqliteConnection.ClearPool(entry.Connection);
                 await entry.Connection.DisposeAsync().ConfigureAwait(false);
             }
             finally

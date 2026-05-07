@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using NoteControl.Server.Data;
 using NoteControl.Server.Data.Entities;
+using NoteControl.Server.Search.Services;
 using NoteControl.Shared.Vaults;
 
 namespace NoteControl.Server.Vaults.Services;
@@ -112,6 +113,8 @@ public sealed class VaultException : Exception
 {
     public int StatusCode { get; }
     public VaultException(string message, int statusCode = 400) : base(message) { StatusCode = statusCode; }
+    public VaultException(string message, int statusCode, Exception innerException)
+        : base(message, innerException) { StatusCode = statusCode; }
 }
 
 public sealed class VaultService : IVaultService
@@ -128,12 +131,14 @@ public sealed class VaultService : IVaultService
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _paths;
     private readonly TimeProvider _clock;
+    private readonly IIndexConnectionPool _indexPool;
 
-    public VaultService(ServerDbContext db, IVaultPathResolver paths, TimeProvider clock)
+    public VaultService(ServerDbContext db, IVaultPathResolver paths, TimeProvider clock, IIndexConnectionPool indexPool)
     {
         _db = db;
         _paths = paths;
         _clock = clock;
+        _indexPool = indexPool;
     }
 
     public async Task<IReadOnlyList<VaultDto>> ListForUserAsync(Guid userId, CancellationToken ct = default)
@@ -454,13 +459,43 @@ public sealed class VaultService : IVaultService
         var absolute = _paths.Resolve(vault.Path);
         if (Directory.Exists(absolute))
         {
+            // The index pool keeps a long-lived SqliteConnection on
+            // <vault>/.notesapp/index.db. Windows refuses to move a
+            // directory whose descendants have open exclusive handles
+            // (the symptom is "Access to the path '...' is denied" from
+            // Directory.Move). Drop the cached connection first so the
+            // OS file locks are released; ClearPool inside EvictAsync
+            // handles Microsoft.Data.Sqlite's internal pool. After
+            // Move the entry is gone and the next access for this
+            // vaultId would lazily reopen if anything tried -- but the
+            // vault row itself is about to disappear, so nothing will.
+            await _indexPool.EvictAsync(vault.Id);
+
             var quarantineRoot = Path.Combine(
                 Path.GetDirectoryName(absolute) ?? absolute,
                 ".deleted");
             Directory.CreateDirectory(quarantineRoot);
             var stamp = _clock.GetUtcNow().ToString("yyyyMMdd-HHmmss");
             var quarantinePath = Path.Combine(quarantineRoot, $"{vault.Name}-{stamp}-{vault.Id:N}");
-            Directory.Move(absolute, quarantinePath);
+
+            try
+            {
+                Directory.Move(absolute, quarantinePath);
+            }
+            catch (IOException ex)
+            {
+                // Rare but possible: an external handle (AV scanner, file
+                // explorer preview, a future indexer or watcher) is still
+                // pinning a file inside the vault. Surface a clearer
+                // message than the raw "Access to the path ... is denied"
+                // so the user can retry rather than thinking it's a
+                // permissions problem with their account.
+                throw new VaultException(
+                    "Could not move the vault folder to quarantine: a file inside it is in use. " +
+                    "Close any program that has notes from this vault open and try again.",
+                    statusCode: 409,
+                    innerException: ex);
+            }
         }
 
         _db.Vaults.Remove(vault);
