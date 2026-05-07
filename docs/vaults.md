@@ -42,22 +42,38 @@ checked against the `VaultPermissions` table.
 
 A site-wide **server `admin`** (the role on the `User` row,
 not the role on the vault) does **not** automatically have
-access to all vaults. Admins manage users, can see audit
-events, can run backups — but to *open* someone else's vault
-they need a `VaultPermission` row giving them a role on it.
+access to all vaults — they cannot *open* someone else's vault
+without a `VaultPermission` row. They *can*, however, perform
+owner-level management actions (share, unshare, delete,
+install sample data) on any vault, even one they have no
+permission row on. This is the admin override; it bypasses the
+ownership check on the management endpoints but does not
+synthesise a permission row, so it does not unlock note
+contents.
 
 ## Scope
 
 A vault's `Scope` is one of:
 
-- **`personal`** (default) — created with a single owner
-  permission.  Visible only to that owner unless they share it.
-- **`shared`** — semantically the same; the difference is just
-  the metadata label, used by the UI to group vaults in lists.
+- **`personal`** — vault folder lives under
+  `users/<owner-username>/<vault-name>` relative to DataRoot.
+  The default for a vault created by an ordinary user.
+- **`shared`** — vault folder lives under
+  `shared/<vault-name>` relative to DataRoot. Used for vaults
+  meant to be shared across users from the start.
 
-There is no behavioural difference; share/unshare works the
-same way for both. The label is a hint to the user about how
-the vault is being used.
+The user does **not** choose `Scope` as a free metadata label.
+It is derived from the first segment of the relative path
+when creating or registering the vault — `users/...` produces
+a `personal` row, `shared/...` produces a `shared` row, anything
+else is rejected with HTTP 400. Once written, `Scope` is
+immutable from the API surface.
+
+Both scopes share the same permission model and the same
+share/unshare endpoints. The behavioural difference is the
+on-disk location and the corresponding path prefix the caller
+must use. The UI uses the label to group vaults visually in
+lists.
 
 ## Identity (icon + colour)
 
@@ -77,15 +93,18 @@ an unknown icon or colour returns HTTP 400. The frontend
 `VaultPicker` fixture must stay in lockstep with the server's
 allow-list.
 
-Appearance is changed via right-click on the active vault pill
-in the topbar. Audit event: `VaultAppearanceChanged`.
+Appearance is changed via right-click on a vault pill in the
+topbar's vault picker (works on the active pill or any other
+pill in the picker — the pill that was right-clicked is the
+one whose appearance changes). Audit event:
+`VaultAppearanceChanged`.
 
 ## Lifecycle
 
 ### Create
 
-A vault is created in two ways, both via the web UI's vault
-list page (or the tray's Vaults window):
+A vault is created in two ways, both via the tray's Vaults
+window (the web UI does not currently expose vault creation):
 
 - **Create new**: server creates the on-disk folder, creates
   the `.notesapp/` subfolder, and adds the Vault row + owner
@@ -105,33 +124,57 @@ Audit events: `VaultCreated`, `VaultRegistered`.
 
 ### Sharing
 
-Owner-only. Adds or updates a `VaultPermission` row for some
-other user with role `viewer` or `editor`. Self-sharing is a
-no-op (you already have a permission). Unsharing is the same
-endpoint with DELETE — it removes the permission row but
+Owner-or-admin. Adds or updates a `VaultPermission` row for
+some other user with role `viewer` or `editor`. Self-sharing
+is a no-op (you already have a permission). Unsharing is the
+same endpoint with DELETE — it removes the permission row but
 leaves the user account untouched.
 
 Audit events: `VaultShared`, `VaultUnshared`.
 
 ### Sample data
 
-Owners can install a "sample data" pack into a vault via the
-Vaults window. It writes a small set of starter notes and
-folders demonstrating common content types (callouts, code
-blocks with ST, embedded images, daily notes layout). Only
-allowed in vaults that don't already have notes — protects
-against overwriting content.
+Owner-or-admin. Owners (and admins acting on any vault) can
+install a "sample data" pack via the Vaults window. It writes
+a small set of starter notes and folders demonstrating common
+content types (callouts, code blocks with ST, embedded images,
+daily notes layout). Only allowed in vaults that don't already
+have notes — protects against overwriting content.
 
 Audit event: `VaultSampleDataInstalled`.
 
 ### Delete
 
-Owner-only. Deletes the Vault row, the permission rows, and
-*the on-disk folder including all notes and the index DB*.
-There is no soft-delete; the only way back is from a backup.
-The UI confirms with a typed-name confirmation
-("type the vault name to delete"). Sample data installed in
-the vault is also lost.
+Owner-or-admin. Drops the Vault row and the cascading
+permission rows from the server DB, then **moves** the on-disk
+folder to a sibling quarantine directory rather than deleting
+it. The quarantine path is `<parent>/.deleted/<vault-name>-<UTC-timestamp>-<vault-id-N>/`,
+where `<parent>` is the directory that contained the vault
+folder. Notes inside survive intact; the vault simply becomes
+invisible to NoteControl.
+
+The Recycle Bin is deliberately **not** used: the server may
+run as a Windows Service without a desktop session, where
+recycle is unavailable.
+
+The quarantine folder is **never auto-pruned**. Cleanup is a
+manual operation — empty `.deleted/` by hand when you no
+longer need the recoverable copies. Recovery is also manual:
+move the folder back to its original path and re-register it
+via the Vaults window.
+
+Before the move, the server evicts its cached SQLite
+connection on `<vault>/.notesapp/index.db` so Windows will
+allow the directory rename. If something *outside* the server
+(antivirus, a file-explorer preview, a future watcher) is
+holding a handle inside the vault, the request fails with
+HTTP 409 and an explanatory message; nothing is moved or
+removed in that case, and the call can be retried.
+
+The tray's Vaults window confirms the delete with an
+OK/Cancel dialog that names the vault path and explains the
+quarantine behaviour. There is no typed-name confirmation.
+The web UI does not currently expose vault deletion.
 
 Audit event: `VaultDeleted`.
 
