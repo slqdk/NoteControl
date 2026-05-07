@@ -1,12 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
-import Table from '@tiptap/extension-table';
+// Table extensions: same extended versions used by NoteEditor — see
+// TableWithOptions.ts for the rowHeight attribute and markdown
+// round-trip rules (custom attrs → HTML, plain → pipe syntax).
+import { TableWithOptions } from '../editor/TableWithOptions';
 import TableRow from '@tiptap/extension-table-row';
-import TableHeader from '@tiptap/extension-table-header';
-import TableCell from '@tiptap/extension-table-cell';
+import { TableCellWithAlign, TableHeaderWithAlign } from '../editor/TableCellWithAlign';
 
 import { CodeBlockWithTitle } from '../editor/CodeBlockWithTitle';
 import { CalloutExtension } from '../editor/CalloutExtension';
@@ -16,6 +18,7 @@ import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { TableToolbar } from './TableToolbar';
+import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
 import { assetsApi } from '../api/client';
 
@@ -102,6 +105,14 @@ export function TemplateEditor({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // Table insert dialog state — same pattern as NoteEditor. The
+  // slash menu's Table item calls onTableInsertRequest (passed via
+  // SlashMenuExtension's context below) which sets this true; the
+  // dialog renders below the editor at the shell root. On confirm
+  // we run insertTable with the chosen dimensions and (optionally)
+  // patch rowHeight onto the freshly inserted table.
+  const [tableInsertDialogOpen, setTableInsertDialogOpen] = useState(false);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -122,14 +133,18 @@ export function TemplateEditor({
       }),
       // Tables — see styles.css for visuals. Tables stay inside
       // templates because there's no asset-path issue with them.
-      Table.configure({
+      // Our extended TableWithOptions adds a per-table rowHeight
+      // attribute and a markdown serializer that emits raw HTML
+      // when rowHeight or per-cell alignment is set, falling back
+      // to clean GFM pipe syntax otherwise.
+      TableWithOptions.configure({
         resizable: true,
         handleWidth: 5,
         cellMinWidth: 40,
       }),
       TableRow,
-      TableHeader,
-      TableCell,
+      TableHeaderWithAlign,
+      TableCellWithAlign,
       TableDeleteShortcut,
       // Callouts — same in both note and template editors.
       CalloutExtension,
@@ -145,6 +160,11 @@ export function TemplateEditor({
       // Ship 98: when `enableImages` is true the Image item is
       // included, and the upload routes via templatesApi (using
       // ctx.templateName) instead of assetsApi.
+      //
+      // onTableInsertRequest opens our TableInsertDialog so the
+      // user can pick dimensions + row height before insertion.
+      // setTableInsertDialogOpen has stable identity across renders,
+      // so capturing it in useEditor's closure is safe.
       SlashMenuExtension.configure({
         context: {
           vaultId,
@@ -152,6 +172,7 @@ export function TemplateEditor({
           allowImages: enableImages === true,
           allowTemplates: false,
           templateName: enableImages === true ? templateName : undefined,
+          onTableInsertRequest: () => setTableInsertDialogOpen(true),
         },
       }),
       // F2 autocomplete inside Structured Text code blocks. See
@@ -269,6 +290,42 @@ export function TemplateEditor({
       <EditorContent editor={editor} />
       <TableToolbar editor={editor} />
       <BubbleMenu editor={editor} />
+      {/*
+        Table insert dialog. Same pattern as NoteEditor — the slash
+        menu's Table item flips this open after deleting the trigger
+        range. On confirm we run insertTable + (optionally) patch
+        rowHeight onto the new table. Fully unmounted when closed
+        so its internal state resets between invocations.
+      */}
+      {tableInsertDialogOpen && (
+        <TableInsertDialog
+          onCancel={() => {
+            setTableInsertDialogOpen(false);
+            // Re-focus so the user can keep typing immediately.
+            editor?.commands.focus();
+          }}
+          onInsert={(opts: TableInsertOpts) => {
+            setTableInsertDialogOpen(false);
+            if (!editor) return;
+            editor
+              .chain()
+              .focus()
+              .insertTable({
+                rows: opts.rows,
+                cols: opts.cols,
+                withHeaderRow: opts.withHeaderRow,
+              })
+              .run();
+            if (opts.rowHeight != null) {
+              editor
+                .chain()
+                .focus()
+                .updateAttributes('table', { rowHeight: opts.rowHeight })
+                .run();
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

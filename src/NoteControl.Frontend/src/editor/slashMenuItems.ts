@@ -82,6 +82,23 @@ export interface SlashMenuContext {
   allowImages?: boolean;
   allowTemplates?: boolean;
   templateName?: string;
+  /**
+   * Optional handler for the Table item. When provided, picking
+   * Table calls this instead of inserting a default 3×3 — the host
+   * editor can show its TableInsertDialog and run insertTable with
+   * the user's chosen rows/cols/header/rowHeight.
+   *
+   * The trigger range (the "/" plus typed filter) has already been
+   * deleted from the editor by the slash menu's command runner
+   * before this is called, so the host just needs to focus and
+   * insertTable when the dialog confirms — no range bookkeeping.
+   *
+   * If this is NOT provided, the Table item falls back to the
+   * legacy immediate-3×3-insert behaviour. Keeps headless callers
+   * (tests, future template-of-template scenarios) working without
+   * having to plumb a dialog through.
+   */
+  onTableInsertRequest?: () => void;
 }
 
 /**
@@ -361,12 +378,28 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
     // --- Table -------------------------------------------------------
     {
       title: 'Table',
-      subtitle: '3×3 table with header row',
+      // The subtitle no longer locks "3×3" because the host can pop a
+      // dialog to pick dimensions. Keep it short and accurate either
+      // way the host wires this up.
+      subtitle: 'Insert a table',
       icon: '⊞',
       keywords: ['table', 'grid', 'rows', 'columns'],
       command: ({ editor, range }) => {
-        // Insert a 3x3 with a header row. The TipTap table command
-        // is provided by @tiptap/extension-table.
+        // Two paths:
+        //   - Host wired up onTableInsertRequest → delete the trigger
+        //     range first (so the user's typed "/" + filter goes
+        //     away), then hand off to the host. The host shows its
+        //     TableInsertDialog and runs insertTable when the user
+        //     confirms.
+        //   - Host did not wire up the callback → fall back to the
+        //     legacy immediate insert of a 3×3 with header row.
+        //     Keeps headless callers (tests, or future contexts that
+        //     don't want a dialog) working unchanged.
+        if (ctx.onTableInsertRequest) {
+          editor.chain().focus().deleteRange(range).run();
+          ctx.onTableInsertRequest();
+          return;
+        }
         editor
           .chain()
           .focus()

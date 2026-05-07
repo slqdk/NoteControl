@@ -3,10 +3,14 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
-import Table from '@tiptap/extension-table';
+// Table extensions: our extended versions add a per-table rowHeight
+// attribute (TableWithOptions) and a per-cell align attribute
+// (TableCellWithAlign / TableHeaderWithAlign). The upstream TableRow
+// is unchanged — rows have no extra attributes in our model. See
+// TableWithOptions.ts for the markdown round-trip rules.
+import { TableWithOptions } from '../editor/TableWithOptions';
 import TableRow from '@tiptap/extension-table-row';
-import TableHeader from '@tiptap/extension-table-header';
-import TableCell from '@tiptap/extension-table-cell';
+import { TableCellWithAlign, TableHeaderWithAlign } from '../editor/TableCellWithAlign';
 
 import { ImageWithControls } from '../editor/ImageWithControls';
 import { VideoExtension } from '../editor/VideoExtension';
@@ -24,6 +28,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import type { NoteDto } from '../api/types';
 import type { SaveState } from './SaveStatusIndicator';
 import { TableToolbar } from './TableToolbar';
+import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
 import { MobileNoteProperties } from './MobileNoteProperties';
 
@@ -125,6 +130,19 @@ export function NoteEditor({
   const pendingMarkdownRef = useRef<string | null>(null);
   const editorRef = useRef<Editor | null>(null);
 
+  // Table insert dialog — shown when the user picks Table from the
+  // slash menu. The slash item calls onTableInsertRequest (passed via
+  // SlashMenuExtension's context) which sets this state to true; the
+  // dialog renders below the editor shell. On confirm we run the
+  // editor's insertTable command with the chosen dimensions and
+  // optional rowHeight; on cancel we just hide the dialog.
+  //
+  // The slash item runs deleteRange(range) on the user's "/" + filter
+  // text BEFORE invoking the request, so by the time the dialog
+  // confirms there's no stray "/" to clean up — we just insertTable
+  // at the current selection.
+  const [tableInsertDialogOpen, setTableInsertDialogOpen] = useState(false);
+
   const performSave = useCallback(async () => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -197,11 +215,13 @@ export function NoteEditor({
           codeBlock: false,
         }),
         CodeBlockWithTitle,
-        // Tables — GFM-style. Resizable=false because resizable
-        // tables in TipTap need a separate column-resize handle
-        // that doesn't play well with our minimal styling. Users
-        // get a clean grid; column widths come from content.
-        Table.configure({
+        // Tables — GFM-style. Resizable=true so users can drag
+        // column widths via the right edge of any cell. Our extended
+        // TableWithOptions adds a `rowHeight` attribute (driven by the
+        // table popup's Row Height field) plus a markdown serializer
+        // that emits raw HTML when rowHeight or per-cell alignment is
+        // set, falling back to clean GFM pipe syntax otherwise.
+        TableWithOptions.configure({
           // Column resize is built into @tiptap/extension-table.
           // Drag the right edge of any cell to resize that column.
           // handleWidth: the px-width of the drag-zone on the cell
@@ -213,8 +233,8 @@ export function NoteEditor({
           cellMinWidth: 40,
         }),
         TableRow,
-        TableHeader,
-        TableCell,
+        TableHeaderWithAlign,
+        TableCellWithAlign,
         // Del/Backspace deletes the whole table when the user has
         // drag-selected every cell. Replaces the toolbar's old ✕
         // button with a more deliberate keyboard gesture.
@@ -271,10 +291,20 @@ export function NoteEditor({
         // Slash menu (Notion-style insert popup). Triggered by
         // typing "/" — shows a filterable list of insertable
         // blocks (headings, lists, code, image, etc.).
+        //
+        // onTableInsertRequest opens our TableInsertDialog so the
+        // user can pick rows/cols/header/rowHeight before insertion.
+        // The slash item has already deleted the trigger range when
+        // this fires — we only need to flip the dialog visible.
+        // setTableInsertDialogOpen is a useState setter with stable
+        // identity across renders, so it's safe to capture in the
+        // useEditor closure (which only rebuilds when initialNote.path
+        // changes — see the deps array at the bottom of useEditor).
         SlashMenuExtension.configure({
           context: {
             vaultId,
             getNotePath: () => noteForUploadRef.current,
+            onTableInsertRequest: () => setTableInsertDialogOpen(true),
           },
         }),
         // F2 autocomplete inside Structured Text code blocks.
@@ -704,6 +734,67 @@ export function NoteEditor({
           vaultId={vaultId}
           notePath={initialNote.path}
           initialNote={initialNote}
+        />
+      )}
+      {/*
+        Table insert dialog. Triggered by picking "Table" from the
+        slash menu (which calls onTableInsertRequest, set in our
+        SlashMenuExtension config above). The slash item already
+        deleted the user's "/" + filter text before opening the
+        dialog, so on confirm we just run insertTable at the current
+        selection.
+
+        Why mount at the editor-shell root rather than the page area:
+        the dialog is a centered overlay (backdrop + card) and it
+        shouldn't be clipped by the page's own overflow / max-width.
+        Rendering at the shell root keeps it visually centered on
+        the viewport.
+
+        The dialog is fully unmounted when closed so its internal
+        state (rows/cols/etc.) resets between invocations — desired
+        UX, otherwise the dialog would remember the previous run's
+        choices in surprising ways.
+      */}
+      {tableInsertDialogOpen && (
+        <TableInsertDialog
+          onCancel={() => {
+            setTableInsertDialogOpen(false);
+            // Re-focus the editor so the user can continue typing
+            // immediately after cancelling. Without this, focus is
+            // left on document.body (the dialog's own focus released
+            // on unmount) and Backspace / arrow keys would do
+            // nothing visible.
+            editor?.commands.focus();
+          }}
+          onInsert={(opts: TableInsertOpts) => {
+            setTableInsertDialogOpen(false);
+            if (!editor) return;
+            // Two-step: insertTable with rows/cols/header, then if
+            // a custom rowHeight was chosen, patch the freshly-
+            // inserted table's attributes via updateAttributes.
+            //
+            // We do this in two chains so the rowHeight patch happens
+            // AFTER insertTable's own selection placement (which puts
+            // the cursor inside the new table's first cell) — that
+            // way updateAttributes finds the table via the selection.
+            editor
+              .chain()
+              .focus()
+              .insertTable({
+                rows: opts.rows,
+                cols: opts.cols,
+                withHeaderRow: opts.withHeaderRow,
+              })
+              .run();
+
+            if (opts.rowHeight != null) {
+              editor
+                .chain()
+                .focus()
+                .updateAttributes('table', { rowHeight: opts.rowHeight })
+                .run();
+            }
+          }}
         />
       )}
     </div>

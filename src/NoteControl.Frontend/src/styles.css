@@ -2228,7 +2228,26 @@ body.nc-dragging * {
   vertical-align: top;
   position: relative;
   box-sizing: border-box;
+  /* When the table has a `--nc-table-row-h` custom property set
+     (driven by the Table popup's Row Height field, which writes
+     it inline on the <table>), every cell gets that as a min-height
+     so all rows snap to the chosen height. We keep `vertical-align:
+     top` so content sits at the top when the cell is taller than
+     its content — feels like a worksheet, not a centered card. */
+  min-height: var(--nc-table-row-h, auto);
 }
+
+/* Cell text-align driven by the per-cell `data-align` attribute
+   (TableCellWithAlign / TableHeaderWithAlign). The data attribute
+   is the source of truth that survives markdown round-trip; we
+   also emit a `style="text-align: …"` from renderHTML so external
+   markdown viewers honour the alignment without our stylesheet. */
+.ProseMirror table td[data-align="left"],
+.ProseMirror table th[data-align="left"]   { text-align: left; }
+.ProseMirror table td[data-align="center"],
+.ProseMirror table th[data-align="center"] { text-align: center; }
+.ProseMirror table td[data-align="right"],
+.ProseMirror table th[data-align="right"]  { text-align: right; }
 
 .ProseMirror table th {
   background: var(--nc-bg-elev-2);
@@ -2742,6 +2761,426 @@ body.nc-dragging * {
   height: 18px;
   background: var(--nc-border);
   margin: 0 2px;
+}
+
+/* Active state for the toolbar's ••• toggle when the options panel
+   is open. Same accent styling we use elsewhere for "this control's
+   sub-UI is currently visible". */
+.nc-table-toolbar-btn-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+
+/* Wrapper that holds both the fast-action row and the options
+   panel that opens beneath it. The wrapper is what the React
+   component positions; the row is inline-flex inside, the panel
+   sits below as a separate block. */
+.nc-table-toolbar-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* ----- Table options panel (opened by the ••• button) ----- */
+
+/* Sits directly below the fast-action row. Width is independent of
+   the row above so we have room for the row-height input + presets
+   without cramping. The panel is purposely opaque (var(--nc-bg))
+   and shadowed so it reads as a standalone surface, not an
+   extension of the row. */
+.nc-table-options-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+  max-width: 360px;
+  /* If the viewport is short, allow the panel to scroll rather
+     than overflow the screen. The toolbar's positioning logic
+     clamps the row to be visible; without a max-height the panel
+     could push past the viewport bottom. */
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: var(--nc-fg);
+  user-select: none;
+}
+
+.nc-table-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.nc-table-options-label {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.nc-table-options-divider {
+  height: 1px;
+  background: var(--nc-border);
+  margin: 2px -12px; /* full-width inside the padded panel */
+}
+
+/* Row-height number input — compact, with a "px" unit suffix that
+   lives outside the input so the typed digits don't collide with
+   the unit text. */
+.nc-table-options-row-h-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nc-table-options-input {
+  width: 64px;
+  height: 26px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  /* Hide the up/down spinners — they look cramped in this size and
+     the input has +/- presets right beneath it anyway. Webkit and
+     Firefox both need their own incantation. */
+  -moz-appearance: textfield;
+}
+.nc-table-options-input::-webkit-outer-spin-button,
+.nc-table-options-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.nc-table-options-input:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+  box-shadow: 0 0 0 2px var(--nc-accent-bg-soft);
+}
+
+.nc-table-options-unit {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+}
+
+/* Preset row beneath the row-height input. Buttons are pill-shaped
+   with the active preset highlighted in accent. */
+.nc-table-options-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nc-table-options-preset {
+  font: inherit;
+  font-size: 12px;
+  height: 24px;
+  padding: 0 10px;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 999px;
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-table-options-preset:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
+}
+.nc-table-options-preset-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+
+/* Alignment button group — three icon buttons, nothing else. */
+.nc-table-options-align-group {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  padding: 2px;
+}
+
+.nc-table-options-align {
+  font: inherit;
+  font-size: 14px;
+  width: 26px;
+  height: 24px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--nc-fg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-table-options-align:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-table-options-align-active {
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-accent);
+}
+
+/* Generic action button used for Toggle / Merge / Split. */
+.nc-table-options-action {
+  font: inherit;
+  font-size: 12px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-table-options-action:hover:not(:disabled) {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
+}
+.nc-table-options-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nc-table-options-merge-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* ----- Table insert dialog (slash menu's Table item) ----- */
+
+/* Full-viewport scrim. Centers the card. z-index sits above the
+   editor but below any topbar dropdowns (those use z-index: 200+
+   in this codebase). */
+.nc-table-insert-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.nc-table-insert-card {
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.30);
+  width: min(420px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.nc-table-insert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--nc-border);
+}
+
+.nc-table-insert-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.nc-table-insert-close {
+  font: inherit;
+  font-size: 18px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  background: transparent;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-table-insert-close:hover {
+  background: var(--nc-bg-elev-2);
+  color: var(--nc-fg);
+}
+
+.nc-table-insert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.nc-table-insert-dim-row {
+  display: flex;
+  gap: 12px;
+}
+
+.nc-table-insert-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-table-insert-field input[type="number"] {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--nc-fg);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  /* Spinners stay here — the field is bigger and they're useful for
+     keyboard-light users picking dimensions. */
+}
+.nc-table-insert-field input[type="number"]:focus {
+  outline: none;
+  border-color: var(--nc-accent);
+  box-shadow: 0 0 0 2px var(--nc-accent-bg-soft);
+}
+
+.nc-table-insert-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-table-insert-checkbox input {
+  margin: 0;
+}
+
+.nc-table-insert-rowheight {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--nc-border);
+}
+
+.nc-table-insert-rowheight-input {
+  /* Override the generic field's flex:1 — we want a fixed-narrow
+     input here, with the presets row beneath it. */
+  flex: 0 0 auto;
+}
+
+.nc-table-insert-rowheight-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nc-table-insert-rowheight-input-wrap input[type="number"] {
+  width: 100px;
+}
+
+.nc-table-insert-unit {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+}
+
+.nc-table-insert-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nc-table-insert-preset {
+  font: inherit;
+  font-size: 12px;
+  height: 26px;
+  padding: 0 12px;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 999px;
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-table-insert-preset:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
+}
+.nc-table-insert-preset-active {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+
+/* Honest-trade-off hint at the bottom of the row-height section.
+   Muted, small, with a code chunk for the .md mention. */
+.nc-table-insert-hint {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--nc-fg-muted);
+  padding: 6px 8px;
+  background: var(--nc-bg-elev);
+  border-radius: var(--nc-radius-sm);
+}
+.nc-table-insert-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: var(--nc-bg-elev-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.nc-table-insert-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--nc-border);
+}
+
+.nc-table-insert-cancel,
+.nc-table-insert-confirm {
+  font: inherit;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+
+.nc-table-insert-cancel {
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  color: var(--nc-fg);
+}
+.nc-table-insert-cancel:hover {
+  background: var(--nc-bg-elev-2);
+}
+
+.nc-table-insert-confirm {
+  background: var(--nc-accent);
+  border: 1px solid var(--nc-accent);
+  color: var(--nc-accent-fg);
+  font-weight: 500;
+}
+.nc-table-insert-confirm:hover {
+  /* Subtle darken on hover. Accent already provides enough contrast
+     so we don't need a separate hover variable. */
+  filter: brightness(0.92);
 }
 
 /* ----- Bubble menu (selection-driven formatting toolbar) ----- */
