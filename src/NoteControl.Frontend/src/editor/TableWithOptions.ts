@@ -15,10 +15,12 @@ import Table from '@tiptap/extension-table';
  *        - `rowHeight` is set on the table
  *        - any cell has a non-default `align` attribute
  *        - any cell has colspan/rowspan > 1 (merged cells)
+ *        - any cell has user-set column widths (colwidth array,
+ *          set by dragging the column resize handle)
  *        - any cell holds multi-block content (e.g. a list inside)
  *        - the table has a header column (header cells outside row 0)
  *
- *      The first two are NoteControl-specific. The last three match
+ *      The first three are NoteControl-specific. The last three match
  *      what the upstream tiptap-markdown serializer also falls back
  *      to HTML for — we re-implement the pipe path here so we have
  *      one place that decides which form to emit.
@@ -125,7 +127,12 @@ function needsHtmlSerialization(node: unknown): boolean {
       childCount: number;
       child: (j: number) => {
         type: { name: string };
-        attrs?: { align?: string | null; colspan?: number; rowspan?: number };
+        attrs?: {
+          align?: string | null;
+          colspan?: number;
+          rowspan?: number;
+          colwidth?: number[] | null;
+        };
         childCount: number;
       };
     };
@@ -161,9 +168,23 @@ function needsHtmlSerialization(node: unknown): boolean {
       // 6. Body-row containing a header cell mixed with body cells:
       //    the rule above already catches this case (any tableHeader
       //    in r > 0 forces HTML).
+
+      // 7. Custom column widths? → HTML.
+      //    The user resized columns via the resize handle. Upstream
+      //    @tiptap/extension-table-cell stores the widths as a number
+      //    array on the cell's `colwidth` attribute (one number per
+      //    column the cell spans). Pipe syntax can't represent this;
+      //    HTML can via `colwidth="120,80"`. We treat any non-null,
+      //    non-empty colwidth array as "user has set widths". A cell
+      //    with all-zero widths shouldn't happen but is treated as
+      //    "no widths" defensively.
+      const cw = cell.attrs?.colwidth;
+      if (cw && cw.length > 0 && cw.some((w) => typeof w === 'number' && w > 0)) {
+        return true;
+      }
     }
 
-    // 7. Row 0 must be all-header for pipe syntax. If row 0 has any
+    // 8. Row 0 must be all-header for pipe syntax. If row 0 has any
     //    body cells (rare but possible), force HTML.
     if (r === 0) {
       for (let c = 0; c < row.childCount; c++) {
@@ -307,7 +328,12 @@ function serializeTableAsHtml(state: unknown, node: unknown): void {
     rowNode.forEach((cell) => {
       const cellNode = cell as {
         type: { name: string };
-        attrs?: { align?: string | null; colspan?: number; rowspan?: number };
+        attrs?: {
+          align?: string | null;
+          colspan?: number;
+          rowspan?: number;
+          colwidth?: number[] | null;
+        };
         textContent: string;
       };
       const tag = cellNode.type.name === 'tableHeader' ? 'th' : 'td';
@@ -318,6 +344,21 @@ function serializeTableAsHtml(state: unknown, node: unknown): void {
       }
       if (cellNode.attrs?.rowspan && cellNode.attrs.rowspan > 1) {
         attrs.push(`rowspan="${cellNode.attrs.rowspan}"`);
+      }
+      // Column widths set by the user dragging the column resize
+      // handle. Upstream @tiptap/extension-table-cell stores them
+      // as a number-array on the cell, one number per column the
+      // cell spans. Its parseHTML reads them back from a literal
+      // `colwidth="120,80"` attribute (CSV of integers). We round
+      // each value to an integer (the resize plugin sometimes
+      // writes fractional pixels) and skip the attribute entirely
+      // if the array is null / empty / all-zero, so a fresh table
+      // without any user-driven resize doesn't accumulate a no-op
+      // attribute.
+      const cw = cellNode.attrs?.colwidth;
+      if (cw && cw.length > 0 && cw.some((w) => typeof w === 'number' && w > 0)) {
+        const rounded = cw.map((w) => Math.max(0, Math.round(w))).join(',');
+        attrs.push(`colwidth="${rounded}"`);
       }
       const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
 
