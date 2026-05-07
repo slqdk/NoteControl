@@ -1254,22 +1254,29 @@ body.nc-dragging * {
   padding: 28px 24px 80px;
 }
 /*
-  Step 45: removed `max-width: 760px` from .nc-page-editor.
-  That cap silently prevented the per-note Width setting (in
-  Properties → Width, persisted as `width:` in the note's
-  frontmatter) from doing anything beyond ~760px. The cap was
-  on the OUTER wrapper, while the per-note width is applied as
-  inline style on the INNER .nc-editor element — so the inner
-  could grow wider than the wrapper but never become visible.
+  Step 45 removed `max-width: 760px` from .nc-page-editor, but the
+  parent .nc-page rule above still imposes its own 960px cap
+  (every editor page is `<div class="nc-page nc-page-editor">`).
+  That meant per-note Width settings beyond ~960 silently stopped
+  having any visible effect — the inner .nc-editor card could be
+  styled to 1200px but the wrapping .nc-page kept it boxed at 960.
 
-  With the cap removed, .nc-page-editor now lets its child grow
-  up to whatever the surrounding shell allows (constrained by
-  the app frame width minus the two rails). The default 700px
-  centred white card is unchanged for notes without a configured
-  Width. Setting Width=1000 actually produces a 1000px-wide page
-  now, as long as the rails leave room — hide ℹ️ and 📁 to free
-  up more space if needed.
+  Editor route only: drop the wrapper cap entirely so the .nc-editor
+  page card is free to grow up to whatever the surrounding shell
+  allows (constrained by the app frame width minus the rails).
+  Other routes (folders, vault list, templates header, etc.) still
+  inherit the 960px limit from .nc-page — they're chrome layouts,
+  not document surfaces, and a wide-screen 4K display would look
+  silly with a single column stretched 2400px wide.
+
+  The default 700px centred white card is unchanged for notes
+  without a configured Width. The 24px horizontal padding from
+  .nc-page is kept so the editor card never sits flush against
+  the rail edges, even at Full-width settings.
 */
+.nc-page-editor {
+  max-width: none;
+}
 
 .nc-page-title { font-size: 22px; font-weight: 600; margin: 0 0 20px; }
 
