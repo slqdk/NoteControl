@@ -192,6 +192,19 @@ export function BubbleMenu({
   // pick. Set via the ref attribute on the root div below.
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  // "User is currently mousedown-ing the menu" flag. Set on
+  // mousedown over any descendant of the menu, cleared on the
+  // global mouseup that ends that gesture. While true, update()
+  // refuses to hide the menu — even if the editor blurs and
+  // document.activeElement flits to <body> mid-transition (which
+  // happens for native <select> dropdowns on some browsers), the
+  // menu stays put until the user finishes their click.
+  //
+  // A ref (not state) because we don't need a re-render when it
+  // flips — update() reads it directly from the closure on the
+  // next event tick.
+  const interactingRef = useRef(false);
+
   // Ship 98b: busy state for "save selection as template". Hoisted
   // up here (alongside the other useState calls) and BEFORE any
   // conditional early returns so the hook is always called in the
@@ -232,17 +245,24 @@ export function BubbleMenu({
       // selection in an inactive editor (e.g. user clicked away to
       // focus the breadcrumb input).
       //
-      // EXCEPTION: if focus has moved INTO the bubble menu itself
-      // (e.g. the Font/Size <select> stole it when its dropdown
-      // opened), keep the menu visible. The editor's selection is
-      // preserved across this kind of focus loss because TipTap's
-      // chain().focus() on commit restores it. Without this check,
-      // opening the Font dropdown would unmount the menu before
-      // the user could click an option.
+      // EXCEPTIONS — keep the menu visible when:
+      //
+      //   1. The user is currently mid-click on the menu itself
+      //      (interactingRef). Set on mousedown anywhere inside the
+      //      menu, cleared on the global mouseup. This is the only
+      //      reliable signal across browsers — document.activeElement
+      //      is unreliable during a native <select> dropdown's
+      //      transition (it can briefly read as <body>), so a
+      //      hasFocus-only check would unmount the menu mid-pick.
+      //
+      //   2. Focus has settled inside the menu (focusInsideMenu) —
+      //      e.g. the select keeps focus while its dropdown is open
+      //      on some browsers. Belt-and-braces with rule 1.
       const focusedEl = document.activeElement as HTMLElement | null;
       const focusInsideMenu =
         !!focusedEl && !!menuRef.current && menuRef.current.contains(focusedEl);
-      if (!editor.view.hasFocus() && !focusInsideMenu) {
+      const isInteracting = interactingRef.current;
+      if (!editor.view.hasFocus() && !focusInsideMenu && !isInteracting) {
         setActive(false);
         return;
       }
@@ -368,12 +388,56 @@ export function BubbleMenu({
     // Subscribe to the events that affect selection or document
     // structure. selectionUpdate covers caret movement and
     // selection extension; transaction covers content edits that
-    // might shift positions; focus/blur cover the editor losing
-    // focus to e.g. the breadcrumb.
+    // might shift positions; focus covers the editor regaining
+    // focus.
+    //
+    // Blur is special: at the moment a 'blur' event fires,
+    // document.activeElement hasn't necessarily moved to its new
+    // home yet (browser timing varies). If we run update()
+    // immediately, hasFocus is false AND focusInsideMenu reads as
+    // false (because the new focus target — e.g. a <select> in
+    // our menu — hasn't been recorded yet). The menu would
+    // unmount mid-click. Defer blur-driven updates to the next
+    // tick via requestAnimationFrame so the activeElement check
+    // sees the settled focus.
     editor.on('selectionUpdate', update);
     editor.on('transaction', update);
-    editor.on('focus', update);
-    editor.on('blur', update);
+    function focusUpdate() {
+      // Editor regaining focus = the user is back in the editor,
+      // not interacting with the menu. Clear the flag so a
+      // subsequent click outside the editor can hide the menu
+      // normally. Without this, the flag would stick on after the
+      // first dropdown pick and the menu would never auto-hide
+      // again.
+      interactingRef.current = false;
+      update();
+    }
+    editor.on('focus', focusUpdate);
+    function deferredBlurUpdate() {
+      requestAnimationFrame(() => {
+        // interactingRef is set on menu mousedown; if the user is
+        // mid-click on the menu, even rAF may not be enough — the
+        // dropdown can stay open across multiple frames. Skip the
+        // hide entirely while interacting; a later selectionUpdate
+        // (or focus event when the editor regains focus) will run
+        // update() with proper state.
+        if (interactingRef.current) return;
+        update();
+      });
+    }
+    editor.on('blur', deferredBlurUpdate);
+
+    // Belt-and-braces: clear interactingRef on any window mouseup
+    // so the flag can't get stuck if the user mousedowns on the
+    // menu but then moves the mouse off and releases. mouseup
+    // fires reliably on the document for in-window releases. For
+    // a release outside the OS window we never get the event, but
+    // the next focus-flip into the editor will clear it via the
+    // focusUpdate handler above.
+    function onWindowMouseUp() {
+      interactingRef.current = false;
+    }
+    window.addEventListener('mouseup', onWindowMouseUp);
 
     // Window scroll/resize: viewport coordinates change, so the
     // toolbar needs to re-anchor. Passive scroll listener — we
@@ -398,10 +462,11 @@ export function BubbleMenu({
     return () => {
       editor.off('selectionUpdate', update);
       editor.off('transaction', update);
-      editor.off('focus', update);
-      editor.off('blur', update);
+      editor.off('focus', focusUpdate);
+      editor.off('blur', deferredBlurUpdate);
       window.removeEventListener('scroll', update, { capture: true });
       window.removeEventListener('resize', update);
+      window.removeEventListener('mouseup', onWindowMouseUp);
       if (vv) {
         vv.removeEventListener('resize', update);
         vv.removeEventListener('scroll', update);
@@ -706,7 +771,14 @@ export function BubbleMenu({
       // there's no specific control) which we DO want to swallow.
       // The closest-check below threads the needle: native
       // controls work, dead space stays sticky.
+      //
+      // Also: flip interactingRef ON. The global mouseup listener
+      // (registered in the visibility useEffect) flips it back OFF.
+      // While the flag is set, update() refuses to hide the menu —
+      // so the editor losing focus to a <select>'s dropdown can't
+      // unmount the menu before the click completes.
       onMouseDown={(e) => {
+        interactingRef.current = true;
         const t = e.target as HTMLElement | null;
         if (t && t.closest('select, input')) return;
         e.preventDefault();
@@ -786,6 +858,10 @@ export function BubbleMenu({
               const opt = FONT_OPTIONS.find((f) => f.id === e.currentTarget.value);
               if (!opt) return;
               void saveNoteAppearance('font', opt.stack);
+              // The user has finished interacting with the menu.
+              // Clear the flag so a later focus shift away from the
+              // editor can hide the menu normally.
+              interactingRef.current = false;
               // Restore focus to the editor so the user's prior
               // selection is visible again and they can keep
               // formatting without re-selecting. TipTap's chain
@@ -821,8 +897,9 @@ export function BubbleMenu({
                   void saveNoteAppearance('fontSize', n);
                 }
               }
-              // Same focus restoration as the Font dropdown — see
-              // comment above.
+              // Same flag-clear + focus restoration as the Font
+              // dropdown — see comment there.
+              interactingRef.current = false;
               editor.chain().focus().run();
             }}
             disabled={savingNoteAppearance}
