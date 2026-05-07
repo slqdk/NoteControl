@@ -84,8 +84,45 @@ export interface FbInstance {
   state: Record<string, unknown>;
 }
 
+/**
+ * An "unknown-typed" runtime value — for variables whose declared
+ * type the v1 runtime doesn't have a schema for (user-defined FBs,
+ * structs, enums, anything not a built-in scalar or known FB).
+ *
+ * The runtime treats these as poke-only:
+ *   - The body never executes any tick logic for them. Calls in
+ *     the body to an unknown FB instance silently no-op.
+ *   - The user can poke a value into the bare variable
+ *     (`UnknownVar` itself), which lands in `scalarValue`.
+ *   - The user can poke values into individual members
+ *     (`UnknownVar.Foo`), which land in the `members` map.
+ *   - Reads of a bare variable or member return whatever was
+ *     last poked, or a "missing" sentinel if nothing yet.
+ *
+ * The type of a poked value is **inferred from the syntax of the
+ * user's input** — `TRUE` / `FALSE` becomes BOOL, `T#1s` becomes
+ * TIME, `3.14` becomes LREAL, `42` becomes DINT, `'foo'` becomes
+ * STRING. Once inferred, the type is stored alongside the value,
+ * so the pill renders with the right styling on subsequent scans
+ * (BOOLs as filled blue/black, etc.) and double-click toggle
+ * works on inferred-BOOL members the same as declared BOOLs.
+ *
+ * `typeName` is the original-cased type identifier from the
+ * declaration, kept for tooltips like
+ * `MyTimer : FB_ValueRanges (unknown)`.
+ */
+export interface UnknownInstance {
+  kind: 'unknown';
+  typeName: string;
+  /** Value poked directly into the bare variable. null if never
+   *  poked (read-back yields the missing sentinel). */
+  scalarValue: ScalarValue | null;
+  /** Member-name (lowercased) → poked value. */
+  members: Map<string, ScalarValue>;
+}
+
 /** Anything storable in the env. */
-export type RuntimeValue = ScalarValue | FbInstance;
+export type RuntimeValue = ScalarValue | FbInstance | UnknownInstance;
 
 export type Environment = Map<string, RuntimeValue>;
 
@@ -99,11 +136,25 @@ function scalar(type: ScalarTypeName, value: ScalarValue['value']): ScalarValue 
 }
 
 function asScalar(v: RuntimeValue, line: number, ctx: string): ScalarValue {
-  if (v.kind !== 'scalar') {
+  if (v.kind === 'fb') {
     throw new StRuntimeError(
       'type-mismatch', line,
       `${ctx}: expected a scalar value, got an FB instance (type ${v.fbType})`,
     );
+  }
+  if (v.kind === 'unknown') {
+    // An unknown-typed bare variable doesn't have a value until
+    // the user pokes one. Reading before poking is reported as
+    // a type mismatch so the user sees what's missing — we don't
+    // want to silently feed a default into the surrounding
+    // expression and have it produce a misleading result.
+    if (v.scalarValue === null) {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${ctx}: variable of unknown type "${v.typeName}" has no value yet — double-click or click the pill to poke one`,
+      );
+    }
+    return v.scalarValue;
   }
   return v;
 }
@@ -169,16 +220,28 @@ export function createEnvironment(program: ParsedProgram): Environment {
   const initCtx: ScanContext = { env, scanTimeMs: 0, budgetLeft: MAX_BUDGET };
 
   for (const v of program.program.vars) {
-    if (v.type.isFb) {
-      env.set(v.nameLower, makeFbInstance(v.type.name as FbTypeName));
+    if (v.type.kind === 'fb') {
+      env.set(v.nameLower, makeFbInstance(v.type.name));
       continue;
     }
+    if (v.type.kind === 'unknown') {
+      // Unknown-typed: empty container. Reads return "missing"
+      // until the user pokes something in.
+      env.set(v.nameLower, {
+        kind: 'unknown',
+        typeName: v.type.unknownName,
+        scalarValue: null,
+        members: new Map(),
+      });
+      continue;
+    }
+    // Scalar.
     if (v.initial) {
       const value = evalExpr(v.initial, initCtx);
-      env.set(v.nameLower, coerceTo(value, v.type.name as ScalarTypeName, v.line));
+      env.set(v.nameLower, coerceTo(value, v.type.name, v.line));
     } else {
-      const meta = TYPE_META[v.type.name as ScalarTypeName];
-      env.set(v.nameLower, scalar(v.type.name as ScalarTypeName, meta.defaultValue));
+      const meta = TYPE_META[v.type.name];
+      env.set(v.nameLower, scalar(v.type.name, meta.defaultValue));
     }
   }
   return env;
@@ -255,6 +318,18 @@ function execStatement(s: Statement, ctx: ScanContext): void {
           `cannot assign to FB instance "${s.target.name}" — call it instead`,
         );
       }
+      if (targetVar.kind === 'unknown') {
+        // Unknown-typed target: store the RHS scalar as-is.
+        // Whatever type the expression evaluated to becomes the
+        // current type of the unknown variable. The pill will
+        // render with that type's styling on the next render.
+        const sv = asScalar(value, s.line, `assignment to ${s.target.name}`);
+        ctx.env.set(s.target.nameLower, {
+          ...targetVar,
+          scalarValue: { kind: 'scalar', type: sv.type, value: sv.value },
+        });
+        return;
+      }
       const coerced = coerceTo(value, targetVar.type, s.line);
       ctx.env.set(s.target.nameLower, coerced);
       return;
@@ -324,6 +399,36 @@ function execStatement(s: Statement, ctx: ScanContext): void {
           'type-mismatch', s.line,
           `FOR loop variable cannot be an FB instance`,
         );
+      }
+      if (loopVarStored.kind === 'unknown') {
+        // Permissive: a FOR loop over an unknown-typed variable
+        // treats it like a DINT for stepping purposes. Each
+        // iteration writes the loop value through as a DINT
+        // scalar; the user can still poke a different value
+        // mid-loop and the next iteration overwrites it.
+        // Unusual to have an unknown loop var, but no reason to
+        // forbid it.
+        const ascending = stepN > 0n;
+        let i = startN;
+        while (ascending ? i <= endN : i >= endN) {
+          const iValue: ScalarValue = scalar('DINT', Number(i));
+          const cur = ctx.env.get(s.loopVar.nameLower);
+          if (cur && cur.kind === 'unknown') {
+            ctx.env.set(s.loopVar.nameLower, { ...cur, scalarValue: iValue });
+          }
+          try {
+            execStatements(s.body, ctx);
+          } catch (sig) {
+            if (sig instanceof ExitSignal) return;
+            if (sig instanceof ContinueSignal) {
+              // Fall through to the increment.
+            } else {
+              throw sig;
+            }
+          }
+          i += stepN;
+        }
+        return;
       }
       const targetType = loopVarStored.type;
 
@@ -448,6 +553,19 @@ function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
           `cannot read FB instance "${e.name}" directly — call it or read .member`,
         );
       }
+      // Unknown-typed bare variable: if the user has poked a
+      // value, return it. Otherwise we surface a clear runtime
+      // error rather than feed a default — silent zero-out
+      // would mask problems in the user's logic.
+      if (v.kind === 'unknown') {
+        if (v.scalarValue === null) {
+          throw new StRuntimeError(
+            'type-mismatch', e.line,
+            `variable "${e.name}" of unknown type "${v.typeName}" has no value yet — click its pill to poke one`,
+          );
+        }
+        return scalar(v.scalarValue.type, v.scalarValue.value);
+      }
       // Copy so downstream mutation doesn't leak.
       return scalar(v.type, v.value);
     }
@@ -478,6 +596,19 @@ function evalMember(e: MemberExpr, ctx: ScanContext): RuntimeValue {
       'internal', e.line,
       `internal: unknown variable "${e.object.name}" at runtime`,
     );
+  }
+  if (v.kind === 'unknown') {
+    // Unknown-typed member access: read whatever's been poked
+    // into this member, or surface a clear error if nothing has.
+    // Same policy as bare unknowns — no silent defaulting.
+    const poked = v.members.get(e.memberLower);
+    if (!poked) {
+      throw new StRuntimeError(
+        'type-mismatch', e.line,
+        `member "${e.object.name}.${e.member}" of unknown type "${v.typeName}" has no value yet — click its pill to poke one`,
+      );
+    }
+    return scalar(poked.type, poked.value);
   }
   if (v.kind !== 'fb') {
     throw new StRuntimeError(
@@ -1361,6 +1492,19 @@ function evalCall(
   if (targetVar && targetVar.kind === 'fb') {
     return tickFbCall(targetVar, originalName, args, line, ctx);
   }
+  if (targetVar && targetVar.kind === 'unknown') {
+    // Unknown FB-instance call: silently no-op. We don't have a
+    // schema, so we can't tick state or compute outputs. Args
+    // are NOT evaluated — that means side effects in arg
+    // expressions don't fire either. This is the simplest rule
+    // and the one least likely to surprise the user: a greyed-
+    // out call line means "this entire statement is on hold; the
+    // user drives it via pokes". Statement budget still
+    // decrements (handled by the caller in execStatement) so an
+    // infinite loop containing only unknown calls still
+    // terminates.
+    return scalar('BOOL', true);
+  }
 
   // Built-in path. Reject named args (we don't model parameter
   // names for built-ins — using `:=` here is a likely bug).
@@ -1421,11 +1565,13 @@ function tickFbCall(
       const v = asScalar(evalExpr(a.value, ctx), a.line, `argument ${a.name}`);
       inputs.set(a.nameLower, v);
     } else {
-      // named-out
-      if (!a.target) {
-        throw new StRuntimeError('internal', a.line, 'internal: named-out arg has no target');
+      // named-out — `target` may be null when the user wrote
+      // `Q =>` with nothing after (TwinCAT allows this; the
+      // output is named but not bound). Skip the post-call copy
+      // for that case.
+      if (a.target) {
+        outputBindings.push({ paramLower: a.nameLower, target: a.target, line: a.line });
       }
-      outputBindings.push({ paramLower: a.nameLower, target: a.target, line: a.line });
     }
   }
 
@@ -1457,6 +1603,17 @@ function tickFbCall(
         `cannot bind FB output to FB instance "${ob.target.name}"`,
       );
     }
+    if (targetVar.kind === 'unknown') {
+      // Bind into an unknown-typed target — store the FB output
+      // value as the unknown's current scalar value, with the
+      // FB-output's type. The pill will pick up the type and
+      // render with the right styling.
+      ctx.env.set(ob.target.nameLower, {
+        ...targetVar,
+        scalarValue: { kind: 'scalar', type: outV.type, value: outV.value },
+      });
+      continue;
+    }
     ctx.env.set(ob.target.nameLower, coerceTo(outV, targetVar.type, ob.line));
   }
 
@@ -1479,6 +1636,10 @@ function tickFbCall(
  */
 export function formatRuntimeValue(v: RuntimeValue): string {
   if (v.kind === 'fb') return `<${v.fbType}>`;
+  if (v.kind === 'unknown') {
+    if (v.scalarValue === null) return `<${v.typeName}?>`;
+    return formatRuntimeValue(v.scalarValue);
+  }
   switch (v.type) {
     case 'BOOL': return (v.value as boolean) ? 'TRUE' : 'FALSE';
     case 'STRING': return `'${v.value as string}'`;
@@ -1672,11 +1833,17 @@ function parseTimeBody(body: string): number | null {
 }
 
 /**
- * Apply a parsed poke to the env. Caller has already validated
- * the variable is a scalar (FB instances aren't pokeable). The
- * value is coerced to the variable's declared type one more time
- * to enforce ST assignment semantics — the user typing 9999 into
- * a BYTE wraps to 9999 mod 256.
+ * Apply a parsed poke to the env. The variable may be:
+ *   - A known scalar — value is coerced to the declared type
+ *     (so a BYTE receiving 9999 wraps to 9999 mod 256).
+ *   - An unknown-typed bare variable — value is stored as-is
+ *     with whatever type the parsed input has. The "type
+ *     inference from input syntax" lives in parsePokeInputForUnknown
+ *     (the caller picks parsePokeInput vs parsePokeInputForUnknown
+ *     based on whether the variable's type is known).
+ *   - An FB instance — rejected; FB instances aren't directly
+ *     pokeable. Use pokeMember for FB outputs (also rejected for
+ *     known FBs since their members are derived).
  */
 export function pokeVariable(
   env: Environment, nameLower: string, value: ScalarValue, line: number,
@@ -1687,6 +1854,17 @@ export function pokeVariable(
     return { ok: false, error: `cannot poke FB instance "${nameLower}"` };
   }
   try {
+    if (v.kind === 'unknown') {
+      // Store the value as the unknown's current scalar — type
+      // inferred from what the user typed (already done by the
+      // caller, who chose parsePokeInputForUnknown). No coerce:
+      // there's no declared type to coerce to.
+      env.set(nameLower, {
+        ...v,
+        scalarValue: { kind: 'scalar', type: value.type, value: value.value },
+      });
+      return { ok: true };
+    }
     const coerced = coerceTo(value, v.type, line);
     env.set(nameLower, coerced);
     return { ok: true };
@@ -1696,4 +1874,134 @@ export function pokeVariable(
     }
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/**
+ * Poke a value into a member of an unknown-typed variable.
+ *
+ * Used for things like `MyUnknownFb.SomeOutput := <value>` from
+ * the inline editor when the user clicks an unknown-FB member
+ * pill. Rejected for known FBs since their members are derived
+ * from the tick function and would be overwritten next scan
+ * anyway.
+ *
+ * Like pokeVariable for unknowns: the value's type is taken as-is
+ * (the caller has already inferred it via parsePokeInputForUnknown).
+ */
+export function pokeMember(
+  env: Environment, objectNameLower: string, memberLower: string,
+  value: ScalarValue, _line: number,
+): { ok: true } | { ok: false; error: string } {
+  const v = env.get(objectNameLower);
+  if (!v) return { ok: false, error: `unknown variable "${objectNameLower}"` };
+  if (v.kind === 'fb') {
+    return {
+      ok: false,
+      error: `cannot poke member of known FB "${objectNameLower}" — its outputs are computed each scan`,
+    };
+  }
+  if (v.kind !== 'unknown') {
+    return {
+      ok: false,
+      error: `"${objectNameLower}" is not an FB or unknown-typed instance`,
+    };
+  }
+  // We can't structurally clone the Map cheaply in plain JS land,
+  // so we just mutate it. The env reference itself is unchanged
+  // — that's fine because the version-bump in the modal forces
+  // a re-render.
+  v.members.set(memberLower, {
+    kind: 'scalar', type: value.type, value: value.value,
+  });
+  return { ok: true };
+}
+
+/**
+ * Parse poke input for an unknown-typed variable, inferring the
+ * value's type from the syntax of what the user typed.
+ *
+ * Inference rules (checked in this order, first match wins):
+ *
+ *   1. TRUE / FALSE / true / false                → BOOL
+ *   2. Quoted: 'foo' or "foo"                     → STRING
+ *   3. Time literal: T#1s, TIME#…, t#100ms        → TIME
+ *   4. Number with `.` or `e` exponent            → LREAL
+ *   5. Hex / oct / bin (16#FF, 2#1010, 8#777)     → DINT
+ *   6. Plain integer (signed)                     → DINT
+ *
+ * Anything else is treated as an unquoted STRING. This is
+ * permissive on purpose — the unknown-poke flow is "user wants
+ * to drive a thing without telling us what type it is", and
+ * it's easier to forgive ambiguous input than to bounce it.
+ *
+ * Returned ScalarValue is suitable to pass into pokeVariable /
+ * pokeMember on an unknown-typed target.
+ */
+export function parsePokeInputForUnknown(
+  raw: string,
+): { ok: true; value: ScalarValue } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, error: 'empty value' };
+  }
+
+  // 1. BOOL
+  const low = trimmed.toLowerCase();
+  if (low === 'true')  return { ok: true, value: scalar('BOOL', true)  };
+  if (low === 'false') return { ok: true, value: scalar('BOOL', false) };
+
+  // 2. Quoted string
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) ||
+      (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2)) {
+    return { ok: true, value: scalar('STRING', trimmed.slice(1, -1)) };
+  }
+
+  // 3. TIME literal
+  const upper = trimmed.toUpperCase();
+  if (upper.startsWith('T#') || upper.startsWith('TIME#')) {
+    const body = trimmed.slice(upper.startsWith('TIME#') ? 5 : 2);
+    const ms = parseTimeBody(body);
+    if (ms != null) {
+      return { ok: true, value: scalar('TIME', ms) };
+    }
+    // Falls through to "treat as string" below — better than
+    // erroring; the user can re-poke if they really meant TIME.
+  }
+
+  // Hex / oct / bin
+  const cleaned = trimmed.replace(/_/g, '');
+  const baseMatch = cleaned.match(/^(-?)(2|8|16)#([0-9a-fA-F]+)$/);
+  if (baseMatch) {
+    try {
+      const sign = baseMatch[1] === '-' ? -1n : 1n;
+      const base = parseInt(baseMatch[2], 10);
+      const digits = baseMatch[3];
+      const big = sign * BigInt('0' + (base === 2 ? 'b' : base === 8 ? 'o' : 'x') + digits);
+      // DINT range; if it's too big we could promote but the
+      // unknown-poke flow doesn't care that much. JS Number
+      // handles it fine for display either way.
+      return { ok: true, value: scalar('DINT', Number(big)) };
+    } catch {
+      // Falls through.
+    }
+  }
+
+  // 4. Real (has `.` or scientific `e`)
+  if (/[.eE]/.test(cleaned)) {
+    const n = Number(cleaned);
+    if (Number.isFinite(n)) {
+      return { ok: true, value: scalar('LREAL', n) };
+    }
+  }
+
+  // 5. Plain integer
+  if (/^-?\d+$/.test(cleaned)) {
+    const n = Number(cleaned);
+    if (Number.isFinite(n)) {
+      return { ok: true, value: scalar('DINT', n) };
+    }
+  }
+
+  // Fallback: unquoted string.
+  return { ok: true, value: scalar('STRING', trimmed) };
 }

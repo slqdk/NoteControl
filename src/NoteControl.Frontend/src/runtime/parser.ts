@@ -34,7 +34,7 @@
  */
 
 import {
-  type ParsedProgram, type ProgramDecl, type VarDecl,
+  type ParsedProgram, type ProgramDecl, type VarDecl, type TypeRef,
   type Statement, type Expr, type CaseLabel, type CaseBranch,
   type IfBranch, type LiteralExpr, type VarRefExpr, type BinaryOp,
   type CallArg,
@@ -141,55 +141,86 @@ class Parser {
   }
 
   consumeOptionalEndProgram(): void {
-    this.acceptKeyword('end_program');
+    // Accept any of the POU terminators. The runtime treats all
+    // POU types the same (a body executed once per scan), so we
+    // don't need to enforce that END_FUNCTION_BLOCK pairs only
+    // with FUNCTION_BLOCK — TwinCAT's exporter writes the right
+    // pair, and a hand-paste with a wrong terminator is harmless.
+    this.acceptKeyword('end_program') ||
+      this.acceptKeyword('end_function_block') ||
+      this.acceptKeyword('end_function');
   }
 
   // -- Declaration --------------------------------------------
 
   parseProgramHeader(): ProgramDecl {
-    // Accept optional leading PROGRAM <name>. The body inside
-    // VAR/END_VAR is what really matters; the header is mostly
-    // a label.
+    // Accept any POU header keyword (PROGRAM, FUNCTION_BLOCK,
+    // FUNCTION) — the runtime treats them all as "a body to run
+    // once per scan, with a flat variable table". This lets the
+    // user paste a real FB or function from TwinCAT and exercise
+    // its logic in the sandbox without first having to re-shape
+    // it into a PROGRAM by hand. The semantic distinction between
+    // VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT / VAR doesn't matter
+    // here either: in the sandbox every variable is just a slot
+    // the body reads and writes (and the user can poke), so we
+    // collapse them all into a single flat list.
     let name = '(unnamed)';
-    if (this.acceptKeyword('program')) {
+    if (this.acceptKeyword('program') ||
+        this.acceptKeyword('function_block') ||
+        this.acceptKeyword('function')) {
       const id = this.peek();
       if (id.kind !== 'IDENT') {
-        throw this.err(id, `expected program name after PROGRAM, got ${describeToken(id)}`);
+        throw this.err(id, `expected POU name after the header keyword, got ${describeToken(id)}`);
       }
       name = id.value;
       this.consume();
-    } else if (
-      this.peek().kind === 'KEYWORD' &&
-      ['function', 'function_block'].includes(this.peek().value)
-    ) {
-      const t = this.peek();
-      throw this.err(
-        t,
-        `${t.value.toUpperCase()} POUs aren't supported in v1 — use PROGRAM`,
-      );
+      // FUNCTION POUs declare a return type after the name:
+      //   FUNCTION FooBar : INT
+      // We accept the colon-and-type but ignore it — the v1
+      // runtime has no concept of "function return value", and
+      // when the body is run it just executes statements.
+      if (this.acceptPunct(':')) {
+        const t = this.peek();
+        if (t.kind !== 'IDENT' && t.kind !== 'KEYWORD') {
+          throw this.err(t, `expected return type after ":", got ${describeToken(t)}`);
+        }
+        this.consume();
+      }
     }
 
     const vars: VarDecl[] = [];
 
-    // One or more VAR sections. Reject the non-VAR forms (input/
-    // output/etc.) with a clear message.
+    // Any VAR / VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT / VAR_TEMP
+    // section opens a flat declaration list. We loop accepting
+    // any of them in any order until we run out of section
+    // keywords; the body of each shares parseVarSection which
+    // appends to the same flat `vars` list. All variables become
+    // local-scope at runtime — no input/output distinction is
+    // observable.
+    const VAR_OPENERS = new Set([
+      'var', 'var_input', 'var_output', 'var_in_out',
+      'var_temp', 'var_global', 'var_external',
+    ]);
     while (true) {
       const t = this.peek();
-      if (t.kind === 'KEYWORD' && t.value === 'var') {
+      if (t.kind === 'KEYWORD' && VAR_OPENERS.has(t.value)) {
         this.consume();
+        // Some VAR_INPUT / VAR_OUTPUT sections have modifier
+        // keywords like `CONSTANT`, `RETAIN`, `PERSISTENT` after
+        // the section keyword. Skip them — they're attributes,
+        // not part of variable shape. (We don't enforce them.)
+        while (true) {
+          const m = this.peek();
+          if (m.kind === 'KEYWORD' &&
+              (m.value === 'constant' || m.value === 'retain' ||
+               m.value === 'persistent')) {
+            this.consume();
+            continue;
+          }
+          break;
+        }
         this.parseVarSection(vars);
         continue;
-      }
-      if (
-        t.kind === 'KEYWORD' &&
-        (t.value === 'var_input' || t.value === 'var_output' ||
-         t.value === 'var_in_out' || t.value === 'var_temp' ||
-         t.value === 'var_global' || t.value === 'var_external')
-      ) {
-        throw this.err(
-          t,
-          `${t.value.toUpperCase()} sections aren't supported in v1 — only VAR`,
-        );
       }
       break;
     }
@@ -225,34 +256,46 @@ class Parser {
       }
       this.expectPunct(':');
 
-      // Type — first try scalar, then FB types. The TypeRef
-      // carries an `isFb` flag so the interpreter can branch on
-      // it without re-parsing the type name.
+      // Type — first try scalar, then known FB types, then fall
+      // back to "unknown". Unknown is for user-defined FBs and
+      // DUTs the v1 runtime doesn't understand: the variable is
+      // still allocated and pokeable, but no scan logic runs for
+      // it. The TypeRef variant carries which case applies so the
+      // interpreter can branch cleanly.
       const typeTok = this.peek();
       if (typeTok.kind !== 'IDENT' && typeTok.kind !== 'KEYWORD') {
         throw this.err(typeTok, `expected type name, got ${describeToken(typeTok)}`);
       }
       const scalarName = lookupTypeName(typeTok.value);
       const fbName = scalarName ? null : lookupFbType(typeTok.value);
-      if (!scalarName && !fbName) {
-        throw this.err(
-          typeTok,
-          `unknown type "${typeTok.value}" (v1 supports standard scalars and TON, TOF, R_TRIG, F_TRIG)`,
-        );
+      let typeRef: TypeRef;
+      if (scalarName) {
+        typeRef = { kind: 'scalar', name: scalarName, line: typeTok.line };
+      } else if (fbName) {
+        typeRef = { kind: 'fb', name: fbName, line: typeTok.line };
+      } else {
+        // Unknown: a user-defined FB instance, struct, enum, or
+        // similar. We accept the declaration so the body can
+        // still be run; the interpreter treats reads/writes as
+        // poke-driven values rather than computed ones.
+        typeRef = {
+          kind: 'unknown',
+          unknownName: typeTok.value,
+          line: typeTok.line,
+        };
       }
-      const typeRef = scalarName
-        ? { name: scalarName, isFb: false as const, line: typeTok.line }
-        : { name: fbName!, isFb: true as const, line: typeTok.line };
       this.consume();
 
       // Optional initial value — only meaningful for scalars.
-      // FB instances have internal state init done by the runtime.
+      // FB instances (known or unknown) have internal state init
+      // done by the runtime, so we still reject `:= ...` for
+      // anything that isn't a scalar.
       let initial: Expr | null = null;
       if (this.acceptPunct(':=')) {
-        if (typeRef.isFb) {
+        if (typeRef.kind !== 'scalar') {
           throw this.err(
             typeTok,
-            `FB instances cannot have an initial value (drop the := for "${typeTok.value}")`,
+            `${typeRef.kind === 'fb' ? 'FB instances' : 'unknown-typed variables'} cannot have an initial value (drop the := for "${typeTok.value}")`,
           );
         }
         initial = this.parseExpression();
@@ -849,31 +892,49 @@ class Parser {
         };
       }
       if (next.kind === 'PUNCT' && next.value === '=>') {
-        // named-out — RHS must be a plain identifier.
+        // Named-out: `OutName => target` where the FB's output
+        // is copied to a variable after the call. The target is
+        // OPTIONAL — TwinCAT lets the user write `Q =>` (or
+        // `Q => ,`) to declare an output without binding it.
+        // Treat the missing target as a no-op binding (we still
+        // emit a named-out arg so the FB schema sees the output
+        // was named, but with target=null the interpreter just
+        // skips the post-call copy).
         this.consume(); // IDENT (param name)
         this.consume(); // =>
         const tgt = this.peek();
-        if (tgt.kind !== 'IDENT') {
-          throw this.err(
-            tgt,
-            `expected variable name after "=>", got ${describeToken(tgt)}`,
-          );
+        if (tgt.kind === 'IDENT') {
+          this.consume();
+          return {
+            kind: 'named-out',
+            name: first.value,
+            nameLower: first.value.toLowerCase(),
+            value: null,
+            target: {
+              kind: 'VarRef',
+              name: tgt.value,
+              nameLower: tgt.value.toLowerCase(),
+              line: tgt.line,
+              column: tgt.column,
+            },
+            line: first.line,
+          };
         }
-        this.consume();
-        return {
-          kind: 'named-out',
-          name: first.value,
-          nameLower: first.value.toLowerCase(),
-          value: null,
-          target: {
-            kind: 'VarRef',
-            name: tgt.value,
-            nameLower: tgt.value.toLowerCase(),
-            line: tgt.line,
-            column: tgt.column,
-          },
-          line: first.line,
-        };
+        // Empty target (the next token is `,` or `)`). Accept it.
+        if (tgt.kind === 'PUNCT' && (tgt.value === ',' || tgt.value === ')')) {
+          return {
+            kind: 'named-out',
+            name: first.value,
+            nameLower: first.value.toLowerCase(),
+            value: null,
+            target: null,
+            line: first.line,
+          };
+        }
+        throw this.err(
+          tgt,
+          `expected variable name or "," / ")" after "=>", got ${describeToken(tgt)}`,
+        );
       }
     }
     // Positional

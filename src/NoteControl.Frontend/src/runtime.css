@@ -380,6 +380,39 @@
 }
 
 /* ----------------------------------------------------------------
+ * Unknown-typed identifiers and pills.
+ *
+ * When a variable's declared type is one the v1 runtime doesn't
+ * have a schema for (a user-defined FB or DUT), the identifier
+ * itself is rendered with reduced opacity in the source pane and
+ * the pill next to it is faded. The user can still poke the pill
+ * — the type is inferred from the input syntax — so the styling
+ * is "this is on hold, drive it manually" rather than "this is
+ * disabled".
+ *
+ * The pill keeps its pokeable hover / focus styles so the
+ * affordance is still visible. We just lower the contrast on the
+ * resting state.
+ * ---------------------------------------------------------------- */
+.nc-runtime-ident-unknown {
+  opacity: 0.55;
+}
+.nc-runtime-pill-unknown {
+  opacity: 0.7;
+  /* Slightly different fill so unknown-poked pills don't look
+   * identical to known-typed ones — the eye picks up that they
+   * came from a different source. Same hue family as the default
+   * pill; just less saturation. */
+  background: var(--nc-runtime-pill-unknown-bg, #efe9d4);
+  border-style: dashed;
+}
+/* Pokeable + unknown: hover lifts opacity so the user sees the
+ * pill come "alive" when interacted with. */
+.nc-runtime-pill-unknown.nc-runtime-pill-pokeable:hover {
+  opacity: 1;
+}
+
+/* ----------------------------------------------------------------
  * Footer — note about scope.
  * ---------------------------------------------------------------- */
 .nc-runtime-modal-footer {

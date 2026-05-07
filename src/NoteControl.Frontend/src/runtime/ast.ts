@@ -47,18 +47,36 @@ export type ScalarTypeName =
  */
 export type FbTypeName = 'TON' | 'TOF' | 'R_TRIG' | 'F_TRIG';
 
-export interface TypeRef {
-  /** Canonical uppercase type name. May be a scalar OR an FB
-   *  type — the interpreter dispatches on which. */
-  name: ScalarTypeName | FbTypeName;
-  /** True when this is an FB type. Set by the parser based on
-   *  the `lookupFbType` lookup. The interpreter uses this to
-   *  decide between regular value semantics and FB-instance
-   *  semantics. */
-  isFb: boolean;
-  /** 1-indexed source line where the type was named. */
-  line: number;
-}
+/**
+ * A reference to a type used in a variable declaration.
+ *
+ * Three variants, distinguished by `kind`:
+ *
+ *   - 'scalar' — a known scalar type from `ScalarTypeName`.
+ *     `name` holds the canonical uppercase name. The interpreter
+ *     stores values via TYPE_META lookup.
+ *
+ *   - 'fb' — a known built-in FB type (TON, TOF, R_TRIG, F_TRIG).
+ *     `name` holds the canonical uppercase name. The interpreter
+ *     instantiates a known schema for it.
+ *
+ *   - 'unknown' — a user-defined FB or DUT (struct / enum / etc.)
+ *     that the v1 runtime doesn't have a schema for. We accept
+ *     these declarations so a hand-pasted FB body can run with the
+ *     known parts of its logic intact: the unknown variable is
+ *     still allocated in env, gets greyed in the source pane, and
+ *     can hold poked values (the user manually drives it). The
+ *     `unknownName` is the original-cased type identifier as
+ *     written, kept for tooltips and diagnostics.
+ *
+ * The discriminator deliberately replaces the old `isFb: boolean`
+ * field. Three states need three labels; a boolean was already
+ * fragile (it didn't distinguish "unknown" from anything).
+ */
+export type TypeRef =
+  | { kind: 'scalar'; name: ScalarTypeName; line: number }
+  | { kind: 'fb'; name: FbTypeName; line: number }
+  | { kind: 'unknown'; unknownName: string; line: number };
 
 // --- Declarations ----------------------------------------------
 

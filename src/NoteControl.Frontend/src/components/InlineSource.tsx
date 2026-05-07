@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { Environment, RuntimeValue } from '../runtime/interpreter';
+import type { Environment, RuntimeValue, ScalarValue } from '../runtime/interpreter';
 import {
-  formatRuntimeValue, parsePokeInput, pokeVariable,
+  formatRuntimeValue, parsePokeInput, parsePokeInputForUnknown,
+  pokeVariable, pokeMember,
 } from '../runtime/interpreter';
 import type {
   ParsedProgram, VarRefExpr, Statement, Expr, ScalarTypeName,
@@ -23,9 +24,18 @@ import type {
  *   - Pills are clickable when poking is enabled — single-click
  *     opens an inline editor for any scalar type. BOOLs ALSO
  *     accept a double-click that toggles their value directly
- *     (no editor — fast path for "flip this bit"). FB-instance
- *     and FB-member pills are read-only (member values are
- *     derived; the user can't poke an FB output).
+ *     (no editor — fast path for "flip this bit").
+ *   - Variables of unknown type (user-defined FBs / DUTs the v1
+ *     runtime doesn't have a schema for) and their members render
+ *     with greyed-out identifier text and a faded pill so the
+ *     user sees they're not "really running" — but the pill is
+ *     still pokeable, and the type of the poked value is inferred
+ *     from input syntax (TRUE → BOOL, T#1s → TIME, 3.14 → REAL,
+ *     etc.). Once a value has been poked into an unknown, BOOL
+ *     ones support the same double-click toggle as declared BOOLs.
+ *   - Built-in FB members (TON.Q, TON.ET) are read-only — they're
+ *     derived from the FB's tick state and would be overwritten
+ *     next scan, so letting the user poke them would be a lie.
  */
 export interface InlineSourceProps {
   source: string;
@@ -68,6 +78,18 @@ interface Decoration {
   payload: VarPayload | MemberPayload;
 }
 
+/** Identity of the variable / member being edited in the inline
+ *  editor. For bare unknowns and known scalars `memberLower` is
+ *  null; for unknown-FB member pokes the object is `nameLower`
+ *  and the field is `memberLower`. */
+interface EditingTarget {
+  line: number;
+  column: number;
+  nameLower: string;
+  /** null for bare-variable poke, set for member poke. */
+  memberLower: string | null;
+}
+
 export function InlineSource({
   source, program, env, errorLine, envVersion, pokeEnabled,
 }: InlineSourceProps) {
@@ -77,9 +99,7 @@ export function InlineSource({
   // Active poke session. Null when nothing is being edited. Used
   // for exclusivity (only one poke at a time) and so the user's
   // input field doesn't fight the scan loop's value updates.
-  const [editing, setEditing] = useState<{
-    line: number; column: number; nameLower: string;
-  } | null>(null);
+  const [editing, setEditing] = useState<EditingTarget | null>(null);
 
   // After a successful poke, force a re-render so all pills (not
   // just the edited one) reflect the new value.
@@ -237,14 +257,34 @@ function collectDecorations(
   return out;
 }
 
+/**
+ * Decide whether the variable referenced by a decoration is of
+ * unknown type. We use this to grey out the identifier in the
+ * source pane and to pick the right poke-input parser.
+ *
+ * For member-access decorations, "unknown" means the OBJECT is
+ * unknown — the member itself doesn't have a separate type
+ * declaration in our model. (TON.Q is "known-FB member" and
+ * known-FB members are always known-typed; only the body of the
+ * unknown FB has the "what's this field's type" gap.)
+ */
+function isUnknownAt(d: Decoration, env: Environment): boolean {
+  if (d.payload.kind === 'var') {
+    const v = env.get(d.payload.nameLower);
+    return v?.kind === 'unknown';
+  }
+  const obj = env.get(d.payload.objectLower);
+  return obj?.kind === 'unknown';
+}
+
 function renderLine(
   text: string,
   decos: Decoration[],
   env: Environment,
   lineNum: number,
   pokeEnabled: boolean,
-  editing: { line: number; column: number; nameLower: string } | null,
-  setEditing: (v: { line: number; column: number; nameLower: string } | null) => void,
+  editing: EditingTarget | null,
+  setEditing: (v: EditingTarget | null) => void,
   forceRender: () => void,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
@@ -256,7 +296,23 @@ function renderLine(
     const idEnd = idStart + d.length;
     if (idStart < cursor) continue;
     if (idEnd > text.length) continue;
-    out.push(text.slice(cursor, idEnd));
+    // Plain text up to the start of the identifier.
+    if (idStart > cursor) {
+      out.push(text.slice(cursor, idStart));
+    }
+    // The identifier itself — wrapped in a span so we can grey
+    // it when it refers to an unknown-typed variable. (Native
+    // text doesn't accept className, hence the wrapper.)
+    const identText = text.slice(idStart, idEnd);
+    if (isUnknownAt(d, env)) {
+      out.push(
+        <span key={`id${pillKey}`} className="nc-runtime-ident-unknown">
+          {identText}
+        </span>,
+      );
+    } else {
+      out.push(identText);
+    }
     out.push(renderPill(
       d, env, pillKey++, lineNum, pokeEnabled, editing, setEditing, forceRender,
     ));
@@ -272,73 +328,179 @@ function renderLine(
   return out;
 }
 
+/**
+ * Pill-rendering data, gathered up-front so the BOOL-toggle and
+ * editor-spawn paths read uniformly. `pokeKind` selects which
+ * runtime poke API the editor calls, and `currentText` is the
+ * pre-filled value for the editor.
+ */
+interface PillData {
+  formattedValue: string;
+  pillType: ScalarTypeName | null;
+  isBoolTrue: boolean;
+  /** True when there's no known value yet (unknown var/member
+   *  not poked, or the env lookup failed). */
+  isMissing: boolean;
+  /** True when the underlying variable is of unknown type,
+   *  regardless of whether a value has been poked. */
+  isUnknownTyped: boolean;
+  /** What kind of poke the editor will perform when the user
+   *  commits. null when this pill isn't pokeable at all (FB
+   *  instance bare ref, FB-known-member). */
+  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member' | null;
+}
+
+function gatherPillData(
+  d: Decoration, env: Environment,
+): PillData {
+  const empty: PillData = {
+    formattedValue: '?',
+    pillType: null,
+    isBoolTrue: false,
+    isMissing: true,
+    isUnknownTyped: false,
+    pokeKind: null,
+  };
+
+  if (d.payload.kind === 'var') {
+    const v: RuntimeValue | undefined = env.get(d.payload.nameLower);
+    if (!v) return empty;
+    if (v.kind === 'fb') {
+      // FB-typed variable referenced bare. Show the type tag so
+      // the user sees it's an FB. Not pokeable.
+      return {
+        ...empty,
+        formattedValue: `<${v.fbType}>`,
+        isMissing: false,
+      };
+    }
+    if (v.kind === 'unknown') {
+      // Unknown-typed bare variable. Pokeable; type is inferred
+      // from input syntax. If the user has poked something, show
+      // that value with its inferred type's styling.
+      if (v.scalarValue === null) {
+        return {
+          ...empty,
+          formattedValue: `<${v.typeName}?>`,
+          isUnknownTyped: true,
+          pokeKind: 'unknown-var',
+          // isMissing stays true so the pill renders muted but
+          // still highlights as pokeable.
+        };
+      }
+      const sv = v.scalarValue;
+      return {
+        formattedValue: formatRuntimeValue(sv),
+        pillType: sv.type,
+        isBoolTrue: sv.type === 'BOOL' && sv.value === true,
+        isMissing: false,
+        isUnknownTyped: true,
+        pokeKind: 'unknown-var',
+      };
+    }
+    // Known scalar.
+    return {
+      formattedValue: formatRuntimeValue(v),
+      pillType: v.type,
+      isBoolTrue: v.type === 'BOOL' && v.value === true,
+      isMissing: false,
+      isUnknownTyped: false,
+      pokeKind: 'scalar',
+    };
+  }
+
+  // Member access.
+  const obj = env.get(d.payload.objectLower);
+  if (!obj) return empty;
+  if (obj.kind === 'unknown') {
+    // Unknown FB member. Pokeable; same inference rules as bare
+    // unknowns. Look up whatever's been poked into this member.
+    const poked = obj.members.get(d.payload.memberLower);
+    if (!poked) {
+      return {
+        ...empty,
+        formattedValue: '?',
+        isUnknownTyped: true,
+        pokeKind: 'unknown-member',
+      };
+    }
+    return {
+      formattedValue: formatRuntimeValue(poked),
+      pillType: poked.type,
+      isBoolTrue: poked.type === 'BOOL' && poked.value === true,
+      isMissing: false,
+      isUnknownTyped: true,
+      pokeKind: 'unknown-member',
+    };
+  }
+  if (obj.kind !== 'fb') return empty;
+  // Known FB member — derive from FB state. Read-only: members
+  // are computed each scan, so any poke would be overwritten.
+  const ms = obj.state;
+  const memberLower = d.payload.memberLower;
+  if (memberLower === 'q') {
+    const q = ms.q === true;
+    return {
+      formattedValue: q ? 'TRUE' : 'FALSE',
+      pillType: 'BOOL',
+      isBoolTrue: q,
+      isMissing: false,
+      isUnknownTyped: false,
+      pokeKind: null,
+    };
+  }
+  if (memberLower === 'et') {
+    const et = (ms.et ?? 0) as number;
+    return {
+      formattedValue: formatTimeForPill(et),
+      pillType: 'TIME',
+      isBoolTrue: false,
+      isMissing: false,
+      isUnknownTyped: false,
+      pokeKind: null,
+    };
+  }
+  return empty;
+}
+
 function renderPill(
   d: Decoration,
   env: Environment,
   key: number,
   lineNum: number,
   pokeEnabled: boolean,
-  editing: { line: number; column: number; nameLower: string } | null,
-  setEditing: (v: { line: number; column: number; nameLower: string } | null) => void,
+  editing: EditingTarget | null,
+  setEditing: (v: EditingTarget | null) => void,
   forceRender: () => void,
 ): React.ReactNode {
-  let formattedValue: string;
-  let pillType: ScalarTypeName | null = null;
-  let isBoolTrue = false;
-  let isMissing = false;
+  const data = gatherPillData(d, env);
 
-  if (d.payload.kind === 'var') {
-    const v: RuntimeValue | undefined = env.get(d.payload.nameLower);
-    if (!v) {
-      formattedValue = '?';
-      isMissing = true;
-    } else if (v.kind === 'fb') {
-      // FB-typed variable referenced bare (not via member). Show
-      // the type tag so the user sees it's an FB. Not pokeable.
-      formattedValue = `<${v.fbType}>`;
-    } else {
-      formattedValue = formatRuntimeValue(v);
-      pillType = v.type;
-      if (v.type === 'BOOL') isBoolTrue = v.value === true;
-    }
-  } else {
-    // Member access — derive the current member value.
-    const obj = env.get(d.payload.objectLower);
-    if (!obj || obj.kind !== 'fb') {
-      formattedValue = '?';
-      isMissing = true;
-    } else {
-      const ms = obj.state;
-      const memberLower = d.payload.memberLower;
-      if (memberLower === 'q') {
-        const q = ms.q === true;
-        formattedValue = q ? 'TRUE' : 'FALSE';
-        pillType = 'BOOL';
-        isBoolTrue = q;
-      } else if (memberLower === 'et') {
-        const et = (ms.et ?? 0) as number;
-        formattedValue = formatTimeForPill(et);
-        pillType = 'TIME';
-      } else {
-        formattedValue = '?';
-        isMissing = true;
-      }
-    }
-  }
+  // Identify "is this pill being edited right now". For
+  // bare-variable pills (var-payload AND unknown-var poke kind),
+  // `memberLower` on the editing target is null. For unknown-FB
+  // member pills it's the lowercased member name.
+  const editTargetMemberLower =
+    d.payload.kind === 'member' && data.pokeKind === 'unknown-member'
+      ? d.payload.memberLower
+      : null;
+  const editTargetNameLower =
+    d.payload.kind === 'member' ? d.payload.objectLower : d.payload.nameLower;
 
   const isEditing =
-    editing !== null &&
-    d.payload.kind === 'var' &&
+    editing !== null && data.pokeKind !== null &&
     editing.line === lineNum &&
     editing.column === d.column &&
-    editing.nameLower === d.payload.nameLower;
+    editing.nameLower === editTargetNameLower &&
+    editing.memberLower === editTargetMemberLower;
 
-  if (isEditing && d.payload.kind === 'var') {
+  if (isEditing) {
     return (
       <PillEditor
         key={key}
-        nameLower={d.payload.nameLower}
-        currentText={formattedValue.replace(/^'|'$/g, '')}
+        nameLower={editTargetNameLower}
+        memberLower={editTargetMemberLower}
+        pokeKind={data.pokeKind!}
+        currentText={data.formattedValue.replace(/^'|'$/g, '')}
         env={env}
         onCommit={(success) => {
           setEditing(null);
@@ -349,86 +511,81 @@ function renderPill(
   }
 
   let cls = 'nc-runtime-pill';
-  if (isMissing) cls += ' nc-runtime-pill-missing';
-  else if (pillType === 'BOOL') {
-    cls += isBoolTrue
+  if (data.isMissing) cls += ' nc-runtime-pill-missing';
+  else if (data.pillType === 'BOOL') {
+    cls += data.isBoolTrue
       ? ' nc-runtime-pill-bool nc-runtime-pill-bool-true'
       : ' nc-runtime-pill-bool nc-runtime-pill-bool-false';
   }
+  if (data.isUnknownTyped) cls += ' nc-runtime-pill-unknown';
 
-  // Pokeable: scalar var only, type known, poking enabled.
-  const canPoke =
-    pokeEnabled && !isMissing &&
-    d.payload.kind === 'var' && pillType !== null;
+  // Pokeable when the pill has an editing path AND poking is
+  // enabled. Unknown-var without a poked value is still pokeable
+  // (in fact that's the main use — empty pill, click to populate).
+  const canPoke = pokeEnabled && data.pokeKind !== null;
   if (canPoke) cls += ' nc-runtime-pill-pokeable';
 
-  // BOOL var pills support a double-click toggle as a fast path.
-  // FB-member BOOLs (e.g. Timer01.Q) are NOT toggleable — they're
-  // derived outputs of the FB and would be overwritten next scan
-  // anyway, so letting the user "toggle" them would be a lie.
-  const canToggleBool =
-    canPoke && d.payload.kind === 'var' && pillType === 'BOOL';
+  // BOOL pills support a double-click toggle. For unknown-typed,
+  // we only treat them as BOOL if a BOOL has actually been poked;
+  // otherwise the type isn't known yet and there's nothing to
+  // toggle.
+  const canToggleBool = canPoke && data.pillType === 'BOOL' && !data.isMissing;
 
-  // Tooltip text — surfaces both interaction affordances when
-  // they're present so the double-click toggle is discoverable
-  // (it has no other visual cue).
+  // Tooltip — surfaces both interaction affordances when present
+  // and notes the unknown-type origin so the greyed pill is
+  // self-explanatory.
   let tooltip: string;
   if (d.payload.kind === 'var') {
-    tooltip = `${d.payload.name} : ${pillType ?? '?'}`;
-    if (canToggleBool) {
-      tooltip += ' (double-click to toggle, click to edit)';
-    } else if (canPoke) {
-      tooltip += ' (click to edit)';
-    }
+    const v = env.get(d.payload.nameLower);
+    const typeLabel =
+      v?.kind === 'unknown'
+        ? `${v.typeName} (unknown — poked value)`
+        : data.pillType ?? '?';
+    tooltip = `${d.payload.name} : ${typeLabel}`;
   } else {
-    tooltip = `${d.payload.objectName}.${d.payload.memberName} : ${pillType ?? '?'}`;
+    const obj = env.get(d.payload.objectLower);
+    const typeLabel =
+      obj?.kind === 'unknown'
+        ? `member of ${obj.typeName} (unknown — poked value)`
+        : data.pillType ?? '?';
+    tooltip = `${d.payload.objectName}.${d.payload.memberName} : ${typeLabel}`;
+  }
+  if (canToggleBool) {
+    tooltip += ' — double-click to toggle, click to edit';
+  } else if (canPoke) {
+    tooltip += ' — click to edit';
   }
 
-  // Single-click handler: open the inline editor. Same as before.
-  // Note we use onClick (not onMouseDown) so the browser's native
-  // double-click detection still works — onClick fires for both
-  // halves of a double-click, which is fine because the editor's
-  // "open" is idempotent (setEditing on the same target is a no-op
-  // beyond the first call within the same render cycle, and React
-  // batches state updates anyway).
-  const handleClick = canPoke && d.payload.kind === 'var'
+  // Single-click handler: open the inline editor.
+  const handleClick = canPoke
     ? () => {
-        if (d.payload.kind === 'var') {
-          setEditing({
-            line: lineNum,
-            column: d.column,
-            nameLower: d.payload.nameLower,
-          });
-        }
+        setEditing({
+          line: lineNum,
+          column: d.column,
+          nameLower: editTargetNameLower,
+          memberLower: editTargetMemberLower,
+        });
       }
     : undefined;
 
-  // Double-click handler: BOOLs toggle directly via pokeVariable.
-  // We swallow the event so the single-click path's editor doesn't
-  // remain open underneath — but importantly we close it explicitly
-  // after the toggle, since the first click of the double-click
-  // pair will have opened the editor. The forceRender() at the end
-  // makes the new BOOL value paint immediately rather than waiting
-  // for the next scan tick.
-  const handleDoubleClick = canToggleBool && d.payload.kind === 'var'
+  // Double-click handler: BOOL pills toggle directly. Routed
+  // through pokeVariable / pokeMember as appropriate so unknown
+  // BOOLs (poked-as-BOOL) toggle the same way as declared BOOLs.
+  const handleDoubleClick = canToggleBool
     ? (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (d.payload.kind !== 'var') return;
-        const current = env.get(d.payload.nameLower);
-        if (!current || current.kind !== 'scalar' || current.type !== 'BOOL') {
-          return;
+        const flipped = !data.isBoolTrue;
+        const newVal: ScalarValue = {
+          kind: 'scalar', type: 'BOOL', value: flipped,
+        };
+        let result;
+        if (data.pokeKind === 'unknown-member') {
+          result = pokeMember(env, editTargetNameLower, editTargetMemberLower!, newVal, 0);
+        } else {
+          result = pokeVariable(env, editTargetNameLower, newVal, 0);
         }
-        const flipped = current.value === true ? false : true;
-        const result = pokeVariable(
-          env, d.payload.nameLower,
-          { kind: 'scalar', type: 'BOOL', value: flipped },
-          0,
-        );
         if (result.ok) {
-          // If the editor was opened by the first click of the
-          // double-click pair, close it so we don't strand an
-          // input field on top of the toggled pill.
           setEditing(null);
           forceRender();
         }
@@ -445,15 +602,17 @@ function renderPill(
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
-      {formattedValue}
+      {data.formattedValue}
     </span>
   );
 }
 
 function PillEditor({
-  nameLower, currentText, env, onCommit,
+  nameLower, memberLower, pokeKind, currentText, env, onCommit,
 }: {
   nameLower: string;
+  memberLower: string | null;
+  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member';
   currentText: string;
   env: Environment;
   onCommit(success: boolean): void;
@@ -469,25 +628,47 @@ function PillEditor({
     }
   }, []);
 
-  const v = env.get(nameLower);
-  if (!v || v.kind !== 'scalar') {
-    return null;
+  // For known scalars we need the declared type to drive
+  // parsePokeInput — for unknowns we use the inference parser
+  // and there's no declared type to check.
+  let targetType: ScalarTypeName | null = null;
+  if (pokeKind === 'scalar') {
+    const v = env.get(nameLower);
+    if (!v || v.kind !== 'scalar') return null;
+    targetType = v.type;
   }
-  const targetType = v.type;
 
   function commit() {
-    const parsed = parsePokeInput(text, targetType);
+    let parsed:
+      | { ok: true; value: ScalarValue }
+      | { ok: false; error: string };
+    if (pokeKind === 'scalar') {
+      parsed = parsePokeInput(text, targetType!);
+    } else {
+      parsed = parsePokeInputForUnknown(text);
+    }
     if (!parsed.ok) {
       setError(parsed.error);
       return;
     }
-    const result = pokeVariable(env, nameLower, parsed.value, 0);
+    const result = pokeKind === 'unknown-member'
+      ? pokeMember(env, nameLower, memberLower!, parsed.value, 0)
+      : pokeVariable(env, nameLower, parsed.value, 0);
     if (!result.ok) {
       setError(result.error);
       return;
     }
     onCommit(true);
   }
+
+  // Tooltip differs by poke kind: for known scalars we can show
+  // the declared type, for unknowns we just say "unknown".
+  const tooltipBase =
+    pokeKind === 'scalar'
+      ? `${nameLower} : ${targetType}`
+      : pokeKind === 'unknown-member'
+        ? `${nameLower}.${memberLower} : (unknown — type inferred from input)`
+        : `${nameLower} : (unknown — type inferred from input)`;
 
   return (
     <span className="nc-runtime-pill nc-runtime-pill-editing">
@@ -520,8 +701,8 @@ function PillEditor({
             commit();
           }
         }}
-        title={error ?? `${nameLower} : ${targetType}`}
-        aria-label={`Edit ${nameLower}`}
+        title={error ?? tooltipBase}
+        aria-label={`Edit ${nameLower}${memberLower ? '.' + memberLower : ''}`}
       />
     </span>
   );

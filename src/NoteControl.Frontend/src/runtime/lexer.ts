@@ -122,6 +122,34 @@ export function tokenize(source: string): Token[] {
       continue;
     }
 
+    // Pragma / attribute block: {attribute 'hide_all_locals'},
+    // {region ...}, etc. These are TwinCAT compiler directives
+    // that appear in InterfaceAsPlainText exports — we don't need
+    // to do anything with them; just skip past the closing brace.
+    // Newlines inside (rare but legal) are tracked.
+    if (ch === '{') {
+      const startLine = line;
+      const startCol = col();
+      i++;
+      while (i < n && source[i] !== '}') {
+        if (source[i] === '\n') {
+          line++;
+          i++;
+          lineStart = i;
+        } else {
+          i++;
+        }
+      }
+      if (i >= n) {
+        throw new StParseError(
+          'lex', startLine, startCol,
+          'unterminated pragma block (missing "}")',
+        );
+      }
+      i++; // past closing brace
+      continue;
+    }
+
     // Block comment (* ... *)
     if (ch === '(' && source[i + 1] === '*') {
       const startLine = line;
