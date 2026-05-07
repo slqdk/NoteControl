@@ -31,6 +31,7 @@ import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { showToast } from '../utils/toast';
 import type { NoteDto } from '../api/types';
 import type { SaveState } from './SaveStatusIndicator';
 import { TableToolbar } from './TableToolbar';
@@ -38,7 +39,22 @@ import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
 import { MobileNoteProperties } from './MobileNoteProperties';
 
-const AUTOSAVE_DEBOUNCE_MS = 2000;
+// Coalesce rapid keystrokes into one PUT, but do it quickly enough
+// that a typical pause-and-navigate gesture lets the save fire
+// before the user moves on. 800ms is the Notion / Google Docs
+// neighbourhood. The old 2000ms felt unresponsive and meant a
+// quick edit + tree-click could leave the change unsaved.
+//
+// In addition to the debounce, the editor also flushes the pending
+// save synchronously on:
+//   - editor blur (clicking away from the editor surface)
+//   - tab / window losing visibility
+//   - component unmount (best-effort fire-and-forget; the request
+//     races with the unmount but the server still receives it)
+//   - Ctrl+S / Cmd+S keyboard shortcut
+// so the debounce delay matters less for "I'm leaving the note"
+// scenarios than it used to.
+const AUTOSAVE_DEBOUNCE_MS = 800;
 
 /** Public shape for an in-flight upload, surfaced to the host page. */
 export interface EditorUpload {
@@ -46,6 +62,22 @@ export interface EditorUpload {
   info: UploadInfo;
   error?: string;
 }
+
+/**
+ * Outcome of a saveNow() call. Used by the navigation guard to
+ * decide whether to show the "save failed" dialog before letting
+ * a click-away navigation through.
+ *
+ *   'ok'       - saved successfully, or nothing to save.
+ *   'failed'   - network/server error. Toast + red badge already
+ *                shown; the dialog (if invoked from the guard) is
+ *                in addition to those.
+ *   'conflict' - 412 from the server. Treated the same as 'failed'
+ *                by the guard (don't navigate without confirmation),
+ *                but the Retry button is hidden because retrying
+ *                wouldn't help.
+ */
+export type SaveNowOutcome = 'ok' | 'failed' | 'conflict';
 
 interface NoteEditorProps {
   vaultId: string;
@@ -59,6 +91,14 @@ interface NoteEditorProps {
    */
   onSaveStateChange?: (state: SaveState) => void;
   onUploadsChange?: (uploads: EditorUpload[]) => void;
+  /**
+   * Reports a stable saveNow function up to the host so the host
+   * can wire it to the Retry button in the SaveStatusIndicator
+   * AND to the navigation guard. Called once per editor mount.
+   * The function bypasses the debounce, awaits the current/next
+   * save attempt, and resolves to 'ok' | 'failed' | 'conflict'.
+   */
+  onSaveNowReady?: (saveNow: () => Promise<SaveNowOutcome>) => void;
 }
 
 /**
@@ -79,6 +119,7 @@ export function NoteEditor({
   initialNote,
   onSaveStateChange,
   onUploadsChange,
+  onSaveNowReady,
 }: NoteEditorProps) {
   // Ship 84: drives whether we render the mobile properties section
   // below the editor's page area. Desktop never sees that block —
@@ -149,53 +190,106 @@ export function NoteEditor({
   // at the current selection.
   const [tableInsertDialogOpen, setTableInsertDialogOpen] = useState(false);
 
-  const performSave = useCallback(async () => {
+  // Tracks the currently-running performSave promise, if any. Lets
+  // saveNow() wait for an in-flight debounced save to settle rather
+  // than racing with it. Cleared in the finally block.
+  const inFlightPromiseRef = useRef<Promise<SaveNowOutcome> | null>(null);
+
+  const performSave = useCallback(async (): Promise<SaveNowOutcome> => {
     const editor = editorRef.current;
-    if (!editor) return;
+    if (!editor) return 'ok';
 
     const markdown = editor.storage.markdown.getMarkdown() as string;
     if (markdown === lastSavedMarkdownRef.current) {
       setSaveState({ kind: 'saved' });
-      return;
+      return 'ok';
     }
 
-    if (inFlightRef.current) {
+    // Re-entrant call while a save is already running: stash the
+    // latest markdown and join the existing promise. The in-flight
+    // save's finally block will pick up pendingMarkdownRef and
+    // chain a follow-up; that follow-up returns to all awaiters
+    // through the promise we hand back here.
+    //
+    // Note we explicitly return the in-flight promise so saveNow()
+    // sees the FINAL outcome (after any chained follow-up), not
+    // the intermediate one.
+    if (inFlightRef.current && inFlightPromiseRef.current !== null) {
       pendingMarkdownRef.current = markdown;
-      return;
+      return inFlightPromiseRef.current;
     }
 
     inFlightRef.current = true;
     setSaveState({ kind: 'saving' });
 
-    try {
-      const updated = await notesApi.update(vaultId, initialNote.path, {
-        body: markdown,
-        etag: etagRef.current,
-      });
-      etagRef.current = updated.etag;
-      lastSavedMarkdownRef.current = markdown;
-      setSaveState({ kind: 'saved' });
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 412) {
-        setSaveState({
-          kind: 'conflict',
-          message:
-            'Another change was saved while you were editing. ' +
-            'Reload the note to see the latest version (your unsaved changes will be lost).',
+    const promise = (async (): Promise<SaveNowOutcome> => {
+      let outcome: SaveNowOutcome;
+      try {
+        const updated = await notesApi.update(vaultId, initialNote.path, {
+          body: markdown,
+          etag: etagRef.current,
         });
-      } else {
-        const message = e instanceof Error ? e.message : 'Save failed.';
-        setSaveState({ kind: 'error', message });
+        etagRef.current = updated.etag;
+        lastSavedMarkdownRef.current = markdown;
+        setSaveState({ kind: 'saved' });
+        outcome = 'ok';
+      } catch (e) {
+        // Surface the failure loudly. The small badge in the breadcrumb
+        // row was easy to miss - the user reported assuming the save
+        // worked and losing work. A toast forces the failure into the
+        // user's attention; the badge stays errored until either a
+        // manual Retry, the next keystroke (which re-arms the debounce
+        // and fires a fresh PUT), or a successful save.
+        if (e instanceof ApiError && e.status === 412) {
+          const message =
+            'Another change was saved while you were editing. ' +
+            'Reload the note to see the latest version (your unsaved changes will be lost).';
+          setSaveState({ kind: 'conflict', message });
+          showToast('Save conflict - reload the note', 6000);
+          outcome = 'conflict';
+        } else {
+          const message = e instanceof Error ? e.message : 'Save failed.';
+          setSaveState({ kind: 'error', message });
+          // Slightly longer toast for save errors than the default
+          // 3s - users need to register that "saved" never appeared.
+          showToast(`Save failed: ${message}`, 6000);
+          outcome = 'failed';
+        }
+      } finally {
+        inFlightRef.current = false;
       }
-    } finally {
-      inFlightRef.current = false;
 
+      // Pending follow-up: a re-entrant call landed during the
+      // network round-trip. Chain a fresh save (immediate, NOT
+      // debounced - the user has already paused; no need to wait
+      // another 800ms before the second save). The chained save's
+      // outcome supersedes the one we just computed - that's the
+      // value awaiters should see.
+      //
+      // The recursive call uses the `performSave` name from the
+      // enclosing useCallback. By the time this async closure
+      // runs, `performSave` is bound to the same callback we're
+      // inside, so the recursion picks up the latest version
+      // (and goes through the normal path, since inFlightRef is
+      // false again at this point).
       if (pendingMarkdownRef.current !== null) {
         const next = pendingMarkdownRef.current;
         pendingMarkdownRef.current = null;
         if (next !== lastSavedMarkdownRef.current) {
-          scheduleSave();
+          outcome = await performSave();
         }
+      }
+      return outcome;
+    })();
+
+    inFlightPromiseRef.current = promise;
+    try {
+      return await promise;
+    } finally {
+      // Only clear if this was the most recent in-flight - a
+      // chained recursion may have replaced it.
+      if (inFlightPromiseRef.current === promise) {
+        inFlightPromiseRef.current = null;
       }
     }
   }, [vaultId, initialNote.path]);
@@ -209,6 +303,46 @@ export function NoteEditor({
       void performSave();
     }, AUTOSAVE_DEBOUNCE_MS);
   }, [performSave]);
+
+  /**
+   * Bypass the debounce and save immediately. Used by:
+   *   - editor blur (clicked away from the surface)
+   *   - tab / window visibility change (going hidden)
+   *   - component unmount (best-effort fire-and-forget)
+   *   - Ctrl+S / Cmd+S
+   *   - manual Retry button on the save-status indicator
+   *   - the navigation guard (click another note while dirty)
+   *
+   * Returns 'ok' | 'failed' | 'conflict' so callers that care
+   * (the navigation guard) can react. Most call sites ignore the
+   * return value - the toast and badge tell the user enough on
+   * their own.
+   *
+   * If a debounced save is already in flight, this awaits THAT
+   * save (and any chained follow-up) rather than starting a fresh
+   * one - the in-flight save already represents the latest text,
+   * so duplicating it would double-PUT for no reason.
+   */
+  const saveNow = useCallback(async (): Promise<SaveNowOutcome> => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    return await performSave();
+  }, [performSave]);
+
+  // Hand saveNow up to the host once (and again if its identity
+  // changes - it stays stable across renders unless performSave
+  // itself rebinds, which only happens when initialNote.path or
+  // vaultId change). The host wires this to the Retry button on
+  // the SaveStatusIndicator.
+  const onSaveNowReadyRef = useRef(onSaveNowReady);
+  useEffect(() => {
+    onSaveNowReadyRef.current = onSaveNowReady;
+  }, [onSaveNowReady]);
+  useEffect(() => {
+    onSaveNowReadyRef.current?.(saveNow);
+  }, [saveNow]);
 
   const editor = useEditor(
     {
@@ -388,6 +522,23 @@ export function NoteEditor({
           }
         }
       },
+      // When the editor loses focus (user clicks the properties
+      // panel, the tree, the breadcrumb, anywhere outside the
+      // ProseMirror surface), flush any pending save right away.
+      // This is the "click away = save" gesture the user asked
+      // for. It also covers tab-key escape and most non-keyboard
+      // navigation gestures.
+      //
+      // Bubble menu / table toolbar clicks: ProseMirror keeps
+      // focus on the editor for these (they use mousedown
+      // preventDefault internally), so they don't trigger blur.
+      // If they did, calling saveNow() here would still be safe -
+      // performSave is idempotent when nothing has changed.
+      onBlur: () => {
+        if (debounceTimerRef.current !== null) {
+          void saveNow();
+        }
+      },
     },
     [initialNote.path],
   );
@@ -416,11 +567,77 @@ export function NoteEditor({
 
   useEffect(() => {
     return () => {
+      // On unmount (note switch, navigating away from the editor
+      // route, full SPA tear-down), fire any pending save instead
+      // of just cancelling the debounce timer. The previous
+      // behaviour - clear the timer and walk away - was the source
+      // of the bug where a quick edit + tree-click lost the change.
+      //
+      // This is fire-and-forget: by the time the cleanup runs the
+      // component is gone, so there's nothing to await against.
+      // The fetch lives on past unmount and reaches the server
+      // regardless. If it fails, there's no UI here to surface
+      // it - but the error already toasted via performSave's catch
+      // (showToast lives on document.body, independent of React's
+      // tree), and the next time the user opens the note they'll
+      // see the unsaved version.
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        // Fire the save we were holding back. performSave reads
+        // the editor via editorRef.current, which is still pointing
+        // at the live editor at this moment in the cleanup phase
+        // (it's nulled by the editor's own teardown shortly after).
+        void performSave();
       }
     };
-  }, []);
+  }, [performSave]);
+
+  // Save on tab/window visibility change. When the user switches
+  // tabs, minimises, or otherwise hides this page, flush any
+  // pending edits so they aren't lost if the browser is closed
+  // from the OS task switcher.
+  //
+  // We use visibilitychange rather than blur on window because
+  // window-blur fires for trivial focus shifts (clicking the
+  // address bar) which doesn't justify a network call.
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden') {
+        if (debounceTimerRef.current !== null || saveState.kind === 'dirty') {
+          void saveNow();
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [saveNow, saveState.kind]);
+
+  // Ctrl+S / Cmd+S: force-save now. Documented behaviour in
+  // notes.md ("Ctrl+S - force-save (debounced auto-save runs
+  // anyway)") that wasn't actually wired up before this ship.
+  // We listen on the window so the shortcut works even when
+  // focus is in the bubble menu / table toolbar / properties
+  // panel, not just the editor surface itself.
+  //
+  // preventDefault stops the browser's "save page as..." dialog,
+  // which would otherwise pop up over the app.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const isSave =
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        (e.key === 's' || e.key === 'S');
+      if (!isSave) return;
+      e.preventDefault();
+      void saveNow();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [saveNow]);
 
   /**
    * Rewrite the `src` of <img>, <video>, and <source> elements so a

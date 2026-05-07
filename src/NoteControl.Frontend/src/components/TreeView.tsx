@@ -20,6 +20,7 @@ import {
   useTreeDragDrop,
 } from '../utils/treeDragDrop';
 import { useTreeBehaviour } from '../settings/treeBehaviour';
+import { requestNavigation } from '../hooks/navigationGuard';
 
 /**
  * Selection in the tree. Drives row highlight and properties panel.
@@ -299,7 +300,29 @@ export function TreeView({
     };
   }
 
-  function navigateToFolder(path: string) {
+  /**
+   * Both folder and note navigation consult the global navigation
+   * guard before dispatching to react-router AND before updating
+   * tree selection. The guard is a no-op when no editor is
+   * mounted, or when the editor is clean. When the editor is
+   * dirty it tries to save; if the save fails, the guard shows a
+   * "save failed" dialog and asks the user to choose
+   * stay-and-retry vs discard-and-leave.
+   *
+   * Selection is updated only on 'allow' so that a blocked
+   * navigation doesn't leave the properties panel pointing at the
+   * new row while the URL still points at the old one. The chevron-
+   * toggle (rowClickExpands) still runs at the click site - that
+   * doesn't navigate, so it doesn't go through the guard.
+   *
+   * For non-editor navigation contexts (the folder view) the
+   * guard is null, requestNavigation returns 'allow' immediately,
+   * and the click goes through with no perceptible latency.
+   */
+  async function navigateToFolder(path: string, sel: TreeSelection) {
+    const verdict = await requestNavigation();
+    if (verdict === 'block') return;
+    onSelect(sel);
     if (path === '') {
       navigate(`/vaults/${vaultId}`);
     } else {
@@ -307,7 +330,10 @@ export function TreeView({
     }
   }
 
-  function navigateToNote(path: string) {
+  async function navigateToNote(path: string, sel: TreeSelection) {
+    const verdict = await requestNavigation();
+    if (verdict === 'block') return;
+    onSelect(sel);
     navigate(`/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`);
   }
 
@@ -368,8 +394,7 @@ export function TreeView({
                 path: folderPath,
                 name: nameFromPath(folderPath),
               };
-              onSelect(sel);
-              navigateToFolder(folderPath);
+              void navigateToFolder(folderPath, sel);
               // Step 36: when "whole row toggles expand" is on, a
               // single row click also toggles the folder's expand
               // state. The chevron-only mode (rowClickExpands=false)
@@ -537,8 +562,7 @@ export function TreeView({
         icon={noteIcon(variant)}
         onRowClick={() => {
           const sel: TreeSelection = { kind: 'note', path: note.path, name: note.name };
-          onSelect(sel);
-          navigateToNote(note.path);
+          void navigateToNote(note.path, sel);
         }}
         onContextMenu={(e: MouseEvent) => {
           const sel: TreeSelection = { kind: 'note', path: note.path, name: note.name };
