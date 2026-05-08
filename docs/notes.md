@@ -3,7 +3,7 @@
 Notes are plain markdown files on disk. Folders are folders.
 Templates are markdown files in a special subfolder. Read this
 when you're touching the editor, the slash menu, paste handling,
-the tree, daily notes, or templates.
+the tree, daily notes, templates, or the ST sandbox.
 
 ## File-on-disk model
 
@@ -81,17 +81,13 @@ The editor is TipTap-based. What it supports out of the box:
 - **Code blocks** with editable language tag. Syntax
   highlighting via lowlight, with a custom **Structured Text
   (TwinCAT 3 ST)** language registered — the keywords for ST
-  are recognised case-insensitively.
+  are recognised case-insensitively. ST code blocks have a
+  Run button in the header that opens the **ST sandbox** (see
+  below).
 - **Tables** (3×3 default, header row, with a toolbar for
-  add/remove rows and columns). Column widths set by dragging
-  the column resize handle persist across saves; row height
-  is configurable per table via the toolbar's More-options
-  panel.
+  add/remove rows and columns).
 - **Callouts** in 5 variants: error, warning, info, tip, note.
-  Each is a colour-coded box with an icon. Callouts can
-  contain any block content — paragraphs, lists, headings,
-  code blocks, tables — and inline marks (bold, italic, etc.)
-  inside the body round-trip correctly through save/reload.
+  Each is a colour-coded box with an icon.
 - **Images**: inline, with hover controls (resize, replace,
   delete, alt-text).
 - **Videos**: inline, with hover controls (similar to images).
@@ -104,34 +100,12 @@ What the editor does NOT do:
   filesystem mtime gives you. (Backups are how you go back.)
 - No outline / minimap.
 
-### Cursor escape from trailing blocks
-
-The doc always ends with an empty paragraph the user can click
-into when its last block is a "trapping" block — one whose
-node-view occupies a full row and doesn't itself accept a click
-below as "outside the block". This covers callouts, tables,
-code blocks, horizontal rules, images, and videos. The
-guarantee holds both on initial load (a saved note that ended
-with a callout reopens with a clickable line beneath it) and
-during editing (deleting the paragraph below a callout
-re-creates an empty one).
-
-The trailing paragraph is part of the editor state only — it
-serialises to nothing in markdown — so it doesn't show up in
-the saved `.md` file and doesn't appear when the file is
-viewed outside NoteControl. It also can't be undone away with
-Ctrl+Z.
-
 ### Keyboard shortcuts
 
 The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
 (italic), Ctrl+U (underline), Ctrl+K (link), etc. Plus:
 
-- **Ctrl+S** — force-save. Bypasses the debounce and also
-  cancels any pending debounced save so there's no double-PUT.
-  Suppresses the browser's "Save page as..." dialog. See
-  [frontend.md](frontend.md#editor-view) for the full list of
-  flush triggers and the navigation-guard behaviour.
+- **Ctrl+S** — force-save (debounced auto-save runs anyway).
 - **Tab / Shift-Tab** in lists — indent / outdent.
 - **/** at the start of a paragraph — open the slash menu.
 - **Ctrl+Backspace** in a table cell — delete the cell's row
@@ -169,20 +143,9 @@ infix.
 ### Bubble menu
 
 Selection in the editor floats a small toolbar with: bold,
-italic, link (text input), inline code, and **Save selection
-as template**. The link button uses the browser's
-`window.prompt` today (queue item: replace with a proper
-modal).
-
-The "Save selection as template" button takes the current
-selection and creates a new template from it. If the selection
-crosses a table boundary on either side (a common case where
-ProseMirror's table plugin would otherwise restrict the
-selection to either a CellSelection or a paragraph-only
-range), the saved range is expanded outward to enclose the
-whole table — the user gets "what I selected, plus any table
-I touched", never a selection that visibly contained a table
-but was saved without it.
+italic, link (text input), inline code. The link button uses
+the browser's `window.prompt` today (queue item: replace with a
+proper modal).
 
 ### Paste
 
@@ -300,6 +263,199 @@ editor:
   (avoids template-of-template recursion in the picker).
 - Otherwise behaves the same: callouts, code blocks, lists,
   tables, and so on are all available.
+
+## ST sandbox
+
+When a code block's language tag is `st` (the TwinCAT 3
+Structured Text dialect), a Run button appears in the block's
+header. Clicking it opens the **ST sandbox** — a modal that
+parses the code, runs it as a scan loop, and lets the user
+poke values mid-run. It's a teaching / scratchpad tool, not a
+PLC simulator.
+
+### Modal layout
+
+The modal has three regions:
+
+- **Toolbar**: Run / Step / Stop / Reset, a Cycle dropdown
+  (1ms / 10ms / 100ms / 1s), and live readouts of `scan` (the
+  scan counter) and `t` (accumulated scan time).
+- **Declaration pane**: shows either the raw declaration text
+  or a live watch table — see *Source / Watch toggle* below.
+- **Implementation pane**: the body source with **inline value
+  pills** spliced in after every variable reference and
+  member access.
+
+Errors display in a red banner at the top with the offending
+line, and the corresponding line in the Implementation pane is
+highlighted. The runtime halts on error; click Reset to clear.
+
+### Accepted code shape
+
+The sandbox accepts hand-pasted TwinCAT exports, including the
+PLCOpenXML "InterfaceAsPlainText" form. Specifically:
+
+- **POU header**: optional `PROGRAM <Name>`,
+  `FUNCTION_BLOCK <Name>`, or `FUNCTION <Name> : <ReturnType>`.
+  All three are treated as "a body to run once per scan with a
+  flat variable table." `FUNCTION` return types are accepted
+  syntactically but never produced — the body just executes.
+- **Variable sections**: `VAR`, `VAR_INPUT`, `VAR_OUTPUT`,
+  `VAR_IN_OUT`, `VAR_TEMP`, `VAR_GLOBAL`, `VAR_EXTERNAL`. All
+  recognised; all collapsed into a single flat scope. The
+  section the variable came from is **display-only** — shown
+  as a coloured tag in the watch table, but the runtime makes
+  no input/output distinction.
+- **Modifier keywords** after a section keyword: `CONSTANT`,
+  `RETAIN`, `PERSISTENT`. Skipped (not enforced).
+- **Pragma blocks**: `{attribute 'hide_all_locals'}`,
+  `{region ...}`, etc. Skipped at the lexer level.
+- **Multi-decl on one line**: `a, b, c : INT;` accepted.
+- **Initial values**: only on scalar declarations.
+  `:=` after an FB-typed or unknown-typed variable is rejected.
+- **Terminators**: `END_PROGRAM`, `END_FUNCTION_BLOCK`, and
+  `END_FUNCTION` all accepted (interchangeably).
+
+### Types
+
+**Scalar types** are stored and computed natively:
+
+- BOOL, BYTE, WORD, DWORD, LWORD
+- SINT, INT, DINT, LINT
+- USINT, UINT, UDINT, ULINT
+- REAL, LREAL
+- TIME (stored as integer milliseconds)
+- STRING
+
+Integer overflow follows IEC wrap-on-assignment rules. REAL/
+LREAL use JS numbers (binary64). TIME is signed milliseconds.
+
+**Built-in FB types**: TON, TOF, R_TRIG, F_TRIG. Each ticks
+correctly per scan; the user can read `.Q`, `.ET` (TON/TOF),
+or just `.Q` (R_TRIG/F_TRIG).
+
+**Unknown types** — anything not in the lists above (custom
+function blocks like `FB_MyController`, structs like
+`ST_Settings`, enums, union types) — are **accepted at parse
+time** but treated as opaque containers:
+
+- Calls to unknown FB instances in the body silently no-op.
+  Argument expressions are NOT evaluated, output bindings
+  are NOT written.
+- Reading an unknown bare variable or unknown member before
+  it's been poked raises a runtime error ("has no value yet
+  — click its pill to poke one"). No silent defaulting.
+- The user pokes values into unknown variables and members
+  to drive them manually. The poked value's type is
+  **inferred from the input syntax** — `TRUE` / `FALSE` →
+  BOOL, `T#1s` / `TIME#…` → TIME, `'foo'` / `"bar"` →
+  STRING, `3.14` → LREAL, `42` → DINT, `16#FF` / `2#1010`
+  → DINT, anything else → unquoted STRING.
+- Unknown identifiers in the source are rendered with reduced
+  opacity in both panes so the user sees they're "on hold."
+
+### Built-in functions
+
+- **Arithmetic / math**: `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`.
+- **Bit shifts**: `SHL`, `SHR`, `ROL`, `ROR`.
+- **Type conversions** — every scalar pair, in two forms:
+  `TO_<TARGET>(x)` (modern short form) and
+  `<SOURCE>_TO_<TARGET>(x)` (legacy long form). The long form
+  ignores the source label and dispatches on the runtime
+  value's actual type, matching TwinCAT.
+  Conversion semantics:
+  - Numeric → numeric: wrap-on-overflow per the assignment rule.
+  - BOOL → numeric: TRUE → 1, FALSE → 0. Numeric → BOOL: 0 →
+    FALSE, anything else → TRUE.
+  - TIME ↔ numeric: TIME values pass as milliseconds; numeric
+    → TIME clamps to ≥0 ms, truncates to integer.
+  - STRING ↔ scalar: STRING → numeric parses decimal, hex
+    (`16#FF`), octal (`8#777`), binary (`2#1010`), with
+    optional sign / underscores / whitespace; STRING → BOOL
+    accepts `TRUE`/`FALSE`/`1`/`0` case-insensitively;
+    STRING → TIME accepts `T#…` form or a bare ms count;
+    Numeric/BOOL/TIME → STRING formats decimally.
+
+### Inline value pills (Implementation pane)
+
+Each variable reference and member access in the body is
+followed by a small pill showing the current runtime value.
+Behaviours:
+
+- **BOOL pills** are filled (blue = TRUE, black = FALSE).
+  Other types are border-only with the value as text.
+- **Single-click** any pokeable pill → opens an inline editor
+  where you type a new value, Enter to commit, Escape to
+  cancel. The new value lands in the env immediately and
+  drives the next scan tick.
+- **Double-click** a BOOL pill → toggles the value directly
+  (no editor). Works on declared BOOLs and on unknowns where
+  a BOOL has been poked.
+- **FB-instance bare references** (e.g. `Timer01` shown as
+  `<TON>`) are not pokeable — call them or read a member.
+- **Built-in FB members** (e.g. `Timer01.Q`, `Timer01.ET`)
+  are read-only — they're computed from the FB's tick state
+  each scan, so a poke would be overwritten next tick.
+- **Unknown-typed pills** are faded with a dashed border;
+  they remain pokeable, with type inferred from input.
+
+Errors during a scan halt the loop and highlight the offending
+line. The pill on that line shows the value at the moment of
+failure. Click Reset to clear and start over.
+
+### Source / Watch toggle (Declaration pane)
+
+The Declaration pane has a Source / Watch toggle in its title
+bar. Source shows the raw declaration text (read-only).
+Watch shows a scrollable live table:
+
+- Columns: **Name**, **Type**, **Value**, **Section**.
+- Section is a small coloured pill: input (blue), output
+  (amber), in_out (purple), local (gray), temp (cyan),
+  global (green), external (pink).
+- Built-in and unknown FB instances get an expand chevron;
+  clicking expands to indented member rows underneath.
+  Built-in FB members render read-only; unknown FB members
+  are pokeable.
+- Value cells use the same poke rules as the inline pills:
+  single-click to edit, double-click BOOL to toggle.
+
+The pane defaults to **Source** on first open and **auto-
+flips to Watch** on the first successful scan. Once the user
+manually toggles, their choice is honoured for the rest of
+the modal session. Expand/collapse state resets when the
+modal closes.
+
+### Runtime safety
+
+- **Statement budget per scan**: the interpreter limits how
+  many statements a single scan can execute. Hitting the
+  limit halts with a "scan budget exceeded" error — typically
+  an unbounded `WHILE` or `REPEAT` in the body.
+- **No real-time guarantees**. The Cycle setting picks a
+  target interval but the scan runs on `setInterval`; under
+  load, ticks can drift or stack. The displayed `t` is the
+  accumulated *target* scan time, not wall-clock.
+- **No filesystem, no network, no asset access**. The
+  sandbox runs in-page; the body cannot touch the note's
+  contents, other notes, or anything outside the env.
+
+### What the sandbox does NOT do
+
+- No multi-POU programs. One body per code block; no
+  cross-block calls.
+- No `TYPE ... END_TYPE` declarations (struct / enum / union /
+  alias DUTs are rejected at parse time). Use unknown types
+  instead — declare a variable with the DUT name and poke its
+  members.
+- No arrays. `ARRAY [..] OF X` syntax fails at parse time, and
+  array indexing (`x[0]`) isn't accepted in the body either.
+- No pointers or references. `POINTER TO X` / `REFERENCE TO X`
+  fail at parse time; `ADR()`, `REF=`, and `^` dereference are
+  not recognised.
+- No persistence between modal sessions. Closing and
+  reopening the modal loses all poked values, scan counts,
+  and expand state.
 
 ## Tree view
 

@@ -493,9 +493,10 @@ export function RuntimeModal({
 
         <div className="nc-runtime-modal-footer">
           <span className="nc-runtime-modal-foot-note">
-            Live values shown next to each variable reference. v1
-            scope: scalars + IF/CASE/FOR/WHILE/REPEAT only — no
-            timers or function blocks yet.
+            Click a value to edit. Double-click a BOOL to toggle.
+            Built-in FBs: TON, TOF, R_TRIG, F_TRIG. Unknown types
+            are accepted and pokeable. See the ST sandbox section
+            in the docs for details.
           </span>
         </div>
       </div>
