@@ -2,7 +2,7 @@
 
 The browser-side React + TypeScript SPA. Read this when you're
 touching routes, the top bar, the properties panel, sticky
-notes, RSS blocks, the startpage, settings, or the appearance
+notes, RSS blocks, dashboards, settings, or the appearance
 system. The editor itself, slash menu, daily-note formatting,
 and tree behaviour are documented in [notes.md](notes.md).
 
@@ -16,16 +16,17 @@ The full route table:
 | `/vaults` | Vault list | required | Picks a vault. Auto-redirects to last-opened vault if one is remembered. |
 | `/vaults/:vaultId` | Folder view | required | Tree on the left, folder contents in the middle, properties on the right. |
 | `/vaults/:vaultId/note?path=…` | Editor | required | Single-note editor. The path is URL-encoded. |
-| `/vaults/:vaultId/startpage` | Startpage | required | Per-vault dashboard with movable blocks. |
+| `/vaults/:vaultId/dashboards/:dashboardId` | Dashboard | required | One dashboard's free-floating canvas. See [Dashboards](#dashboards). |
+| `/vaults/:vaultId/startpage` | (redirect) | required | Legacy alias. Loads the vault's dashboard list and replaces itself with the first dashboard's URL. Kept so existing links (the tray's "open vault" menu, the vault list page, user bookmarks) still land somewhere useful. |
 | `/vaults/:vaultId/templates` | Templates | required | Manages the vault's template files. Has its own header (no shared layout). |
 | `*` (anything else) | redirect to `/vaults` | n/a | |
 
-The folder, editor, and startpage routes share a common
+The folder, editor, and dashboard routes share a common
 **VaultLayout** that mounts once per vault session. Switching
-between a folder and a note (or between two notes) does not
-unmount the layout — the tree's cached children, expanded set,
-and selection survive navigation. The templates page does NOT
-use this layout (it's full-width).
+between a folder, a note, or a dashboard does not unmount the
+layout — the tree's cached children, expanded set, selection,
+AND the loaded dashboards config all survive navigation. The
+templates page does NOT use this layout (it's full-width).
 
 ## App frame
 
@@ -48,36 +49,29 @@ Cross-tab changes propagate via the `storage` event.
 
 The top bar contains, left to right:
 
-1. **Vault picker** — desktop-only, rendered when the full
-   vault list is loaded. Pills (avatar + name) render in
-   original order; as many fit in the available width as the
-   slot allows. The remainder fold into a **"+N ▾" trigger**
-   at the right end of the row that opens a dropdown listing
-   only the overflow vaults (no duplicates with what's already
-   visible). When the active vault doesn't fit, it lands in
-   the dropdown and the trigger picks up the active styling so
-   it's still visible at a glance. Right-clicking the active
-   pill (or the trigger when active is hidden) opens an
-   **appearance popover** (12 emoji + 8 colour swatches + auto
-   fallback) for changing the vault's icon/colour. On mobile
-   and during the brief window before the vault list has
-   loaded, the picker is replaced by a plain link to the
-   active vault's name. On routes with no vault context (the
-   bare `/vaults` empty/loading state), the slot is empty and
-   the search box stays centred via the topbar's grid.
+1. **Brand / vault picker** — depends on context:
+   - On the vault list page: just the brand text.
+   - On any `/vaults/:vaultId/*` page with the full vault list
+     loaded: a desktop-only **vault picker**. ≤ 3 vaults render
+     as inline pills. > 3 vaults render as the active pill +
+     dropdown for the others. Right-click on the active pill
+     opens an **appearance popover** (12 emoji + 8 colour swatches
+     + auto fallback) for changing the vault's icon/colour.
 2. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
 3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
    two buttons (📁 toggles the tree rail, ℹ️ toggles the
    properties panel) in vault routes. Empty on routes without a
    shared layout.
-4. **Templates link** — direct route to the templates page for
+4. **Widgets+ button** — visible on every dashboard URL
+   (`/vaults/:id/dashboards/:dashboardId` and the legacy
+   `/vaults/:id/startpage` redirect). Drops down "Add RSS feed
+   / Add Task area / Add Links"; selecting one fires a window
+   `CustomEvent` that the dashboard page listens for.
+5. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-5. **Account menu** — current user's name, with a popover menu
+6. **Account menu** — current user's name, with a popover menu
    (Account, My sessions, Settings, Sign out).
-
-The "NoteControl /" brand text that used to lead the topbar's
-left column has been removed app-wide.
 
 ## Settings (web UI, not the tray)
 
@@ -144,67 +138,53 @@ itself doesn't grow.
 The editor is **TipTap-based** with a custom extension set;
 features and shortcuts are documented in [notes.md](notes.md).
 
-When the user has flipped the **View** toggle in the properties
-panel to source mode, the breadcrumb row shows a small `source`
-pill next to the path so the mode remains visible even with the
-properties panel hidden. The pill is read-only — the toggle
-itself lives in the panel.
-
 ## Properties panel
 
-Shows the selected note or folder's metadata. For notes:
+Right-rail panel. Shape depends on what the URL is on:
+
+### For a selected note
 
 - **Editable inline**: name, tags, locked toggle, version,
   per-note appearance (font / font size / page width).
 - **Read-only**: full path, parent folder, created/updated
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
-- **View toggle**: button that flips the editor surface between
-  the rendered TipTap view and a read-only markdown source
-  view. See "View toggle" below for the full behaviour.
 - **Buttons**: Move (toggles move-mode), Delete (with
   confirmation). Rename happens by editing the name inline.
 
-For folders: name, full path, contents count, created/updated
-timestamps. Move/Delete buttons available.
+### For a selected folder
+
+Name, full path, contents count, created/updated timestamps.
+Move/Delete buttons available.
+
+### For a dashboard
+
+The panel switches into a small dashboard-only view on any
+`/vaults/:id/dashboards/:id` URL:
+
+- **Editable inline**: name (same `EditableName` component the
+  note/folder rename UI uses; empty/slash-bearing names
+  rejected; duplicate-name attempts surface an inline error).
+- **Read-only**: type ("Dashboard").
+- **Buttons**: Delete (with confirmation), disabled when this
+  is the only dashboard in the vault.
+
+### Visibility
 
 The panel toggles via the rail-toggle button in the topbar (or
-collapses automatically on narrow viewports).
+collapses automatically on narrow viewports). Two separate
+visibility states are tracked:
 
-### View toggle
+- **Note/folder routes**: the persisted `propsVisible`
+  preference (per-browser localStorage).
+- **Dashboard routes**: an ephemeral "revealed" flag that
+  defaults to **hidden** on every dashboard URL change (initial
+  load, switching between dashboards, returning from a note).
+  The user reveals it on demand via the same ℹ️ rail toggle.
 
-A button in the panel labelled "View source" (or "View
-rendered" when active) swaps the editor's surface between two
-modes for the currently-open note:
-
-- **Rendered** (default): the live TipTap editor.
-- **Source**: a read-only `<pre>` showing the note's markdown
-  body in monospace. Same page card as the rendered view (same
-  width, same padding, same per-note `width` and `fontSize`).
-  The `font` frontmatter is ignored in source mode — source is
-  always monospace.
-
-Source mode is **per-note and ephemeral**:
-
-- Selecting a different note resets the toggle back to rendered.
-- Closing and reopening the same note also returns to rendered.
-- The mode is not persisted in localStorage or frontmatter.
-
-When the user toggles **into** source mode, the editor page
-first awaits any pending autosave and then refetches the note,
-so the source rendered reflects what's actually on disk rather
-than the in-memory contenteditable state. If the save or
-refetch fails the swap still happens (showing the stale body)
-and the existing save-status badge surfaces the failure.
-
-The source body is just the note's body — the YAML frontmatter
-is not included, since the panel already breaks those fields
-out individually.
-
-The toggle is **desktop only**. The mobile properties panel
-(rendered inside the editor on narrow viewports) doesn't expose
-this control, because a source-mode swap would replace the very
-surface the mobile panel lives in.
+Switching between contexts doesn't bleed state: a note-side
+"panel open" preference is left untouched while the user is on
+a dashboard, and reappears when they navigate back to a note.
 
 ## Mobile
 
@@ -218,8 +198,9 @@ A few mobile-specific affordances:
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
-- **The View toggle is not exposed on mobile** — see
-  "View toggle" above for why.
+- Dashboards redirect to `/vaults/:vaultId` on mobile — the
+  free-floating canvas has no working interaction model on
+  touch.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
@@ -327,10 +308,11 @@ The template editor's own slash menu (when editing a template
 body) hides this Templates entry — see
 [notes.md](notes.md#templates) for why.
 
-## Startpage
+## Dashboards
 
-Per-vault dashboard at `/vaults/:vaultId/startpage`. The
-canvas is a free-form 2D area (no grid) with three block types:
+Each vault holds one or more named **dashboards**, each owning
+its own free-floating canvas of blocks. The canvas is a 2D area
+(no grid) with three block types:
 
 - **RSS feed block** — fetches and displays a feed via the
   server's `/api/vaults/{id}/startpage/feed` proxy. Drag header
@@ -338,25 +320,65 @@ canvas is a free-form 2D area (no grid) with three block types:
   per-block settings (feed URL, title, max items).
 - **Task area** — a titled box containing draggable sticky
   notes. Each sticky has: a checkbox (done state, visual only),
-  a one-line headline, a multi-line content textarea, and a gear
-  menu. Notes have one of a fixed colour palette (yellow is
-  default).
+  a one-line headline, a multi-line content textarea, and a
+  gear menu. Notes have one of a fixed colour palette (yellow
+  is default).
 - **Links block** — up to 10 link entries (title + description
   + URL), click-to-edit, opens in new tab on click when not
   editing.
 
-Block layout (positions, sizes, contents) is stored in
-`{vault}/.notesapp/startpage.json` and saved with debounced
-~500ms cadence after the last edit.
+Block layout (positions, sizes, contents) for ALL dashboards
+in a vault is stored in a single `{vault}/.notesapp/startpage.json`
+file (see [storage.md](storage.md#notesapp-subfolder) for the
+file schema and the legacy single-canvas read tolerance). The
+file is saved with debounced ~500ms cadence after the last
+edit.
 
-Adding a block: the topbar's **Widgets+** dropdown (when on the
-startpage route) lists "Add RSS feed", "Add Task area", "Add
-Links". The dropdown communicates with the page via window
-`CustomEvent`s — no shared context.
+Adding a block to the current dashboard: the topbar's
+**Widgets+** dropdown lists "Add RSS feed", "Add Task area",
+"Add Links". The dropdown communicates with the dashboard page
+via window `CustomEvent`s — no shared context.
+
+### Tree-side dashboards list
+
+The tree's left rail starts with the dashboards section: one
+row per dashboard, with the active one highlighted (matched
+against the URL's `:dashboardId`). Right-click a row for a
+small context menu:
+
+- **Rename** — swaps the row to an inline editable input
+  (Enter saves, Esc cancels, blur commits). Empty / whitespace
+  / duplicate-of-sibling names are rejected.
+- **Delete** — confirms, then removes the dashboard. Disabled
+  when this is the only dashboard left.
+
+Adding a new dashboard: the **🏠+** button in the tree's
+rail-header action row (next to `Daily+ / 📄+ / 📁+`). New
+dashboards land at the end of the list, get a default name
+("Dashboard", or "Dashboard 2", "Dashboard 3"… — the lowest
+unused number), and the URL navigates to them immediately.
+
+### State plumbing
+
+VaultLayout owns the per-vault dashboards config (the
+StartpageConfigDto for the whole vault) via the `useDashboards`
+hook — one fetch + one debounced save loop per vault session.
+Both the tree-side DashboardList and the dashboard canvas read
+from this same data, with mutations going through layout-
+provided callbacks. There is no second source of truth; adding
+a dashboard, switching to it, and editing widgets on it are
+all the same React state.
+
+### Properties panel
+
+See [Properties panel](#properties-panel) above for the
+dashboard fields. The panel is hidden by default on every
+dashboard URL change (including switches between dashboards),
+revealed on demand via the ℹ️ rail toggle.
 
 ## Sticky notes
 
-Sticky notes only exist inside Task areas on the startpage.
+Sticky notes only exist inside Task areas on a dashboard.
 They are not standalone documents and do not have markdown
 files. Each sticky has:
 

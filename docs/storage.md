@@ -39,12 +39,8 @@ it to `dev-data` (relative to the working directory).
 │   │   ├── index.db-wal
 │   │   ├── index.db-shm
 │   │   ├── templates/          ← {name}.md per template
-│   │   │   ├── Daily.md        ← e.g. seeds new daily notes
-│   │   │   ├── Meeting.md
-│   │   │   └── Meeting.assets/ ← per-template asset folder
-│   │   │       └── photo.png
 │   │   ├── trash/              ← deleted notes (vault-scoped)
-│   │   └── startpage.json      ← block layout for the startpage
+│   │   └── startpage.json      ← dashboards + block layout
 │   ├── My Note.md              ← markdown body + frontmatter
 │   ├── My Note.assets/         ← asset folder for "My Note.md"
 │   │   └── photo.png
@@ -96,9 +92,54 @@ notes or folders called `.notesapp`.
 |---|---|
 | `.notesapp/index.db` | SQLite + FTS5 index of all notes in the vault. WAL mode. |
 | `.notesapp/templates/` | Each `*.md` file is one template. Filename without `.md` is the template name. A template called `Daily.md` is the body for new daily notes. |
-| `.notesapp/templates/<name>.assets/` | Per-template asset folder, sibling to the `.md` file. Same convention as note assets — see "Asset folders" below. |
 | `.notesapp/trash/` | Deleted notes are moved here, keeping their original folder structure as subpaths. No automatic cleanup. |
-| `.notesapp/startpage.json` | Block layout for the startpage: positions, sizes, RSS URLs, sticky note contents, link entries. Saved with debounced cadence. |
+| `.notesapp/startpage.json` | Dashboard layouts for the vault: positions, sizes, RSS URLs, sticky note contents, link entries. One file holds every dashboard the vault has. Saved with debounced cadence. |
+
+#### startpage.json schema
+
+The file is hand-editable JSON. The current shape (schema
+version **2**) is a versioned envelope around an ordered list
+of dashboards:
+
+```json
+{
+  "version": 2,
+  "dashboards": [
+    {
+      "id": "...",            // stable, client-generated UUID
+      "name": "Dashboard",    // user-given; defaults to "Dashboard"
+      "blocks":    [ /* RSS blocks */ ],
+      "taskAreas": [ /* task areas + sticky notes */ ],
+      "links":     [ /* link blocks + entries */ ]
+    },
+    ...
+  ]
+}
+```
+
+A vault always has at least one dashboard — the server seeds a
+default named "Dashboard" on first load (when the file is
+missing or empty), and the UI prevents deletion of the last
+remaining dashboard.
+
+**Legacy v1 read tolerance.** Files written before the multi-
+dashboard ship had no `version` field and stored
+`blocks` / `taskAreas` / `links` at the root (one implicit
+dashboard's worth). The server reads those files, lifts them
+into a single dashboard named "Dashboard" with a deterministic
+id (derived from the vault id, so the synthesised dashboard's
+identity is stable across re-reads), and serves them through
+the same shape as v2. The v1 keys disappear from disk on the
+first save — there is no automatic on-read migration write.
+
+Hand-edits are tolerated case-insensitively (the server reads
+PascalCase or camelCase and always writes camelCase). On write
+the server stamps the current schema version, sorts each
+dashboard's blocks / taskAreas / links by id for deterministic
+diffs, and uses temp-then-rename for atomic replacement. Items
+*within* an area or link block (sticky notes, link entries)
+are NOT sorted — their order is user-meaningful (drag-to-
+reorder semantics).
 
 ### Notes (the `.md` files)
 
@@ -106,52 +147,25 @@ A note is a single `.md` file at any depth in the vault folder.
 Frontmatter format and the well-known fields are documented in
 [notes.md](notes.md#file-on-disk-model).
 
-### Asset folders (`<NoteName>.assets/` and `<TemplateName>.assets/`)
+### Asset folders (`<NoteName>.assets/`)
 
-Each `.md` file that has uploaded assets gets its own asset
-folder *next to* it, named `<basename>.assets`. The same
-convention applies to two places:
-
-- **Note assets**: `My Note.md` → `My Note.assets/`, sitting
-  in the same vault subfolder as the note.
-- **Template assets**: `MyTemplate.md` → `MyTemplate.assets/`,
-  sitting under `.notesapp/templates/` next to the template's
-  `.md`.
-
-Properties of asset folders (note or template):
+Each note that uploads an asset gets its own asset folder
+*next to* the note file, named `<note basename>.assets`. So a
+note `My Note.md` gets a folder `My Note.assets/`.
 
 - Filenames inside are URL-segment-encoded for markdown
   references (spaces become `%20`, etc.) so `![]()` works
   without quoting.
 - Conflicts on upload (same filename twice) get a numeric
   suffix: `photo.png`, `photo (2).png`, etc.
-- The folder is created lazily on first asset upload. Empty
-  asset folders aren't auto-created.
-- For TEMPLATES, the asset folder lifecycle tracks the
-  template's `.md`: rename moves the asset folder and rewrites
-  image refs in the body, delete removes the asset folder. For
-  NOTES, deleting the note does not currently remove its asset
-  folder (queue: cleanup pass).
+- The folder is created lazily on first asset upload for that
+  note. Empty asset folders aren't auto-created; deleting a
+  note doesn't remove its asset folder (queue: cleanup pass).
 
-A note or template body references its assets relatively:
-`![alt](My%20Note.assets/photo.png)` or
-`![alt](MyTemplate.assets/photo.png)`. This means a vault
+A note's body references its assets relatively:
+`![alt](My%20Note.assets/photo.png)`. This means a vault
 folder is **portable** — copy or move the whole vault folder
 elsewhere and references stay intact.
-
-### Image duplication for templates
-
-When a template is **inserted into a note** via the slash
-menu, the server copies any images from the template's asset
-folder into the target note's asset folder and rewrites the
-markdown to point at the new location. This is intentional:
-both the template and the inserted-into note end up
-self-contained, so deleting/renaming the template later does
-not break the inserted content. Cost is on-disk duplication —
-inserting one template into N notes makes N copies of each
-image. Acceptable for the "self-contained at every level"
-posture; a future deduplication pass (hash+hardlink) is
-possible if disk usage becomes a problem in practice.
 
 ## server.db (server-wide SQLite)
 
