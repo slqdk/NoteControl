@@ -309,3 +309,130 @@
   touch-action: none;
 }
 .nc-motion-block-resize:hover { opacity: 1; }
+
+/* ============================================================================
+ * Mode D — Motor / Gear + motion profile
+ *
+ * Mode D's form has more sections than A/B/C: a "Calculate motor / gear"
+ * panel on top (with mechanical inputs + motor side / gear side) and the
+ * standard motion-profile form below it. Each section gets a small
+ * group-box treatment so the visual hierarchy reads top-down.
+ * ========================================================================== */
+
+.nc-motion-d-section {
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: var(--nc-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Same min-width:0 reasoning as the other form rows — section can
+     shrink past intrinsic content width without causing horizontal
+     overflow in the form column. */
+  min-width: 0;
+}
+
+.nc-motion-d-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--nc-fg-muted);
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Mechanical inputs: gear ratio, torque const, feed const (top of the
+   "Calculate motor / gear" section). Stacks vertically — we let each
+   row use the regular .nc-motion-field grid. */
+.nc-motion-d-mech {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Motor side / gear side container: two columns side by side. On
+   narrow widths they stack — see the media query at the bottom. */
+.nc-motion-d-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  /* The arrows in the original WinForms screenshot are gone; we sync
+     bidirectionally on every keystroke. The visual space between the
+     two columns serves the same "these are two views of the same
+     thing" affordance. */
+}
+
+.nc-motion-d-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+  background: var(--nc-bg-elev);
+  min-width: 0;
+}
+
+.nc-motion-d-side-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  border-bottom: 1px solid var(--nc-border);
+  padding-bottom: 3px;
+  margin-bottom: 2px;
+}
+
+/* Field with a "manual override" highlight: subtle accent on the
+   label so the user can tell at a glance which fields they've
+   detached from the auto-coupling. */
+.nc-motion-field-manual .nc-motion-field-label {
+  color: var(--nc-accent, #2980b9);
+  font-weight: 500;
+}
+
+/* The "↺" reset button next to a manually-edited field. Sits inside
+   the label-row, no layout change to the input below. */
+.nc-motion-reset-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--nc-accent, #2980b9);
+}
+.nc-motion-reset-btn:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border);
+}
+
+/* Read-only computed field (e.g. motor current). Shows greyed input,
+   not editable, no border highlight on focus. */
+.nc-motion-field-readonly input {
+  background: var(--nc-bg-elev-2) !important;
+  color: var(--nc-fg-muted) !important;
+  cursor: not-allowed;
+}
+
+/* Stack the two motor/gear columns when the form column gets narrow
+   enough that side-by-side becomes cramped. The block's overall body
+   already stacks below 520px (form-above-chart); this stack threshold
+   is calibrated for the form column width specifically. */
+@media (max-width: 720px) {
+  .nc-motion-d-sides {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Mode D's results grid is 6 cells, not 4. Override the 4-up rule
+   from the base styles. The 2-up wrap below 720px still applies via
+   the existing media query. */
+.nc-motion-block[data-mode="D"] .nc-motion-results,
+.nc-motion-results.nc-motion-results-six {
+  /* Use auto-fit so the cells reflow nicely as the chart pane grows
+     and shrinks — between 3 and 6 columns depending on width. */
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}

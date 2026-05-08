@@ -275,11 +275,16 @@ export interface LinkItemDto {
  * One Motion-profile calculator block on a dashboard.
  * Mirrors NoteControl.Shared.Startpage.MotionBlockDto.
  *
- * Three modes share this DTO; `mode` picks which form is rendered
+ * Four modes share this DTO; `mode` picks which form is rendered
  * and which solver runs:
  *   - 'A' (Time → Dynamics):   inputs T, D, accFrac, dynFrac
  *   - 'B' (Dynamics → Time):   inputs aMax, dMax, jerk, D, vMax
  *   - 'C' (Dynamics + Limits): inputs aMax, dMax, jerk, Dmax, Ttot
+ *   - 'D' (Motor / Gear + Time → Dynamics): all of A's inputs plus
+ *     mechanical (gearRatio, feedConstant, torqueConstant) and
+ *     motor/gear side fields (motorSpeed, motorTorque, gearSpeed,
+ *     gearTorque). manualMotorSpeed/manualMotorTorque flags record
+ *     whether the user has overridden the auto-computed motor side.
  *
  * Inputs are persisted as a free-form Record<string, number>. Keeping
  * the keys per-mode rather than typing them strictly trades a bit of
@@ -291,7 +296,7 @@ export interface LinkItemDto {
 export interface MotionBlockDto {
   id: string;            // crypto.randomUUID()
   /** Which solver this block runs. Set at insert-time, sticky. */
-  mode: 'A' | 'B' | 'C';
+  mode: 'A' | 'B' | 'C' | 'D';
   x: number;
   y: number;
   width: number;         // clamped client-side [380, 1400]
@@ -302,6 +307,19 @@ export interface MotionBlockDto {
   showAcc: boolean;
   /** Whether the chart's jerk overlay is on. */
   showJerk: boolean;
+  /**
+   * Mode D only — true means the user has typed into the motor-side
+   * speed field (or the gear-side speed, which propagates), and the
+   * profile-derived value should NOT auto-overwrite it. The "↺" reset
+   * button in the UI clears this back to false. Optional / undefined
+   * → behaves as false (auto-coupled). Ignored for non-D modes.
+   *
+   * Note: there's no equivalent flag for torque because there's no
+   * profile-to-torque mapping (no load-torque model), so torque is
+   * always user-edited and motor↔gear torque stays in sync via the
+   * gear ratio on every keystroke.
+   */
+  manualMotorSpeed?: boolean;
 }
 
 /** One feed item, normalized server-side from RSS or Atom. */

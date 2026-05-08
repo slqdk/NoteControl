@@ -155,7 +155,7 @@ export function TopBar({
   // motion calculator submenu — see DashboardPage's bridge for the
   // full list.
   function emitAddBlock(
-    kind: 'rss' | 'task' | 'links' | 'motion-a' | 'motion-b' | 'motion-c',
+    kind: 'rss' | 'task' | 'links' | 'motion-a' | 'motion-b' | 'motion-c' | 'motion-d',
   ) {
     window.dispatchEvent(
       new CustomEvent('nc:add-startpage-block', { detail: { kind } }),
@@ -304,6 +304,15 @@ export function TopBar({
                       title="You know dynamics + distance + total time. Solve for peak velocity."
                     >
                       Calculator C · Dynamics + Limits → Velocity
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('motion-d')}
+                      title="Same as A, plus a motor + gear panel that converts speed/torque/current using the gear ratio, feed constant, and torque constant."
+                    >
+                      Calculator D · Motor / Gear + Time → Dynamics
                     </button>
                   </>
                 )}

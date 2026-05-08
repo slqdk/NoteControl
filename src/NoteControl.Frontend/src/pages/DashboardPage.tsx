@@ -236,18 +236,21 @@ export function DashboardPage() {
   );
 
   const addMotionBlock = useCallback(
-    (mode: 'A' | 'B' | 'C') => {
+    (mode: 'A' | 'B' | 'C' | 'D') => {
       patchCurrent((d) => {
         const existing = d.motionBlocks ?? [];
+        // Mode D needs more vertical and horizontal space — its form
+        // panel has the motor/gear section on top of the motion-profile
+        // section. ~860×640 fits both panels comfortably; the user can
+        // resize down if they want a more compact layout.
+        const isModeD = mode === 'D';
         const newBlock: MotionBlockDto = {
           id: newId(),
           mode,
-          // Place to the right of the other block columns so it doesn't
-          // immediately overlap an RSS or links block.
           x: 24 + (existing.length % 5) * 32,
           y: 24 + (existing.length % 5) * 32,
-          width: 640,
-          height: 460,
+          width: isModeD ? 860 : 640,
+          height: isModeD ? 640 : 460,
           inputs: { ...MOTION_DEFAULTS[mode] },
           showAcc: false,
           showJerk: false,
@@ -268,6 +271,7 @@ export function DashboardPage() {
   //   'motion-a'   — add a Motion calculator (Time → Dynamics)
   //   'motion-b'   — add a Motion calculator (Dynamics → Time)
   //   'motion-c'   — add a Motion calculator (Dynamics + Limits → Velocity)
+  //   'motion-d'   — add a Motion calculator (Motor / Gear + Time → Dynamics)
   useEffect(() => {
     function onAdd(e: Event) {
       const detail = (e as CustomEvent<{ kind: string }>).detail;
@@ -289,6 +293,9 @@ export function DashboardPage() {
           break;
         case 'motion-c':
           addMotionBlock('C');
+          break;
+        case 'motion-d':
+          addMotionBlock('D');
           break;
         default:
           // Unknown kind — ignore. Defensive in case a future

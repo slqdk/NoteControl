@@ -378,4 +378,17 @@ public sealed record MotionBlockDto(
     /// <summary>Whether the chart's acceleration overlay is on.</summary>
     bool ShowAcc,
     /// <summary>Whether the chart's jerk overlay is on.</summary>
-    bool ShowJerk);
+    bool ShowJerk,
+    /// <summary>
+    /// Mode D only — true means the user has typed into the motor-side
+    /// speed field (or the gear-side speed, which propagates), and the
+    /// auto-coupling from the motion profile should NOT overwrite it.
+    /// Optional / null = treat as false (auto-coupled). Ignored for
+    /// non-D modes.
+    ///
+    /// Defaulted to null so adding this field is non-breaking for
+    /// older payloads written before Mode D shipped — the existing
+    /// `new MotionBlockDto(...)` callsites in the server keep working
+    /// without the optional argument.
+    /// </summary>
+    bool? ManualMotorSpeed = null);
