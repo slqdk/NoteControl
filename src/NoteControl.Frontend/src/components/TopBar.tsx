@@ -90,14 +90,18 @@ export function TopBar({
   // momentarily.
   const isMobile = useIsMobile();
 
-  // Match `/vaults/:id/startpage` (with optional trailing slash).
-  // Path-string check rather than route-match because TopBar isn't
-  // inside the route tree where matchPath is convenient, and the
-  // path shape is stable (StartpagePage owns it). endsWith handles
-  // both `/vaults/abc/startpage` and the trailing-slash variant
-  // some routers normalize to.
+  // Match `/vaults/:id/startpage` or `/vaults/:id/dashboards/:dashboardId`
+  // (with optional trailing slash). Path-string check rather than
+  // route-match because TopBar isn't inside the route tree where
+  // matchPath is convenient, and the path shape is stable
+  // (DashboardPage owns it, with StartpagePage as the legacy
+  // single-canvas redirect). The regex tolerates both forms so the
+  // Widgets+ button stays visible while the user is on any dashboard,
+  // not just the post-redirect one.
   const isOnStartpage =
-    /\/vaults\/[^/]+\/startpage\/?$/.test(location.pathname);
+    /\/vaults\/[^/]+\/(startpage|dashboards\/[^/]+)\/?$/.test(
+      location.pathname,
+    );
 
   // Widgets+ dropdown state.
   const [widgetsOpen, setWidgetsOpen] = useState(false);

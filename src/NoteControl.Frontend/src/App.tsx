@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { VaultListPage } from './pages/VaultListPage';
 import { FolderPage } from './pages/FolderPage';
 import { EditorPage } from './pages/EditorPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { StartpagePage } from './pages/StartpagePage';
 import { TemplatesPage } from './pages/TemplatesPage';
 import { VaultLayout } from './components/VaultLayout';
@@ -14,24 +15,24 @@ import { useAppliedAppearance } from './settings/appearance';
 /**
  * Top-level route table.
  *
- *   /login                            anonymous; sign-in form
- *   /vaults                           authenticated; pick a vault
- *   /vaults/:vaultId                  authenticated; folder view (root or ?path=)
- *   /vaults/:vaultId/note?path=...    authenticated; editor for one note
- *   /vaults/:vaultId/templates        authenticated; manage templates for the vault
+ *   /login                                       anonymous; sign-in form
+ *   /vaults                                      authenticated; pick a vault
+ *   /vaults/:vaultId                             authenticated; folder view (root or ?path=)
+ *   /vaults/:vaultId/note?path=...               authenticated; editor for one note
+ *   /vaults/:vaultId/dashboards/:dashboardId     authenticated; one dashboard's canvas
+ *   /vaults/:vaultId/startpage                   legacy alias; redirects to the first dashboard
+ *   /vaults/:vaultId/templates                   authenticated; manage templates for the vault
  *
  * Anything else redirects to /vaults (which itself bounces to /login
  * for anonymous users via RequireAuth).
  *
  * --- Layout route ---
  *
- * The folder + editor routes live UNDER a shared layout route that
- * mounts <VaultLayout> once. This means navigating from a folder
- * page to a note (or between notes) does NOT unmount the tree — its
- * cached children, expanded set, and selection all persist. Before
- * this change, every navigation re-mounted VaultLayout and forced a
- * full re-fetch of the root listing plus all previously-expanded
- * folders, causing a visible "waiting period" on every click.
+ * The folder + editor + dashboard routes live UNDER a shared layout
+ * route that mounts <VaultLayout> once. This means navigating
+ * between any of them (folder ↔ note ↔ dashboard ↔ another
+ * dashboard) does NOT unmount the tree — its cached children,
+ * expanded set, selection, and the dashboards data all persist.
  *
  * Templates page is intentionally left OUT of the shared layout —
  * it has its own header and no tree, so the shell would be wasted
@@ -62,10 +63,13 @@ export default function App() {
           />
 
           {/*
-            Shared layout: VaultLayout wraps both the folder view and
-            the note editor. Pages render via <Outlet /> inside the
-            layout. Mounting once per vault session is what fixes the
-            "tree reloads on every folder click" issue.
+            Shared layout: VaultLayout wraps the folder view, the
+            note editor, and every dashboard. Pages render via
+            <Outlet /> inside the layout. Mounting once per vault
+            session is what fixes the "tree reloads on every click"
+            issue — and now also lets the tree-side dashboards list
+            and the dashboard canvas share state without two
+            independent fetches.
           */}
           <Route
             path="/vaults/:vaultId"
@@ -80,11 +84,21 @@ export default function App() {
             {/* /vaults/:vaultId/note?path=... → note editor */}
             <Route path="note" element={<EditorPage />} />
             {/*
-              /vaults/:vaultId/startpage → per-vault startpage.
-              Step 39: shell only. Step 40 turns this into the RSS
-              reader grid. The route lives under the shared layout
-              so the tree (with the pinned Startpage row at top)
-              stays in view.
+              Per-vault dashboards. The dashboardId in the URL
+              picks which dashboard's canvas renders; the layout
+              fetches the whole config once and provides it via
+              the outlet context.
+            */}
+            <Route
+              path="dashboards/:dashboardId"
+              element={<DashboardPage />}
+            />
+            {/*
+              Legacy /startpage URL kept as a redirect target so
+              existing links (the tray's "open vault" menu, the
+              vault list page's auto-redirect, user bookmarks)
+              keep landing on something useful. StartpagePage is
+              now a tiny redirect to the first dashboard.
             */}
             <Route path="startpage" element={<StartpagePage />} />
           </Route>

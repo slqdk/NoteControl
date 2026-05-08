@@ -1,4 +1,4 @@
-import { type DragEvent, type MouseEvent } from 'react';
+import { type DragEvent, type MouseEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { NoteSummaryDto } from '../api/types';
@@ -84,29 +84,26 @@ export interface TreeViewProps {
    */
   onMoveModeExit: () => void;
 
-  // ----- Step 39: pinned Startpage row -----
+  // ----- Dashboards section at the top of the tree -----
   //
-  // A synthetic row at the very top of the tree (above Daily Notes
-  // and any user folders). Not part of the folder/note selection
-  // model — its "selected" state is computed by the parent from the
-  // current URL and passed in via isStartpageActive. Clicking the
-  // row fires onSelectStartpage; the parent then navigates and
-  // clears the regular tree selection so no folder is highlighted
-  // in parallel.
+  // Multi-dashboard restructure: replaced the single synthetic
+  // Startpage row that used to live here. The dashboards section
+  // is fully owned by VaultLayout (which has the data via
+  // useDashboards) and rendered into this slot. TreeView itself
+  // doesn't know about dashboards — it just drops the slot in
+  // above the folder rows so the visual position is preserved.
+  //
+  // The slot is rendered with role="treeitem" rows internally; we
+  // don't wrap it in another container because the `nc-tree`
+  // parent already serves as the role="tree" host.
 
   /**
-   * True when the user is currently viewing the startpage URL.
-   * Drives the row's highlight. Computed by VaultLayout from
-   * useLocation().
+   * ReactNode rendered at the very top of the tree, above the
+   * vault's folder rows. VaultLayout passes the DashboardList
+   * component here. Empty / null is allowed (the tree just
+   * starts with folder rows).
    */
-  isStartpageActive: boolean;
-  /**
-   * Called when the user clicks the Startpage row. The parent
-   * is responsible for: clearing the regular tree selection (so
-   * folder/note highlight goes away), navigating to the startpage
-   * route, and exiting move-mode if any.
-   */
-  onSelectStartpage: () => void;
+  dashboardsSlot?: ReactNode;
 }
 
 export function TreeView({
@@ -128,8 +125,7 @@ export function TreeView({
   onMoveFolder,
   moveModeItem,
   onMoveModeExit,
-  isStartpageActive,
-  onSelectStartpage,
+  dashboardsSlot,
 }: TreeViewProps) {
   const navigate = useNavigate();
   const dnd = useTreeDragDrop();
@@ -593,41 +589,17 @@ export function TreeView({
   return (
     <div className={`nc-tree nc-tree-${variant}`} role="tree">
       {/*
-        Step 39: pinned Startpage row at the very top. Not a real
-        folder — it's a synthetic entry that lives outside the
-        folder/note selection model. Click navigates to
-        /vaults/:id/startpage; isStartpageActive (from VaultLayout's
-        URL inspection) drives the highlight. The row deliberately
-        uses depth=0 with no chevron so it visually anchors the top
-        of the tree without claiming any of the indent geometry that
-        the folder rows below depend on.
-
-        We render it via a plain div + className rather than reusing
-        TreeNode because the selection/drag/etc. props on TreeNode
-        all assume folder-or-note kinds. Adding a third 'startpage'
-        kind throughout the selection plumbing was more change than
-        the feature warrants.
+        Dashboards section, rendered at the very top of the tree,
+        above Daily Notes and any user folders. Replaced the single
+        pinned Startpage row that used to live here in step 39.
+        VaultLayout owns the data (via useDashboards) and renders a
+        <DashboardList /> into this slot — TreeView itself stays
+        ignorant of dashboards' shape, which keeps the selection /
+        drag-and-drop plumbing below unaware of the new entity type
+        (dashboards aren't TreeSelections, they have their own
+        selection model based on the URL).
       */}
-      <div
-        className={[
-          'nc-tree-row',
-          'nc-tree-row-startpage',
-          isStartpageActive ? 'nc-tree-row-selected' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        role="treeitem"
-        aria-selected={isStartpageActive}
-        tabIndex={isStartpageActive ? 0 : -1}
-        onClick={onSelectStartpage}
-        title="Startpage (per vault)"
-      >
-        {/* Empty chevron cell so the icon + label line up with
-            chevron-bearing folder rows immediately below. */}
-        <span className="nc-tree-chevron nc-tree-chevron-empty" aria-hidden="true" />
-        <span className="nc-tree-icon" aria-hidden="true">🏠</span>
-        <span className="nc-tree-label">Startpage</span>
-      </div>
+      {dashboardsSlot}
 
       {renderFolder('', 0)}
       {rootDropActive && (

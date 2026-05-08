@@ -7,15 +7,23 @@ using NoteControl.Shared.Startpage;
 namespace NoteControl.Server.Startpage.Endpoints;
 
 /// <summary>
-/// HTTP surface for the per-vault startpage.
+/// HTTP surface for the per-vault startpage / dashboards.
 ///
 /// Routes (all under <c>/api/vaults/{vaultId}/startpage</c>):
 ///   <c>GET  /config</c>                — read the saved layout
+///                                        (multi-dashboard shape)
 ///   <c>PUT  /config</c>                — write the saved layout
 ///   <c>GET  /feed?url={encoded}</c>    — fetch + parse one feed
 ///
+/// The endpoint group name "startpage" is preserved because the
+/// route shape is the contract for the on-disk
+/// <c>{vault}/.notesapp/startpage.json</c> file too — renaming
+/// the endpoints would imply renaming the file, which would
+/// break legacy-reader compat for nothing. The DTO shape it
+/// returns is multi-dashboard now (see StartpageConfigDto).
+///
 /// Auth: viewers can read config and fetch feeds (they need to
-/// see the page); editors can save layout changes. The feed
+/// see the dashboards); editors can save layout changes. The feed
 /// fetch is gated as viewer because read-only users still see
 /// the same feeds; we want them to render, not 403.
 ///
@@ -152,8 +160,8 @@ public static class StartpageEndpoints
             // dragging blocks, so this fires often. Information would
             // drown the log in routine activity.
             log.LogDebug(
-                "Save succeeded for vault {VaultId} (blocks={Blocks}, taskAreas={TaskAreas}, links={Links})",
-                vaultId, config.Blocks?.Count, config.TaskAreas?.Count, config.Links?.Count);
+                "Save succeeded for vault {VaultId} (dashboards={Dashboards})",
+                vaultId, config.Dashboards?.Count);
             return Results.NoContent();
         }
         catch (StartpageException ex)

@@ -153,22 +153,56 @@ export interface ProblemDetails {
   instance?: string;
 }
 
-// ---------------------------------------------------------------- Startpage
+// ---------------------------------------------------------------- Dashboards
 
 /**
- * One RSS block on the per-vault startpage. Mirrors
+ * Per-vault dashboards configuration. Mirrors
+ * NoteControl.Shared.Startpage.StartpageConfigDto.
+ *
+ * Persisted at {vault}/.notesapp/startpage.json. The endpoint
+ * keeps its "startpage" name (route /api/vaults/{id}/startpage/
+ * config + on-disk filename) for stable file/URL identity; the
+ * shape it carries is multi-dashboard now.
+ *
+ * Always at least one dashboard — the server seeds a default one
+ * named "Dashboard" on first load, and the UI prevents deleting
+ * the last remaining dashboard.
+ */
+export interface StartpageConfigDto {
+  /** Schema version. Current value is 2. Server is the authority. */
+  version: number;
+  /** Ordered list of dashboards in this vault. Order is user-meaningful. */
+  dashboards: DashboardDto[];
+}
+
+/**
+ * One dashboard inside a vault. Owns a free-floating canvas of
+ * blocks (RSS, task areas, link blocks). Identity is `id`,
+ * generated client-side via crypto.randomUUID() at create time.
+ */
+export interface DashboardDto {
+  id: string;
+  /** User-given name. Default "Dashboard" for the seeded one. */
+  name: string;
+  blocks: RssBlockDto[];
+  taskAreas: TaskAreaDto[];
+  links: LinkBlockDto[];
+}
+
+/**
+ * One RSS block on a dashboard. Mirrors
  * NoteControl.Shared.Startpage.RssBlockDto.
  *
- * Position + size are in pixels relative to the startpage scrollable
- * area. Bounds are enforced client-side (see RssBlock.tsx); the
- * server stores values verbatim, so a future client could relax
+ * Position + size are in pixels relative to the dashboard's
+ * scrollable area. Bounds are enforced client-side (see RssBlock.tsx);
+ * the server stores values verbatim, so a future client could relax
  * the bounds without a server change.
  */
 export interface RssBlockDto {
   id: string;             // crypto.randomUUID() at create time
   title: string;          // user-given title (empty falls back to feed title in UI)
   feedUrl: string;        // empty when block was just added
-  x: number;              // pixels from left of startpage area
+  x: number;              // pixels from left of dashboard area
   y: number;              // pixels from top
   width: number;          // pixels; clamped client-side [200, 1200]
   height: number;         // pixels; clamped client-side [150, 1200]
@@ -177,27 +211,7 @@ export interface RssBlockDto {
   maxItems: number;       // truncate at this many items; clamped [1, 100]
 }
 
-export interface StartpageConfigDto {
-  blocks: RssBlockDto[];
-  /**
-   * Task areas (step 42). Free-floating containers each holding a
-   * list of sticky notes, persisted alongside the RSS blocks in
-   * the same startpage.json. Older clients (pre-step-42) didn't
-   * write this field; the server normalises missing/null to []
-   * on load, so it's always an array on the wire from this point
-   * on.
-   */
-  taskAreas: TaskAreaDto[];
-  /**
-   * Link blocks (Ship 74). Same persistence + back-compat story as
-   * taskAreas: the server normalises missing/null to [] on load,
-   * so consumers always see an array even when reading a config
-   * file written before Ship 74.
-   */
-  links: LinkBlockDto[];
-}
-
-/** One free-floating task area on the startpage (step 42). */
+/** One free-floating task area on a dashboard. */
 export interface TaskAreaDto {
   id: string;            // crypto.randomUUID()
   title: string;         // empty allowed; UI shows placeholder
@@ -224,7 +238,7 @@ export interface StickyNoteDto {
 }
 
 /**
- * One free-floating links block on the startpage (Ship 74).
+ * One free-floating links block on a dashboard.
  * Mirrors TaskAreaDto's shape — same drag/resize semantics, same
  * id stability rules — but the children are link entries instead
  * of sticky notes, capped at 10 per block client-side.

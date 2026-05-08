@@ -7,11 +7,12 @@ import {
   useSearchParams,
 } from 'react-router-dom';
 
-import type { VaultDto } from '../api/types';
+import type { DashboardDto, VaultDto } from '../api/types';
 import { ApiError, dailyNotesApi, foldersApi, notesApi, vaultsApi } from '../api/client';
 import { TopBar } from './TopBar';
 import { TreeView, type TreeSelection } from './TreeView';
 import { TreeContextMenu } from './TreeContextMenu';
+import { DashboardList } from './DashboardList';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ResizableRail } from './ResizableRail';
 import { ToggleRailButtons } from './ToggleRailButtons';
@@ -25,6 +26,7 @@ import {
 } from '../tree/treeState';
 import { loadVariant, type TreeVariant } from '../tree/treeStyles';
 import { useTreeAppearance, buildTreeStyle } from '../tree/treeAppearance';
+import { useDashboards } from '../hooks/useDashboards';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 /**
@@ -178,19 +180,50 @@ export function VaultLayout() {
   }, [selection, moveModeItem]);
 
   // -----------------------------------------------------------------
-  // Step 39: per-vault Startpage.
+  // Per-vault dashboards.
   //
-  // Detect whether the URL is currently the startpage. Drives:
-  //   1. The pinned Startpage row's highlight in the tree.
-  //   2. Suppression of the Properties panel while on this page.
+  // Replaces the single "Startpage" pinned row from step 39. The
+  // useDashboards hook owns the StartpageConfigDto for this vault
+  // (initial fetch + debounced PUT on changes); we expose its data
+  // and mutators downstream:
+  //   - DashboardList (in the tree) reads `dashboards` and calls
+  //     onSelect / onAdd / onRename / onDelete here.
+  //   - DashboardPage (the canvas) reads `dashboards` via the
+  //     outlet context and calls patchDashboard for block edits.
   //
-  // We compare against an exact pathname rather than .endsWith so a
-  // future /vaults/:id/startpage/something doesn't accidentally
-  // count as "on the startpage." If we ever add nested routes here,
-  // switch to startsWith with a trailing slash.
+  // Drives:
+  //   1. The dashboard rows' active highlight (activeDashboardId).
+  //   2. Suppression of the Properties panel on dashboard / legacy-
+  //      startpage routes (isOnDashboardRoute).
   // -----------------------------------------------------------------
-  const isOnStartpage =
-    location.pathname === `/vaults/${vaultId}/startpage`;
+  const dashboardsHook = useDashboards(vaultId);
+
+  // True when the user is currently on any dashboard URL (the new
+  // /dashboards/:id form OR the legacy /startpage redirect target).
+  // This is the "hide the props panel" gate; same role
+  // isOnStartpage played pre-multi-dashboard.
+  //
+  // We compare against exact pathname patterns rather than
+  // .includes() so a future /vaults/:id/dashboards/x/something
+  // doesn't accidentally count. If we ever add nested routes here,
+  // switch to startsWith with a trailing slash.
+  const dashboardsPathPrefix = `/vaults/${vaultId}/dashboards/`;
+  const isOnDashboardRoute =
+    location.pathname === `/vaults/${vaultId}/startpage` ||
+    (location.pathname.startsWith(dashboardsPathPrefix) &&
+      // exactly one segment after /dashboards/
+      !location.pathname.slice(dashboardsPathPrefix.length).includes('/'));
+
+  // Which dashboard's id sits in the URL right now, if any. null on
+  // the legacy /startpage placeholder (StartpagePage redirects to a
+  // real id within the same render frame anyway) and on non-
+  // dashboard routes.
+  const activeDashboardId = location.pathname.startsWith(
+    dashboardsPathPrefix,
+  )
+    ? location.pathname.slice(dashboardsPathPrefix.length).split('/')[0] ||
+      null
+    : null;
 
   // Auto-hide override for the props panel: NEVER persist this to
   // localStorage — we want the user's preferred propsVisible setting
@@ -202,7 +235,7 @@ export function VaultLayout() {
   // pattern — don't touch the persisted preference, just override
   // for the duration of the mobile viewport.
   const effectivePropsVisible =
-    layout.propsVisible && !isOnStartpage && !isMobile;
+    layout.propsVisible && !isOnDashboardRoute && !isMobile;
 
   // Ship 81: on mobile the tree is always rendered (it's the
   // navigation primary), but its content collapses to a single-row
@@ -211,21 +244,57 @@ export function VaultLayout() {
   const effectiveTreeVisible = isMobile ? true : layout.treeVisible;
 
   /**
-   * Click handler for the synthetic Startpage row.
-   * Clears any current selection (so no folder/note row stays
-   * highlighted in parallel), exits move mode if active (mirrors
-   * what selection-change does for normal rows), and navigates.
+   * Navigate to a dashboard's URL. Same housekeeping as the legacy
+   * onSelectStartpage: clear regular tree selection (so no folder /
+   * note row stays highlighted in parallel) and exit move mode if
+   * active. The DashboardList component calls this when the user
+   * clicks a dashboard row.
    */
-  const onSelectStartpage = useCallback(() => {
-    setSelection(null);
-    setMoveModeItem(null);
-    navigate(`/vaults/${vaultId}/startpage`);
-    // Ship 87: removed the auto-collapse of the mobile tree strip
-    // here. The user wants the tree to stay open after navigating.
-    // (And anyway, Ship 86 redirects mobile users away from the
-    // startpage URL, so this branch never runs on mobile in
-    // practice.)
-  }, [navigate, vaultId]);
+  const onSelectDashboard = useCallback(
+    (id: string) => {
+      setSelection(null);
+      setMoveModeItem(null);
+      navigate(`/vaults/${vaultId}/dashboards/${id}`);
+    },
+    [navigate, vaultId],
+  );
+
+  /**
+   * Add a new dashboard via useDashboards, then navigate to it so
+   * the user lands on the empty canvas ready to add widgets. The
+   * navigate happens AFTER the React state update so the URL
+   * change has a row to highlight by the time it resolves.
+   */
+  const onAddDashboard = useCallback(() => {
+    const newId = dashboardsHook.addDashboard();
+    if (newId) {
+      onSelectDashboard(newId);
+    }
+  }, [dashboardsHook, onSelectDashboard]);
+
+  /**
+   * Delete a dashboard. If the deleted one was the active dashboard
+   * (i.e. its id is in the URL), navigate to whichever dashboard is
+   * left first — otherwise the user would be looking at the
+   * "this dashboard no longer exists" stub. Refuses (returns false
+   * from the hook) when this would empty the list; the menu disables
+   * the item in that case so this branch shouldn't fire, but we
+   * still check the return value defensively.
+   */
+  const onDeleteDashboard = useCallback(
+    (id: string) => {
+      const wasActive = activeDashboardId === id;
+      const fallback = (dashboardsHook.config?.dashboards ?? []).find(
+        (d) => d.id !== id,
+      );
+      const ok = dashboardsHook.deleteDashboard(id);
+      if (!ok) return;
+      if (wasActive && fallback) {
+        onSelectDashboard(fallback.id);
+      }
+    },
+    [activeDashboardId, dashboardsHook, onSelectDashboard],
+  );
 
   // ---------------------------------------------------- vault metadata
   //
@@ -930,8 +999,19 @@ export function VaultLayout() {
         onMoveFolder={onMoveFolder}
         moveModeItem={moveModeItem}
         onMoveModeExit={() => setMoveModeItem(null)}
-        isStartpageActive={isOnStartpage}
-        onSelectStartpage={onSelectStartpage}
+        dashboardsSlot={
+          dashboardsHook.config && (
+            <DashboardList
+              dashboards={dashboardsHook.config.dashboards}
+              activeDashboardId={activeDashboardId}
+              canDelete={dashboardsHook.config.dashboards.length > 1}
+              onSelect={onSelectDashboard}
+              onAdd={onAddDashboard}
+              onRename={dashboardsHook.renameDashboard}
+              onDelete={onDeleteDashboard}
+            />
+          )
+        }
       />
     </div>
   );
@@ -1115,12 +1195,33 @@ export function VaultLayout() {
 
         <main className="nc-shell-main">
           {/*
+            Dashboard load/save errors. Rendered here (above Outlet)
+            rather than inside DashboardPage because the failure is
+            tied to the layout-owned config — the same banner is
+            relevant on the legacy /startpage redirect, and we'd
+            rather not duplicate the UI in StartpagePage. On non-
+            dashboard routes the user just sees the banner briefly
+            until they navigate to a dashboard, which is fine: a
+            failed save is worth surfacing wherever the user is.
+          */}
+          {(dashboardsHook.loadError || dashboardsHook.saveError) && (
+            <div className="nc-form-error nc-startpage-save-error">
+              {dashboardsHook.loadError ?? dashboardsHook.saveError}
+            </div>
+          )}
+          {/*
             Pages render here via the layout route's <Outlet />.
             This is the seam that lets us swap FolderPage ↔
-            EditorPage without unmounting the surrounding shell
-            (and therefore the tree).
+            EditorPage ↔ DashboardPage without unmounting the
+            surrounding shell (and therefore the tree).
           */}
-          <Outlet context={{ vault }} />
+          <Outlet
+            context={{
+              vault,
+              dashboards: dashboardsHook.config?.dashboards ?? null,
+              patchDashboard: dashboardsHook.patchDashboard,
+            }}
+          />
         </main>
 
         {effectivePropsVisible && (
@@ -1257,12 +1358,30 @@ export function VaultLayout() {
 }
 
 /**
- * Outlet context shape. Pages can grab the vault metadata via
- * `useOutletContext<VaultLayoutContext>()` instead of refetching it
- * themselves — saves one round-trip per page mount.
+ * Outlet context shape. Pages can grab the vault metadata and the
+ * vault's dashboards via `useOutletContext<VaultLayoutContext>()`
+ * instead of refetching them themselves — saves one round-trip per
+ * page mount and keeps the tree-side dashboard list in sync with
+ * whatever the page is doing on the canvas.
  */
 export interface VaultLayoutContext {
   vault: VaultDto | null;
+  /**
+   * The vault's dashboards. null while the initial GET is in flight
+   * or has failed. Always at least one entry once non-null (the
+   * server seeds a default if the file is empty/legacy/missing).
+   */
+  dashboards: DashboardDto[] | null;
+  /**
+   * Apply a patch to one dashboard. The page passes the dashboard's
+   * id and a function that builds the new value from the old. The
+   * layout splices it back into its config and triggers a debounced
+   * save. Used by DashboardPage for block-level edits.
+   */
+  patchDashboard: (
+    id: string,
+    patch: (d: DashboardDto) => DashboardDto,
+  ) => void;
 }
 
 function parentOf(path: string): string {
