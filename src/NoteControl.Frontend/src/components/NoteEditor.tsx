@@ -27,6 +27,7 @@ import { ColorMark } from '../editor/ColorMark';
 import { FontFamilyMark } from '../editor/FontFamilyMark';
 import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
+import { CodeBlockPlainPasteExtension } from '../editor/CodeBlockPlainPasteExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
@@ -457,6 +458,16 @@ export function NoteEditor({
             );
           },
         }),
+        // When the cursor is inside a code block, force paste to
+        // be plain-text only — bypass the HTML pipeline entirely.
+        // This stops our own <pre data-title="..."><code>...</code></pre>
+        // wrapper (which the browser puts on the clipboard alongside
+        // text/plain when copying from a rendered code block) from
+        // ending up as escaped literal HTML inside the destination
+        // code block. Must sit AFTER AssetPasteExtension so file /
+        // screenshot paste still wins; that path is unrelated to
+        // this fix.
+        CodeBlockPlainPasteExtension,
         // Slash menu (Notion-style insert popup). Triggered by
         // typing "/" — shows a filterable list of insertable
         // blocks (headings, lists, code, image, etc.).

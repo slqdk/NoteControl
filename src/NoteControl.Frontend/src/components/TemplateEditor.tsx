@@ -23,6 +23,7 @@ import { ColorMark } from '../editor/ColorMark';
 import { FontFamilyMark } from '../editor/FontFamilyMark';
 import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
+import { CodeBlockPlainPasteExtension } from '../editor/CodeBlockPlainPasteExtension';
 import { TableToolbar } from './TableToolbar';
 import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
@@ -148,6 +149,13 @@ export function TemplateEditor({
       FontFamilyMark,
       FontSizeMark,
       PasteNormalizeExtension,
+      // Same code-block paste fix as in NoteEditor — when the cursor
+      // is inside a code block, paste falls back to plain text only,
+      // bypassing the HTML pipeline so our own `<pre data-title=…>`
+      // wrapper doesn't end up as escaped literal text inside the
+      // destination block. See CodeBlockPlainPasteExtension.ts for
+      // the rationale.
+      CodeBlockPlainPasteExtension,
       Placeholder.configure({
         placeholder: "Write the template body. Use '/' for commands.",
       }),
