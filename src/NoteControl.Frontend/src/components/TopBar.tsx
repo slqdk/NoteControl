@@ -12,23 +12,23 @@ interface TopBarProps {
   /**
    * The currently-open vault, if any.
    *
-   * Ship 91: kept as the loose `{id,name}` shape (not a full
-   * VaultDto) for back-compat with callers that don't have the
-   * full DTO on hand. The picker uses this only to highlight
-   * which inline pill is "active"; appearance fields come from
-   * the matching entry inside `vaults`.
+   * Kept as the loose `{id,name}` shape (not a full VaultDto) for
+   * back-compat with callers that don't have the full DTO on hand.
+   * The picker uses this only to highlight which inline pill is
+   * "active"; appearance fields come from the matching entry inside
+   * `vaults`.
    */
   vault?: { id: string; name: string };
   /**
-   * Ship 91: full list of vaults the caller can see, used by the
-   * desktop VaultPicker. When undefined or empty, we fall back to
-   * the pre-Ship-91 brand+vault-name span (e.g. on the vault list
-   * page where vaults haven't been loaded into a layout yet).
-   * VaultLayout passes this in once its own vaultsApi.list() resolves.
+   * Full list of vaults the caller can see, used by the desktop
+   * VaultPicker. When undefined or empty, the topbar's left side
+   * falls back to a plain link to the active vault (if any), so the
+   * user still has somewhere to click to navigate. VaultLayout
+   * passes this in once its own vaultsApi.list() resolves.
    */
   vaults?: VaultDto[];
   /**
-   * Ship 91: callback when an entry in `vaults` was updated via the
+   * Callback when an entry in `vaults` was updated via the
    * appearance popover. The parent should splice the new DTO into
    * its in-memory list so re-renders pick up the new icon/colour
    * everywhere (tree row, picker, dropdown).
@@ -42,8 +42,8 @@ interface TopBarProps {
    */
   rightExtras?: ReactNode;
   /**
-   * Ship 70: rightmost slot, rendered AFTER the account menu. Used
-   * by VaultLayout to inject the settings cog. Kept separate from
+   * Rightmost slot, rendered AFTER the account menu. Used by
+   * VaultLayout to inject the settings cog. Kept separate from
    * rightExtras because the account menu sits between the two.
    */
   rightSettings?: ReactNode;
@@ -55,9 +55,9 @@ interface TopBarProps {
  * Layout right-to-left:
  *   ⚙️ (rightSettings)  [Account ▾]  [Templates]  [Widgets+ ▾]?  [📁 ℹ️] (rightExtras)
  *
- * The Widgets+ button (Ship 78) only renders when the current route
- * is a vault's startpage. It hosts the "add a block" dropdown that
- * pre-Ship-78 lived as a floating + button on the canvas itself —
+ * The Widgets+ button only renders when the current route is a
+ * vault's startpage. It hosts the "add a block" dropdown that
+ * earlier lived as a floating + button on the canvas itself —
  * which got in the way of canvas content. The TopBar is the natural
  * home: always visible, never overlapping content. Clicking an item
  * fires a window event (nc:add-startpage-block) that StartpagePage
@@ -68,26 +68,34 @@ interface TopBarProps {
  * The account menu is the only piece that's always present (when
  * logged in); everything else is optional and depends on whether a
  * vault is open.
+ *
+ * Brand text: the previous "NoteControl /" lead-in on the left has
+ * been removed app-wide. The topbar's left column now holds either
+ * the desktop vault picker (when a `vaults` list has been loaded)
+ * or, on mobile / pre-load, just the active vault's name as a
+ * direct link. On routes with no vault context (the vault list
+ * page's empty state, mid-load shells), the left column is empty —
+ * the search box stays centred via the topbar's grid.
  */
 export function TopBar({
   vault, vaults, onVaultUpdated, rightExtras, rightSettings,
 }: TopBarProps) {
   const location = useLocation();
-  // Ship 86: drives the Widgets+ button gate. The button is meant
-  // for the desktop startpage; on mobile we redirect away from
-  // /startpage entirely (StartpagePage), so the button has nothing
-  // to add to. Hiding it here is defensive — the redirect should
-  // already mean isOnStartpage is false on mobile, but a brief
-  // mid-navigation render or a multi-tab flip could otherwise
-  // show the button momentarily.
+  // Drives the Widgets+ button gate. The button is meant for the
+  // desktop startpage; on mobile we redirect away from /startpage
+  // entirely (StartpagePage), so the button has nothing to add to.
+  // Hiding it here is defensive — the redirect should already mean
+  // isOnStartpage is false on mobile, but a brief mid-navigation
+  // render or a multi-tab flip could otherwise show the button
+  // momentarily.
   const isMobile = useIsMobile();
 
-  // Match `/vaults/:id/startpage` (with optional trailing slash). We
-  // do this as a path-string check rather than a route-match because
-  // TopBar isn't inside the route tree where matchPath is convenient,
-  // and the path shape is stable (StartpagePage owns it). Using
-  // endsWith handles both `/vaults/abc/startpage` and the trailing-
-  // slash variant some routers normalize to.
+  // Match `/vaults/:id/startpage` (with optional trailing slash).
+  // Path-string check rather than route-match because TopBar isn't
+  // inside the route tree where matchPath is convenient, and the
+  // path shape is stable (StartpagePage owns it). endsWith handles
+  // both `/vaults/abc/startpage` and the trailing-slash variant
+  // some routers normalize to.
   const isOnStartpage =
     /\/vaults\/[^/]+\/startpage\/?$/.test(location.pathname);
 
@@ -97,8 +105,8 @@ export function TopBar({
 
   useEffect(() => {
     if (!widgetsOpen) return;
-    // Ship 85: pointerdown not mousedown — see AccountMenu / ContextMenu
-    // / SearchBox for the rationale (iOS Safari + tap-then-scroll).
+    // pointerdown not mousedown — see AccountMenu / ContextMenu /
+    // SearchBox for the rationale (iOS Safari + tap-then-scroll).
     function onDocDown(e: PointerEvent) {
       if (
         widgetsRef.current &&
@@ -139,52 +147,37 @@ export function TopBar({
     <header className="nc-topbar">
       <div className="nc-topbar-left">
         {/*
-          Ship 91: the topbar's left side has two layouts.
+          Left side has two layouts:
 
-          Desktop: a vault picker (inline pills if ≤3 vaults, dropdown
-          otherwise) replacing the pre-Ship-91 "NoteControl / <vault>"
-          plain text. The picker renders the brand-as-home-link
-          implicitly via clicking on a non-active pill.
+          Desktop with vaults loaded: the VaultPicker. It renders
+          every vault as a pill (in original order) and folds
+          whichever pills don't fit in the available width into a
+          dropdown. See VaultPicker.tsx for the overflow algorithm.
 
-          Mobile: the original brand link is hidden (Ship 81 CSS) and
-          the vault name is shown alongside the `/` separator in a
-          small one-line topbar. The picker would crowd the topbar's
-          one-line layout, so we keep the simple text on phones.
-
-          When `vaults` isn't supplied (e.g. the bare /vaults page
-          before VaultLayout loads), we render the legacy brand+
-          vault-name on desktop too so the topbar still works.
+          Mobile, OR desktop before `vaults` has loaded (e.g. the
+          bare /vaults page that hasn't fetched the list yet): a
+          plain link to the active vault, if any. The brand text
+          that used to lead this row has been removed app-wide —
+          when there is no active vault and no list, the left
+          column simply renders nothing and the search box stays
+          centred via the topbar's three-column grid.
         */}
         {!isMobile && vaults && vaults.length > 0 ? (
-          <>
-            <Link to="/vaults" className="nc-brand">
-              NoteControl
-            </Link>
-            <span className="nc-topbar-sep">/</span>
-            <VaultPicker
-              vaults={vaults}
-              active={
-                vault
-                  ? vaults.find((v) => v.id === vault.id) ?? null
-                  : null
-              }
-              onVaultUpdated={onVaultUpdated}
-            />
-          </>
+          <VaultPicker
+            vaults={vaults}
+            active={
+              vault
+                ? vaults.find((v) => v.id === vault.id) ?? null
+                : null
+            }
+            onVaultUpdated={onVaultUpdated}
+          />
         ) : (
-          <>
-            <Link to="/vaults" className="nc-brand">
-              NoteControl
+          vault && (
+            <Link to={`/vaults/${vault.id}`} className="nc-vault-name">
+              {vault.name}
             </Link>
-            {vault && (
-              <>
-                <span className="nc-topbar-sep">/</span>
-                <Link to={`/vaults/${vault.id}`} className="nc-vault-name">
-                  {vault.name}
-                </Link>
-              </>
-            )}
-          </>
+          )
         )}
       </div>
       <div className="nc-topbar-center">
@@ -195,12 +188,11 @@ export function TopBar({
 
         {isOnStartpage && !isMobile && (
           /*
-            Widgets+ dropdown. Mirrors AccountMenu's
-            click-outside / Escape pattern. We use the same
-            .nc-account-popover styles so all topbar dropdowns
-            feel like one menu system, customised slightly via
-            .nc-widgets-* for the icon glyphs in front of each
-            item.
+            Widgets+ dropdown. Mirrors AccountMenu's click-outside /
+            Escape pattern. We use the same .nc-account-popover
+            styles so all topbar dropdowns feel like one menu
+            system, customised slightly via .nc-widgets-* for the
+            icon glyphs in front of each item.
           */
           <div ref={widgetsRef} className="nc-variant-picker">
             <button
