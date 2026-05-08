@@ -52,11 +52,22 @@ The top bar contains, left to right:
 1. **Brand / vault picker** — depends on context:
    - On the vault list page: just the brand text.
    - On any `/vaults/:vaultId/*` page with the full vault list
-     loaded: a desktop-only **vault picker**. ≤ 3 vaults render
-     as inline pills. > 3 vaults render as the active pill +
-     dropdown for the others. Right-click on the active pill
-     opens an **appearance popover** (12 emoji + 8 colour swatches
-     + auto fallback) for changing the vault's icon/colour.
+     loaded: a **vault picker** with two layout variants:
+     - **Desktop** (> 768 px): inline pills. Pills that fit
+       render in the original vault order; whichever pills
+       don't fit fold into a "+N ▾" overflow dropdown. The
+       active vault is treated like any other pill — if it
+       doesn't fit, it ends up in the dropdown and the trigger
+       gains the active highlight. Right-click on the active
+       pill (or on the trigger when the active vault is hidden)
+       opens an **appearance popover** (12 emoji + 8 colour
+       swatches + auto fallback) for changing the vault's
+       icon/colour.
+     - **Mobile** (≤ 768 px): a single trigger pill (active
+       vault's avatar + name + caret) that opens a dropdown
+       listing every vault. No inline-pill overflow algorithm
+       and no appearance popover — vault customisation stays a
+       desktop workflow.
 2. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
 3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
@@ -198,6 +209,12 @@ A few mobile-specific affordances:
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
+- **The tree rail's `🏠+` Add-dashboard button is hidden** at
+  ≤ 768 px — adding a dashboard means dropping widgets onto a
+  free-form 2D canvas, which is a desktop workflow. The mobile
+  rail row keeps just `Daily+ / 📄+ / 📁+`.
+- The vault picker collapses to a single-trigger dropdown
+  variant (see "Top bar" above).
 - Dashboards redirect to `/vaults/:vaultId` on mobile — the
   free-floating canvas has no working interaction model on
   touch.
@@ -380,10 +397,13 @@ small context menu:
   when this is the only dashboard left.
 
 Adding a new dashboard: the **🏠+** button in the tree's
-rail-header action row (next to `Daily+ / 📄+ / 📁+`). New
-dashboards land at the end of the list, get a default name
-("Dashboard", or "Dashboard 2", "Dashboard 3"… — the lowest
-unused number), and the URL navigates to them immediately.
+rail-header action row (next to `Daily+ / 📄+ / 📁+`). The
+button is desktop-only — hidden at ≤ 768 px (see
+[Mobile](#mobile)) since a dashboard's free-form canvas isn't
+usable on touch. New dashboards land at the end of the list,
+get a default name ("Dashboard", or "Dashboard 2",
+"Dashboard 3"… — the lowest unused number), and the URL
+navigates to them immediately.
 
 ### State plumbing
 
