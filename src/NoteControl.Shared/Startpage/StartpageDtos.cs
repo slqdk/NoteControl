@@ -89,7 +89,14 @@ public sealed record DashboardDto(
     /// URL). Same identity / sort-on-write semantics as Blocks
     /// and TaskAreas.
     /// </summary>
-    IReadOnlyList<LinkBlockDto> Links);
+    IReadOnlyList<LinkBlockDto> Links,
+    /// <summary>
+    /// All Motion calculator blocks on this dashboard. Optional
+    /// (nullable) so older v2 files written before this field
+    /// existed still deserialise cleanly. The service normalises
+    /// null to an empty list on read and on write.
+    /// </summary>
+    IReadOnlyList<MotionBlockDto>? MotionBlocks = null);
 
 /// <summary>
 /// One RSS block on a dashboard. Identity is the (random,
@@ -317,3 +324,58 @@ public sealed record LinkItemDto(
     /// types a value.
     /// </summary>
     string Url);
+
+/// <summary>
+/// One Motion-profile calculator block on a dashboard. Renders a
+/// jerk-limited S-curve solver UI (form on the left, velocity chart
+/// + result cells on the right). The DTO carries the user's choice
+/// of solver mode (A/B/C), the persisted input values, and the
+/// chart-overlay toggle states.
+///
+/// Inputs are stored as a free-form Dictionary&lt;string, double&gt;
+/// rather than a strongly-typed-per-mode shape. Trade-off:
+///   - We give up compile-time guarantees that mode B has aMax/dMax
+///     etc., but...
+///   - The DTO stays one record (not three), the JSON shape is one
+///     stable object, and the file is hand-editable without a mode
+///     switch in the schema.
+///
+/// Identity / sort-on-write semantics match the other block types:
+/// stable client-generated id, sorted by id on write so file diffs
+/// stay clean.
+/// </summary>
+public sealed record MotionBlockDto(
+    /// <summary>Stable id, generated client-side via crypto.randomUUID().</summary>
+    string Id,
+
+    /// <summary>
+    /// Solver mode: "A" (Time → Dynamics), "B" (Dynamics → Time),
+    /// or "C" (Dynamics + Limits → Velocity). Set at insert-time
+    /// and stable for the block's life. Server treats any other
+    /// value as opaque text.
+    /// </summary>
+    string Mode,
+
+    /// <summary>Position from the left edge of the dashboard area, in pixels.</summary>
+    int X,
+    /// <summary>Position from the top edge of the dashboard area, in pixels.</summary>
+    int Y,
+    /// <summary>Block width in pixels. Clamped client-side to [380, 1400].</summary>
+    int Width,
+    /// <summary>Block height in pixels. Clamped client-side to [320, 1200].</summary>
+    int Height,
+
+    /// <summary>
+    /// Per-mode input values. Keys depend on Mode:
+    ///   A: T, D, accFrac, dynFrac
+    ///   B: aMax, dMax, jerk, D, vMax
+    ///   C: aMax, dMax, jerk, Dmax, Ttot
+    /// Values are doubles (units/seconds; fractions in [0..1]).
+    /// Server stores verbatim — no per-mode validation.
+    /// </summary>
+    IReadOnlyDictionary<string, double> Inputs,
+
+    /// <summary>Whether the chart's acceleration overlay is on.</summary>
+    bool ShowAcc,
+    /// <summary>Whether the chart's jerk overlay is on.</summary>
+    bool ShowJerk);

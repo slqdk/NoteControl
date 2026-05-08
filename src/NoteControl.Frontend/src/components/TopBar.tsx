@@ -105,6 +105,11 @@ export function TopBar({
 
   // Widgets+ dropdown state.
   const [widgetsOpen, setWidgetsOpen] = useState(false);
+  // When the user picks "Motion" we swap the dropdown contents in
+  // place to show the per-mode entries with a "← Back" row at the
+  // top — same pattern as the slash menu's Templates submenu, so the
+  // dropdown UI stays consistent. Null = main menu.
+  const [widgetsSubmenu, setWidgetsSubmenu] = useState<'motion' | null>(null);
   const widgetsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -132,15 +137,26 @@ export function TopBar({
 
   // If the user navigates AWAY from the startpage while the dropdown
   // is open, close it. Otherwise it'd briefly hang in the air on the
-  // next page until they clicked elsewhere.
+  // next page until they clicked elsewhere. Also reset the submenu so
+  // the next open starts at the main menu.
   useEffect(() => {
     if (!isOnStartpage && widgetsOpen) setWidgetsOpen(false);
   }, [isOnStartpage, widgetsOpen]);
 
+  // Reset submenu whenever the dropdown closes — next open starts
+  // at the main menu, never mid-submenu (would surprise the user).
+  useEffect(() => {
+    if (!widgetsOpen) setWidgetsSubmenu(null);
+  }, [widgetsOpen]);
+
   // Helper that fires the add-block event and closes the dropdown.
   // The event name is namespaced (nc:...) so we don't collide with
-  // anything else that might bubble up.
-  function emitAddBlock(kind: 'rss' | 'task' | 'links') {
+  // anything else that might bubble up. Kinds are extended for the
+  // motion calculator submenu — see DashboardPage's bridge for the
+  // full list.
+  function emitAddBlock(
+    kind: 'rss' | 'task' | 'links' | 'motion-a' | 'motion-b' | 'motion-c',
+  ) {
     window.dispatchEvent(
       new CustomEvent('nc:add-startpage-block', { detail: { kind } }),
     );
@@ -211,30 +227,86 @@ export function TopBar({
             </button>
             {widgetsOpen && (
               <div className="nc-account-popover" role="menu">
-                <button
-                  type="button"
-                  className="nc-account-item"
-                  role="menuitem"
-                  onClick={() => emitAddBlock('rss')}
-                >
-                  📡 RSS feed
-                </button>
-                <button
-                  type="button"
-                  className="nc-account-item"
-                  role="menuitem"
-                  onClick={() => emitAddBlock('task')}
-                >
-                  📌 Task area
-                </button>
-                <button
-                  type="button"
-                  className="nc-account-item"
-                  role="menuitem"
-                  onClick={() => emitAddBlock('links')}
-                >
-                  🔗 Links
-                </button>
+                {widgetsSubmenu === null && (
+                  <>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('rss')}
+                    >
+                      📡 RSS feed
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('task')}
+                    >
+                      📌 Task area
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('links')}
+                    >
+                      🔗 Links
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => setWidgetsSubmenu('motion')}
+                      aria-haspopup="menu"
+                    >
+                      {/* Submenu — clicking opens the per-mode list in
+                          the same dropdown rather than navigating to a
+                          new page. The chevron mirrors the slash-menu
+                          convention for "this opens a submenu". */}
+                      📈 Motion ▸
+                    </button>
+                  </>
+                )}
+                {widgetsSubmenu === 'motion' && (
+                  <>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => setWidgetsSubmenu(null)}
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('motion-a')}
+                      title="You know travel time + distance. Solve for velocity, acc, jerk."
+                    >
+                      Calculator A · Time → Dynamics
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('motion-b')}
+                      title="You know acc/dec/jerk + max velocity. Solve for motion timings."
+                    >
+                      Calculator B · Dynamics → Time
+                    </button>
+                    <button
+                      type="button"
+                      className="nc-account-item"
+                      role="menuitem"
+                      onClick={() => emitAddBlock('motion-c')}
+                      title="You know dynamics + distance + total time. Solve for peak velocity."
+                    >
+                      Calculator C · Dynamics + Limits → Velocity
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -1,0 +1,298 @@
+/* ============================================================================
+ * motion-block.css — Visual styles for the dashboard's Motion calculator
+ * widgets (MotionBlock.tsx). Same elevation / border / radius vocabulary
+ * as .nc-rss-block and .nc-task-area, so the canvas stays visually
+ * coherent regardless of which widget mix the user has placed.
+ *
+ * Loaded as a separate file (rather than appended to the giant
+ * styles.css) for the same reason runtime.css exists: keeps add-on
+ * features in their own file so reverting them is one delete, and the
+ * cascade ordering in main.tsx is explicit.
+ * ========================================================================== */
+
+/* ----- Block frame ------------------------------------------------------- */
+.nc-motion-block {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  /* CSS min mirrors the JS bounds in MotionBlock.tsx. JS is the
+     authority during a resize gesture; the CSS mins prevent visual
+     glitches in the brief window before state syncs. */
+  min-width: 380px;
+  min-height: 320px;
+}
+
+.nc-motion-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.nc-motion-block-header:active { cursor: grabbing; }
+
+.nc-motion-block-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+
+.nc-motion-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+
+.nc-motion-block-iconbtn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--nc-fg-muted);
+}
+.nc-motion-block-iconbtn:hover {
+  background: var(--nc-bg-elev);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+/* ----- Body: form on the left, chart + results on the right ------------- */
+.nc-motion-block-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Below ~520px wide the side-by-side becomes cramped; stack instead so
+   the form keeps full width and the chart sits below it. */
+@media (max-width: 520px) {
+  .nc-motion-block-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ----- Form ------------------------------------------------------------- */
+.nc-motion-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  /* Without min-height:0 the form pushes the chart pane out when the
+     block is short. The grid-row with overflow handles its own scroll. */
+  min-height: 0;
+}
+
+.nc-motion-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-motion-field-label {
+  white-space: nowrap;
+}
+
+.nc-motion-field input[type="text"] {
+  grid-column: 1 / 2;
+  grid-row: 2;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-family: "JetBrains Mono", "Source Code Pro", ui-monospace, Consolas, monospace;
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+  width: 100%;
+  box-sizing: border-box;
+}
+.nc-motion-field input[type="text"]:focus {
+  outline: 1px solid var(--nc-accent, #2980b9);
+  outline-offset: -1px;
+}
+
+.nc-motion-field-unit {
+  grid-column: 2 / 3;
+  grid-row: 2;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-style: italic;
+  white-space: nowrap;
+  padding-left: 4px;
+}
+
+/* Make the label row span both columns so it shows above the input/unit
+   pair as a small heading. */
+.nc-motion-field > .nc-motion-field-label {
+  grid-column: 1 / 3;
+  grid-row: 1;
+}
+
+/* ----- Sliders --------------------------------------------------------- */
+.nc-motion-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+
+.nc-motion-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.nc-motion-slider-val {
+  font-family: "JetBrains Mono", "Source Code Pro", ui-monospace, Consolas, monospace;
+  color: var(--nc-fg);
+}
+
+.nc-motion-slider input[type="range"] {
+  width: 100%;
+}
+
+/* ----- Form actions (Mode B's "Set min. distance" button) -------------- */
+.nc-motion-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.nc-motion-secondary-btn {
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--nc-fg);
+  cursor: pointer;
+}
+.nc-motion-secondary-btn:hover {
+  background: var(--nc-bg-elev);
+}
+
+/* ----- Chart pane ------------------------------------------------------ */
+.nc-motion-chart-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.nc-motion-chart-toggles {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  flex-wrap: wrap;
+}
+
+.nc-motion-chart-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.nc-motion-chart {
+  flex: 1 1 auto;
+  width: 100%;
+  /* The canvas's pixel size is set in JS via clientWidth/Height +
+     devicePixelRatio. Display size is controlled by this CSS rule;
+     the redraw handler watches block size + ResizeObserver. */
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+  min-height: 120px;
+}
+
+/* ----- Results grid --------------------------------------------------- */
+.nc-motion-results {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 6px;
+}
+
+/* On narrow blocks (e.g. when the chart pane is squeezed), drop to a
+   2-up grid so the result values don't overflow. */
+@media (max-width: 720px) {
+  .nc-motion-results {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.nc-motion-result {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  border-left: 2px solid var(--nc-border);
+  padding: 2px 0 2px 8px;
+  min-width: 0;
+}
+
+.nc-motion-result-lbl {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+
+.nc-motion-result-val {
+  font-family: "JetBrains Mono", "Source Code Pro", ui-monospace, Consolas, monospace;
+  font-size: 14px;
+  color: var(--nc-fg);
+  word-break: break-all;
+}
+
+.nc-motion-result-unit {
+  font-style: italic;
+  font-size: 10px;
+}
+
+/* ----- Resize handle (matches .nc-rss-block-resize visually) ---------- */
+.nc-motion-block-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg,
+      transparent 0%, transparent 40%,
+      var(--nc-fg-muted) 40%, var(--nc-fg-muted) 50%,
+      transparent 50%, transparent 70%,
+      var(--nc-fg-muted) 70%, var(--nc-fg-muted) 80%,
+      transparent 80%);
+  opacity: 0.5;
+  touch-action: none;
+}
+.nc-motion-block-resize:hover { opacity: 1; }

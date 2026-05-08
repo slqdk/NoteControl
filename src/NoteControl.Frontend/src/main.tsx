@@ -9,6 +9,11 @@ import './styles.css';
 // existing code-block-header styling without editing styles.css.
 // See runtime.css for the comment explaining the cascade trick.
 import './runtime.css';
+// motion-block.css follows the same "additive feature, separate file"
+// pattern as runtime.css — keeps the Motion calculator widget styles
+// out of the giant styles.css and makes reverting one feature a
+// single-file delete + import-line removal.
+import './motion-block.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

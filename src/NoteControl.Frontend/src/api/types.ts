@@ -187,6 +187,13 @@ export interface DashboardDto {
   blocks: RssBlockDto[];
   taskAreas: TaskAreaDto[];
   links: LinkBlockDto[];
+  /**
+   * Motion-profile calculator blocks on this dashboard. Each block
+   * carries its mode (A/B/C), persisted input values, and chart-toggle
+   * state. May be undefined on payloads from older servers — the page
+   * treats undefined as an empty array.
+   */
+  motionBlocks?: MotionBlockDto[];
 }
 
 /**
@@ -262,6 +269,39 @@ export interface LinkItemDto {
   description: string;
   /** Where the entry navigates to. Opened in a new tab. */
   url: string;
+}
+
+/**
+ * One Motion-profile calculator block on a dashboard.
+ * Mirrors NoteControl.Shared.Startpage.MotionBlockDto.
+ *
+ * Three modes share this DTO; `mode` picks which form is rendered
+ * and which solver runs:
+ *   - 'A' (Time → Dynamics):   inputs T, D, accFrac, dynFrac
+ *   - 'B' (Dynamics → Time):   inputs aMax, dMax, jerk, D, vMax
+ *   - 'C' (Dynamics + Limits): inputs aMax, dMax, jerk, Dmax, Ttot
+ *
+ * Inputs are persisted as a free-form Record<string, number>. Keeping
+ * the keys per-mode rather than typing them strictly trades a bit of
+ * compile-time safety for a much simpler DTO + a single
+ * normalise/store path on the server. If the schema ever needs strict
+ * typing (e.g. a server-side calculation that depends on knowing keys
+ * up front), this is the moment to split.
+ */
+export interface MotionBlockDto {
+  id: string;            // crypto.randomUUID()
+  /** Which solver this block runs. Set at insert-time, sticky. */
+  mode: 'A' | 'B' | 'C';
+  x: number;
+  y: number;
+  width: number;         // clamped client-side [380, 1400]
+  height: number;        // clamped client-side [320, 1200]
+  /** Per-mode input values. Keys are mode-specific (see record summary). */
+  inputs: Record<string, number>;
+  /** Whether the chart's acceleration overlay is on. */
+  showAcc: boolean;
+  /** Whether the chart's jerk overlay is on. */
+  showJerk: boolean;
 }
 
 /** One feed item, normalized server-side from RSS or Atom. */

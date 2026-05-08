@@ -4,10 +4,12 @@ import { Navigate, useOutletContext, useParams } from 'react-router-dom';
 import type {
   DashboardDto,
   LinkBlockDto,
+  MotionBlockDto,
   RssBlockDto,
   TaskAreaDto,
 } from '../api/types';
 import { LinksBlock } from '../components/LinksBlock';
+import { MotionBlock, MOTION_DEFAULTS } from '../components/MotionBlock';
 import { RssBlock } from '../components/RssBlock';
 import { TaskArea } from '../components/TaskArea';
 import type { VaultLayoutContext } from '../components/VaultLayout';
@@ -204,10 +206,68 @@ export function DashboardPage() {
     });
   }, [patchCurrent]);
 
+  // ----- Motion calculator blocks -----
+  //
+  // Same shape as the other block CRUD: update / delete by id, add
+  // appends with a small staircase offset so a freshly-added block
+  // never lands exactly on top of the previous one. The mode is
+  // baked in at insert-time and stays for the block's life.
+
+  const updateMotionBlock = useCallback(
+    (id: string, patch: Partial<MotionBlockDto>) => {
+      patchCurrent((d) => ({
+        ...d,
+        motionBlocks: (d.motionBlocks ?? []).map((m) =>
+          m.id === id ? { ...m, ...patch } : m,
+        ),
+      }));
+    },
+    [patchCurrent],
+  );
+
+  const deleteMotionBlock = useCallback(
+    (id: string) => {
+      patchCurrent((d) => ({
+        ...d,
+        motionBlocks: (d.motionBlocks ?? []).filter((m) => m.id !== id),
+      }));
+    },
+    [patchCurrent],
+  );
+
+  const addMotionBlock = useCallback(
+    (mode: 'A' | 'B' | 'C') => {
+      patchCurrent((d) => {
+        const existing = d.motionBlocks ?? [];
+        const newBlock: MotionBlockDto = {
+          id: newId(),
+          mode,
+          // Place to the right of the other block columns so it doesn't
+          // immediately overlap an RSS or links block.
+          x: 24 + (existing.length % 5) * 32,
+          y: 24 + (existing.length % 5) * 32,
+          width: 640,
+          height: 460,
+          inputs: { ...MOTION_DEFAULTS[mode] },
+          showAcc: false,
+          showJerk: false,
+        };
+        return { ...d, motionBlocks: [...existing, newBlock] };
+      });
+    },
+    [patchCurrent],
+  );
+
   // ------------------------------------------------- topbar event bridge
   // TopBar's Widgets+ dropdown dispatches this event; we listen and
   // route to the right add-handler. Window event keeps TopBar /
-  // DashboardPage decoupled. Only one event name, three kinds.
+  // DashboardPage decoupled. Kind values:
+  //   'rss'        — add an RSS feed block
+  //   'task'       — add a task area
+  //   'links'      — add a links block
+  //   'motion-a'   — add a Motion calculator (Time → Dynamics)
+  //   'motion-b'   — add a Motion calculator (Dynamics → Time)
+  //   'motion-c'   — add a Motion calculator (Dynamics + Limits → Velocity)
   useEffect(() => {
     function onAdd(e: Event) {
       const detail = (e as CustomEvent<{ kind: string }>).detail;
@@ -221,6 +281,15 @@ export function DashboardPage() {
         case 'links':
           addLinkBlock();
           break;
+        case 'motion-a':
+          addMotionBlock('A');
+          break;
+        case 'motion-b':
+          addMotionBlock('B');
+          break;
+        case 'motion-c':
+          addMotionBlock('C');
+          break;
         default:
           // Unknown kind — ignore. Defensive in case a future
           // topbar version emits something we don't recognise.
@@ -229,7 +298,7 @@ export function DashboardPage() {
     }
     window.addEventListener('nc:add-startpage-block', onAdd);
     return () => window.removeEventListener('nc:add-startpage-block', onAdd);
-  }, [addBlock, addTaskArea, addLinkBlock]);
+  }, [addBlock, addTaskArea, addLinkBlock, addMotionBlock]);
 
   if (!vaultId || !dashboardId) return null;
 
@@ -245,7 +314,8 @@ export function DashboardPage() {
     current !== null &&
     current.blocks.length === 0 &&
     current.taskAreas.length === 0 &&
-    current.links.length === 0;
+    current.links.length === 0 &&
+    (current.motionBlocks ?? []).length === 0;
 
   return (
     <div className="nc-page nc-startpage">
@@ -295,6 +365,14 @@ export function DashboardPage() {
               block={linkBlock}
               onChange={(patch) => updateLinkBlock(linkBlock.id, patch)}
               onDelete={() => deleteLinkBlock(linkBlock.id)}
+            />
+          ))}
+          {(current.motionBlocks ?? []).map((mb) => (
+            <MotionBlock
+              key={mb.id}
+              block={mb}
+              onChange={(patch) => updateMotionBlock(mb.id, patch)}
+              onDelete={() => deleteMotionBlock(mb.id)}
             />
           ))}
         </div>

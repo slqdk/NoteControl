@@ -151,13 +151,14 @@ public sealed class StartpageConfigService : IStartpageConfigService
             // re-reads — useful in case the user navigates between
             // dashboards and back before the first save lands.
             var legacy = obj.Deserialize<LegacyConfig>(JsonOpts)
-                         ?? new LegacyConfig(null, null, null);
+                         ?? new LegacyConfig(null, null, null, null);
             var lifted = new DashboardDto(
                 Id: DeterministicDashboardId(vaultId),
                 Name: "Dashboard",
                 Blocks: legacy.Blocks ?? Array.Empty<RssBlockDto>(),
                 TaskAreas: legacy.TaskAreas ?? Array.Empty<TaskAreaDto>(),
-                Links: legacy.Links ?? Array.Empty<LinkBlockDto>());
+                Links: legacy.Links ?? Array.Empty<LinkBlockDto>(),
+                MotionBlocks: legacy.MotionBlocks ?? Array.Empty<MotionBlockDto>());
             return new StartpageConfigDto(
                 CurrentSchemaVersion,
                 new[] { lifted });
@@ -186,7 +187,7 @@ public sealed class StartpageConfigService : IStartpageConfigService
                 new[] { CreateDefaultDashboard(vaultId) });
         }
 
-        // Normalise: every dashboard always has the three arrays
+        // Normalise: every dashboard always has the four arrays
         // present (never null), and the dashboards list is never
         // empty — re-seed the default if a hand-edit emptied it.
         var dashboards = (dto.Dashboards ?? Array.Empty<DashboardDto>())
@@ -195,6 +196,7 @@ public sealed class StartpageConfigService : IStartpageConfigService
                 Blocks = d.Blocks ?? Array.Empty<RssBlockDto>(),
                 TaskAreas = d.TaskAreas ?? Array.Empty<TaskAreaDto>(),
                 Links = d.Links ?? Array.Empty<LinkBlockDto>(),
+                MotionBlocks = d.MotionBlocks ?? Array.Empty<MotionBlockDto>(),
             })
             .ToArray();
         if (dashboards.Length == 0)
@@ -224,7 +226,8 @@ public sealed class StartpageConfigService : IStartpageConfigService
                 Name: d.Name ?? string.Empty,
                 Blocks: SortById(d.Blocks, b => b.Id),
                 TaskAreas: SortById(d.TaskAreas, a => a.Id),
-                Links: SortById(d.Links, l => l.Id)))
+                Links: SortById(d.Links, l => l.Id),
+                MotionBlocks: SortById(d.MotionBlocks, m => m.Id)))
             .ToArray();
         if (inboundDashboards.Length == 0)
         {
@@ -289,7 +292,8 @@ public sealed class StartpageConfigService : IStartpageConfigService
             Name: "Dashboard",
             Blocks: Array.Empty<RssBlockDto>(),
             TaskAreas: Array.Empty<TaskAreaDto>(),
-            Links: Array.Empty<LinkBlockDto>());
+            Links: Array.Empty<LinkBlockDto>(),
+            MotionBlocks: Array.Empty<MotionBlockDto>());
     }
 
     /// <summary>
@@ -322,9 +326,12 @@ public sealed class StartpageConfigService : IStartpageConfigService
     /// Shape of a v1 (legacy) startpage.json — the pre-dashboards
     /// flat layout. Kept inside this file because nothing else
     /// reads v1: the GetAsync path lifts it to v2 immediately.
+    /// MotionBlocks is added defensively — v1 files never had this
+    /// field, but a future hand-edit of a v1-shaped file might.
     /// </summary>
     private sealed record LegacyConfig(
         IReadOnlyList<RssBlockDto>? Blocks,
         IReadOnlyList<TaskAreaDto>? TaskAreas,
-        IReadOnlyList<LinkBlockDto>? Links);
+        IReadOnlyList<LinkBlockDto>? Links,
+        IReadOnlyList<MotionBlockDto>? MotionBlocks);
 }
