@@ -312,7 +312,7 @@ body) hides this Templates entry — see
 
 Each vault holds one or more named **dashboards**, each owning
 its own free-floating canvas of blocks. The canvas is a 2D area
-(no grid) with three block types:
+(no grid) with four block types:
 
 - **RSS feed block** — fetches and displays a feed via the
   server's `/api/vaults/{id}/startpage/feed` proxy. Drag header
@@ -326,6 +326,29 @@ its own free-floating canvas of blocks. The canvas is a 2D area
 - **Links block** — up to 10 link entries (title + description
   + URL), click-to-edit, opens in new tab on click when not
   editing.
+- **Motion calculator block** — a jerk-limited S-curve solver,
+  picked at insert-time from one of four sub-modes:
+  - **Calculator A** (Time → Dynamics): given travel time and
+    distance plus acc/dec ratio and S-curve sharpness sliders,
+    solves for peak velocity, acceleration, and jerk.
+  - **Calculator B** (Dynamics → Time): given dynamics limits
+    and a max velocity, solves for the resulting acc / cruise
+    / dec timings over a given distance. A "Set min. distance"
+    button fills in the smallest distance at which the system
+    can actually reach max velocity.
+  - **Calculator C** (Dynamics + Limits → Velocity): given
+    dynamics limits, a distance, and a total time, solves for
+    the highest peak velocity that fits inside both budgets.
+  - **Calculator D** (Motor / Gear + Time → Dynamics): same
+    motion math as A, plus a motor/gear panel above the form.
+    The panel has mechanical inputs (gear ratio, feed constant,
+    torque constant) and bidirectional motor↔gear conversion
+    of speed and torque (auto-syncs on every keystroke). The
+    motor side speed auto-fills from the motion profile and
+    can be manually overridden; a ↺ reset button next to the
+    motor speed re-couples it to the profile.
+  All four render the same velocity chart with optional
+  Acceleration and Jerk overlays. Inputs persist per block.
 
 Block layout (positions, sizes, contents) for ALL dashboards
 in a vault is stored in a single `{vault}/.notesapp/startpage.json`
@@ -335,9 +358,13 @@ file is saved with debounced ~500ms cadence after the last
 edit.
 
 Adding a block to the current dashboard: the topbar's
-**Widgets+** dropdown lists "Add RSS feed", "Add Task area",
-"Add Links". The dropdown communicates with the dashboard page
-via window `CustomEvent`s — no shared context.
+**Widgets+** dropdown lists "RSS feed", "Task area", "Links",
+and a **Motion ▸** entry. The Motion entry **swaps the popup
+in place** to a submenu with a "← Back" row plus the four
+calculators (A through D) — same in-place-swap pattern as the
+slash menu's Templates submenu. The dropdown communicates
+with the dashboard page via window `CustomEvent`s — no shared
+context.
 
 ### Tree-side dashboards list
 
