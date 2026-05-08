@@ -7,12 +7,13 @@
  *       04-April/                ← month number + name
  *         2026-04-28.md          ← date file
  *
- * For tree display we want Danish human-readable labels:
+ * For tree display we want English human-readable labels:
  *   Daily Notes/
  *     2026/                     ← year unchanged
- *       April/                   ← drop the "04-" prefix (we still show
- *                                   the original folder, just relabel it)
- *         Mandag 28              ← weekday + day of month, no extension
+ *       May/                     ← drop the "05-" prefix and
+ *                                   relabel the month in English
+ *         Monday d. 28           ← English weekday + " d. " + day
+ *                                   number, no extension
  *
  * IMPORTANT: this is DISPLAY-ONLY. The on-disk filenames are
  * unchanged. The path canonicalisation, search index, links to
@@ -26,30 +27,30 @@
 
 const DAILY_ROOT = 'Daily Notes';
 
-/** Danish weekday names indexed 0=Sunday..6=Saturday (JS Date.getDay()). */
-const DANISH_WEEKDAYS = [
-  'Søndag',
-  'Mandag',
-  'Tirsdag',
-  'Onsdag',
-  'Torsdag',
-  'Fredag',
-  'Lørdag',
+/** English weekday names indexed 0=Sunday..6=Saturday (JS Date.getDay()). */
+const ENGLISH_WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
 ];
 
-/** Danish month names indexed 1..12. Index 0 is unused/empty. */
-const DANISH_MONTHS = [
+/** English month names indexed 1..12. Index 0 is unused/empty. */
+const ENGLISH_MONTHS = [
   '',
-  'Januar',
-  'Februar',
-  'Marts',
+  'January',
+  'February',
+  'March',
   'April',
-  'Maj',
-  'Juni',
-  'Juli',
+  'May',
+  'June',
+  'July',
   'August',
   'September',
-  'Oktober',
+  'October',
   'November',
   'December',
 ];
@@ -86,7 +87,7 @@ export function formatDailyNoteLabel(fullPath: string): string | null {
     return null;
   }
 
-  // 2. Month folder: "Daily Notes/2026/04-April" → "April" (Danish).
+  // 2. Month folder: "Daily Notes/2026/04-April" → "April" (English).
   if (parts.length === 2) {
     const monthFolder = parts[1];
     // Format "MM-MonthName" — try to parse the month number.
@@ -94,10 +95,11 @@ export function formatDailyNoteLabel(fullPath: string): string | null {
     if (!m) return null;
     const monthNum = parseInt(m[1], 10);
     if (monthNum < 1 || monthNum > 12) return null;
-    return DANISH_MONTHS[monthNum];
+    return ENGLISH_MONTHS[monthNum];
   }
 
-  // 3. Date file: "Daily Notes/2026/04-April/2026-04-28.md" → "Mandag 28".
+  // 3. Date file: "Daily Notes/2026/04-April/2026-04-28.md"
+  //    → "Monday d. 28".
   //    Filename should match YYYY-MM-DD.md.
   if (parts.length === 3) {
     const fileName = parts[2];
@@ -115,8 +117,11 @@ export function formatDailyNoteLabel(fullPath: string): string | null {
     const date = new Date(year, month - 1, day);
     if (Number.isNaN(date.getTime())) return null;
 
-    const weekday = DANISH_WEEKDAYS[date.getDay()];
-    return `${weekday} ${day}`;
+    const weekday = ENGLISH_WEEKDAYS[date.getDay()];
+    // "d." is the Danish "den" (the) abbreviation kept as a
+    // visual separator the user prefers — small concession to
+    // local convention even though weekday/month names are English.
+    return `${weekday} d. ${day}`;
   }
 
   // Anything deeper is unexpected; let the default formatter handle it.
