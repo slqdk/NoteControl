@@ -4723,14 +4723,37 @@ a.nc-rss-item-title:hover {
     grid-column: auto;
   }
 
-  /* Hide the desktop vault picker on mobile defensively. TopBar.tsx
-     already gates it on !isMobile so it shouldn't render here, but
-     during a viewport flip (window resize, device rotate) React may
-     re-render before unmount; the CSS hide makes the flip instant.
-     On mobile the topbar's left renders just the active vault's
-     name as a plain link via the TopBar JSX fallback. */
-  .nc-vault-picker {
-    display: none;
+  /* Mobile vault picker. The picker now renders on mobile too, but
+     in its single-trigger-dropdown variant (VaultPicker mobile=true).
+     We constrain the trigger's max width so a long vault name can't
+     push the search box off the row — the label truncates with an
+     ellipsis instead. Tap-to-open dropdown reuses the desktop
+     .nc-vault-picker-menu styles (already responsive enough for
+     phone viewports). */
+  .nc-vault-picker-mobile {
+    /* Override the desktop flex:1 1 0 — on mobile we DON'T want the
+       picker to claim the grid column's stretch. The left grid
+       column is `auto` (sized to content); flex:1 inside `auto`
+       does nothing visually but keeps the algorithm's container
+       semantics consistent. Left here for clarity rather than
+       behaviour. */
+    flex: 0 0 auto;
+  }
+  .nc-vault-picker-mobile .nc-vault-mobile-trigger {
+    /* Cap so a long vault name truncates rather than evicting the
+       search box. The actual budget the user sees depends on the
+       phone width; ~40vw leaves enough for the search field at
+       phone-portrait widths (~360-430 px viewport). */
+    max-width: 40vw;
+  }
+  .nc-vault-picker-mobile .nc-vault-mobile-trigger .nc-vault-pill-label {
+    /* Single line + ellipsis on overflow. The default pill label
+       is inline-flex and wraps; restricting it here keeps the
+       trigger one line tall. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   /* Right side: kill the gap a bit so the icons fit. */

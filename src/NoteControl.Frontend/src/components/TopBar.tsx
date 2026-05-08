@@ -20,7 +20,7 @@ interface TopBarProps {
    */
   vault?: { id: string; name: string };
   /**
-   * Full list of vaults the caller can see, used by the desktop
+   * Full list of vaults the caller can see, used by the
    * VaultPicker. When undefined or empty, the topbar's left side
    * falls back to a plain link to the active vault (if any), so the
    * user still has somewhere to click to navigate. VaultLayout
@@ -31,7 +31,10 @@ interface TopBarProps {
    * Callback when an entry in `vaults` was updated via the
    * appearance popover. The parent should splice the new DTO into
    * its in-memory list so re-renders pick up the new icon/colour
-   * everywhere (tree row, picker, dropdown).
+   * everywhere (tree row, picker, dropdown). Mobile never invokes
+   * this (no appearance popover on mobile) but the prop is still
+   * passed through unconditionally — VaultPicker itself decides
+   * whether to use it.
    */
   onVaultUpdated?: (updated: VaultDto) => void;
   /**
@@ -70,12 +73,12 @@ interface TopBarProps {
  * vault is open.
  *
  * Brand text: the previous "NoteControl /" lead-in on the left has
- * been removed app-wide. The topbar's left column now holds either
- * the desktop vault picker (when a `vaults` list has been loaded)
- * or, on mobile / pre-load, just the active vault's name as a
- * direct link. On routes with no vault context (the vault list
- * page's empty state, mid-load shells), the left column is empty —
- * the search box stays centred via the topbar's grid.
+ * been removed app-wide. The topbar's left column now holds the
+ * VaultPicker whenever a `vaults` list has been loaded, in either
+ * its desktop (inline pills + overflow) or mobile (single trigger
+ * + dropdown) variant. Pre-load (or routes with no vault context)
+ * the column is empty — the search box stays centred via the
+ * topbar's grid.
  */
 export function TopBar({
   vault, vaults, onVaultUpdated, rightExtras, rightSettings,
@@ -88,6 +91,11 @@ export function TopBar({
   // isOnStartpage is false on mobile, but a brief mid-navigation
   // render or a multi-tab flip could otherwise show the button
   // momentarily.
+  //
+  // Same flag also drives the VaultPicker's `mobile` prop so the
+  // picker renders as a single-trigger dropdown on narrow viewports
+  // instead of the inline-pills overflow layout (which doesn't
+  // physically fit alongside the search box on a phone).
   const isMobile = useIsMobile();
 
   // Match `/vaults/:id/startpage` or `/vaults/:id/dashboards/:dashboardId`
@@ -167,22 +175,22 @@ export function TopBar({
     <header className="nc-topbar">
       <div className="nc-topbar-left">
         {/*
-          Left side has two layouts:
+          Left side. Renders the VaultPicker whenever the parent has
+          loaded a `vaults` list — desktop and mobile both, just in
+          different visual variants:
 
-          Desktop with vaults loaded: the VaultPicker. It renders
-          every vault as a pill (in original order) and folds
-          whichever pills don't fit in the available width into a
-          dropdown. See VaultPicker.tsx for the overflow algorithm.
+            Desktop: inline pills with width-measured overflow.
+            Mobile:  single trigger pill + dropdown of all vaults.
 
-          Mobile, OR desktop before `vaults` has loaded (e.g. the
-          bare /vaults page that hasn't fetched the list yet): a
+          Pre-load (e.g. the bare /vaults page that hasn't fetched
+          the list yet, or /vaults/:id mid-fetch) we fall back to a
           plain link to the active vault, if any. The brand text
           that used to lead this row has been removed app-wide —
           when there is no active vault and no list, the left
           column simply renders nothing and the search box stays
           centred via the topbar's three-column grid.
         */}
-        {!isMobile && vaults && vaults.length > 0 ? (
+        {vaults && vaults.length > 0 ? (
           <VaultPicker
             vaults={vaults}
             active={
@@ -191,6 +199,7 @@ export function TopBar({
                 : null
             }
             onVaultUpdated={onVaultUpdated}
+            mobile={isMobile}
           />
         ) : (
           vault && (

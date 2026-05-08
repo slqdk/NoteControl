@@ -5,13 +5,15 @@ import { VaultAvatar } from './VaultAvatar';
 import { VaultAppearancePopover } from './VaultAppearancePopover';
 
 /**
- * Topbar vault picker (desktop only).
+ * Topbar vault picker.
  *
  * Replaces the pre-Ship-91 "/Beckhoff" plain text in the topbar's
  * left side. The picker renders vaults as inline pills (avatar +
  * name) and folds whichever pills don't fit into a dropdown.
  *
- * Overflow model (replaces the older ≤3 / >3 fixed threshold):
+ * Two render modes:
+ *
+ *   Desktop (default, mobile=false). Inline-pills overflow model:
  *   - Render every pill that fits in the available container
  *     width, in the original `vaults` order.
  *   - When some pills don't fit, append a "+N ▾" trigger that
@@ -21,23 +23,31 @@ import { VaultAppearancePopover } from './VaultAppearancePopover';
  *     purposes; if there isn't room, it ends up in the dropdown.
  *     We highlight the trigger with the active styling so the user
  *     can still see "your current vault is in here."
+ *   - Width measurement uses an off-screen mirror div containing
+ *     every pill at its natural width. ResizeObserver re-runs the
+ *     calculation on viewport / app-frame width changes.
+ *   - Right-clicking the active vault's pill (whether visible or
+ *     in the dropdown row) opens the appearance popover (icon +
+ *     colour pickers).
  *
- * Width measurement uses an off-screen mirror div containing every
- * pill at its natural width. We read offsetWidth on layout, compute
- * how many pills fit (accounting for the trigger button when there
- * is overflow), and re-render. A ResizeObserver on the visible
- * container re-runs the calculation on viewport / app-frame width
- * changes.
- *
- * Right-clicking the active vault's pill (whether visible or in
- * the dropdown row) opens the appearance popover (icon + colour
- * pickers). Mobile bypasses this whole component (TopBar gates on
- * !isMobile and the desktop CSS hides .nc-vault-picker for safety).
+ *   Mobile (mobile=true). Single-trigger dropdown:
+ *   - One trigger button rendered: the active vault as a pill
+ *     (avatar + name + caret). Tapping toggles a dropdown that
+ *     lists all vaults including the active one.
+ *   - No width-measurement / mirror / overflow algorithm — the
+ *     trigger is always a single pill, and the dropdown always
+ *     holds the full list. The narrow viewport doesn't have room
+ *     for the inline-pills layout regardless.
+ *   - No appearance popover — touch has no right-click, and
+ *     vault customisation is a desktop workflow per frontend.md
+ *     "desktop-first" stance.
+ *   - When there's no active vault (mid-load) the trigger renders
+ *     a generic "Vaults ▾" label.
  *
  * "Last opened" memory: the picker writes localStorage
  * `nc:last-vault-id` whenever the active vault flips. The
  * VaultListPage reads it on mount to redirect to the previous
- * vault; the picker itself doesn't read it.
+ * vault; the picker itself doesn't read it. Same in both modes.
  */
 export const LAST_VAULT_LS_KEY = 'nc:last-vault-id';
 
@@ -47,6 +57,8 @@ export const LAST_VAULT_LS_KEY = 'nc:last-vault-id';
  * we don't end up in a thrashy "fits with trigger / doesn't fit
  * without it" oscillation when the user resizes by one pixel at a
  * time. Errs on the side of one fewer visible pill.
+ *
+ * Desktop-only — the mobile branch doesn't measure.
  */
 const TRIGGER_RESERVE_PX = 72;
 
@@ -56,6 +68,8 @@ const TRIGGER_RESERVE_PX = 72;
  * The mirror's getBoundingClientRect-based measurement already
  * handles per-pill margin/padding; this constant is only the
  * inter-element spacing the parent flex container adds.
+ *
+ * Desktop-only.
  */
 const PILL_GAP_PX = 4;
 
@@ -68,18 +82,27 @@ export interface VaultPickerProps {
    * Callback when a vault's appearance has been changed via the
    * right-click popover. The parent should splice the updated DTO
    * into its in-memory `vaults` list so other UI sees the change
-   * without a refetch.
+   * without a refetch. Mobile mode never invokes this callback
+   * (no appearance popover on mobile).
    */
   onVaultUpdated?: (updated: VaultDto) => void;
+  /**
+   * When true, render the simplified single-trigger dropdown
+   * variant suitable for narrow viewports. Defaults to false
+   * (desktop inline-pills + overflow).
+   */
+  mobile?: boolean;
 }
 
 export function VaultPicker({
   vaults,
   active,
   onVaultUpdated,
+  mobile = false,
 }: VaultPickerProps) {
   // How many leading pills currently fit in the visible row. The
-  // remainder go into the overflow dropdown.
+  // remainder go into the overflow dropdown. (Desktop only — the
+  // mobile branch ignores this value.)
   //
   // Initial value is 0 (pessimistic): on first paint we render
   // nothing visible, then the layout effect immediately measures
@@ -92,28 +115,32 @@ export function VaultPicker({
   // disturbing transition than an overflow flash.
   const [fitCount, setFitCount] = useState<number>(0);
 
-  // Whether the overflow dropdown is currently open.
+  // Whether the dropdown is currently open. Used by both modes —
+  // desktop opens the overflow menu, mobile opens the all-vaults
+  // menu — but the state lives in one variable since only one of
+  // the two branches renders at a time.
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Right-click appearance popover state. We track which vault was
-  // right-clicked + the cursor coordinates so the popover anchors
-  // there. Only the ACTIVE vault can be customised — right-clicking
-  // a non-active pill does nothing (browser context menu shows).
+  // Right-click appearance popover state (desktop only). We track
+  // which vault was right-clicked + the cursor coordinates so the
+  // popover anchors there. Only the ACTIVE vault can be customised
+  // — right-clicking a non-active pill does nothing (browser
+  // context menu shows). Mobile never sets this.
   const [appearancePopover, setAppearancePopover] = useState<
     { vault: VaultDto; x: number; y: number } | null
   >(null);
 
-  // The visible container we're measuring against. The mirror sits
-  // inside it (absolutely positioned + visually hidden) so the
-  // width calculation is against exactly the same flex context the
-  // visible pills will be laid out in.
+  // Visible container + mirror for the desktop measurement loop.
+  // Mobile attaches its own ref for outside-click via dropdownRef
+  // and ignores these.
   const containerRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
 
   // Persist the active vault as "last opened" so the landing page
   // can redirect there next session. Only writes when active flips
   // — re-renders without an active change don't churn localStorage.
+  // Same behaviour in both modes.
   useEffect(() => {
     if (active) {
       try {
@@ -127,7 +154,9 @@ export function VaultPicker({
   }, [active]);
 
   // Outside-click + Escape close for the dropdown. Same pattern as
-  // AccountMenu / SearchBox / TopBar Widgets+ (Ship 85).
+  // AccountMenu / SearchBox / TopBar Widgets+ (Ship 85). Used by
+  // both modes — both render a dropdown anchored against
+  // dropdownRef when open.
   useEffect(() => {
     if (!dropdownOpen) return;
     function onPointerDown(e: PointerEvent) {
@@ -146,7 +175,8 @@ export function VaultPicker({
     };
   }, [dropdownOpen]);
 
-  // Width-based overflow recompute. Runs:
+  // Width-based overflow recompute. DESKTOP ONLY — the mobile branch
+  // doesn't measure or fold. Runs:
   //   - On mount (initial measure).
   //   - When the vault list changes (IDs or names — both affect
   //     the rendered widths).
@@ -158,6 +188,7 @@ export function VaultPicker({
   // fitCount — measuring it would feedback-loop into "fits because
   // it's already collapsed". The mirror always renders all pills.
   useLayoutEffect(() => {
+    if (mobile) return;
     const container = containerRef.current;
     const mirror = mirrorRef.current;
     if (!container || !mirror) return;
@@ -215,11 +246,12 @@ export function VaultPicker({
     // shift pill widths). active.id is also a dependency because
     // the active styling can change a pill's width slightly (border
     // doesn't, but a future style change might).
-  }, [vaults, active?.id]);
+  }, [vaults, active?.id, mobile]);
 
   // Right-click handler. Only fires the appearance popover when the
   // RIGHT-clicked vault is the ACTIVE one — for other vaults we let
   // the browser's native context menu through (boring but harmless).
+  // Desktop only.
   function handleContextMenu(e: React.MouseEvent, vault: VaultDto) {
     if (active && vault.id === active.id) {
       e.preventDefault();
@@ -230,6 +262,74 @@ export function VaultPicker({
   // ---------- Render ----------
 
   if (vaults.length === 0) return null;
+
+  // -------------------- MOBILE branch --------------------
+  //
+  // Single trigger button (the active vault as a pill, with a
+  // caret) that opens a dropdown listing every vault. No width
+  // measurement, no mirror, no overflow algorithm — the narrow
+  // viewport always wants the dropdown.
+  //
+  // The trigger is a <button> rather than a <Link>: we want the
+  // tap to open the dropdown, not navigate. To switch to the
+  // currently-active vault, the user picks it from the dropdown
+  // (which closes and Link-navigates as expected — even when they
+  // pick the same vault, that's a no-op navigation, harmless).
+  if (mobile) {
+    const triggerLabel = active?.name ?? 'Vaults';
+    return (
+      <div
+        className="nc-vault-picker nc-vault-picker-mobile"
+        ref={dropdownRef}
+      >
+        <button
+          type="button"
+          className={
+            'nc-vault-pill nc-vault-mobile-trigger'
+            + (active ? ' nc-vault-pill-active' : '')
+          }
+          onClick={() => setDropdownOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={dropdownOpen}
+          title={
+            active
+              ? `${active.name} — tap to switch vault`
+              : 'Pick a vault'
+          }
+        >
+          {active && <VaultAvatar vault={active} size={22} />}
+          <span className="nc-vault-pill-label">{triggerLabel}</span>
+          <span className="nc-vault-pill-caret" aria-hidden="true">▾</span>
+        </button>
+        {dropdownOpen && (
+          <div className="nc-vault-picker-menu" role="menu">
+            {vaults.map((v) => (
+              <Link
+                key={v.id}
+                to={`/vaults/${v.id}`}
+                className={
+                  'nc-vault-picker-menu-item'
+                  + (active?.id === v.id ? ' nc-vault-picker-menu-item-active' : '')
+                }
+                role="menuitem"
+                onClick={() => setDropdownOpen(false)}
+              >
+                <VaultAvatar vault={v} size={22} />
+                <span className="nc-vault-picker-menu-name">{v.name}</span>
+                {/* path shown muted so the user can distinguish
+                    vaults with the same display name (e.g.
+                    "Personal" under different users in admin
+                    mode). */}
+                <span className="nc-vault-picker-menu-path">{v.path}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // -------------------- DESKTOP branch --------------------
 
   // Helper: render one pill (used by both the visible row, the
   // mirror, and the dropdown rows aren't pills — they have a

@@ -975,16 +975,25 @@ export function VaultLayout() {
         before then would no-op silently. Same nc-rail-header-button
         styling as its siblings; the icon-+plus pattern (🏠+)
         follows Daily+ / 📄+ / 📁+.
+
+        Hidden on mobile — adding a dashboard means dropping
+        widgets onto a free-form 2D canvas, which is a desktop
+        workflow (the canvas itself isn't tuned for narrow
+        viewports). The mobile rail row stays tight with just
+        Daily+ / 📄+ / 📁+. Same gating pattern as the import
+        split-button below.
       */}
-      <button
-        type="button"
-        className="nc-rail-header-button"
-        title="Add a new dashboard"
-        onClick={onAddDashboard}
-        disabled={!dashboardsHook.config}
-      >
-        🏠+
-      </button>
+      {!isMobile && (
+        <button
+          type="button"
+          className="nc-rail-header-button"
+          title="Add a new dashboard"
+          onClick={onAddDashboard}
+          disabled={!dashboardsHook.config}
+        >
+          🏠+
+        </button>
+      )}
       {/*
         Daily-note button — always opens (or creates and
         opens) today's daily note. Idempotent server-side,
