@@ -48,14 +48,23 @@ Cross-tab changes propagate via the `storage` event.
 
 The top bar contains, left to right:
 
-1. **Brand / vault picker** — depends on context:
-   - On the vault list page: just the brand text.
-   - On any `/vaults/:vaultId/*` page with the full vault list
-     loaded: a desktop-only **vault picker**. ≤ 3 vaults render
-     as inline pills. > 3 vaults render as the active pill +
-     dropdown for the others. Right-click on the active pill
-     opens an **appearance popover** (12 emoji + 8 colour swatches
-     + auto fallback) for changing the vault's icon/colour.
+1. **Vault picker** — desktop-only, rendered when the full
+   vault list is loaded. Pills (avatar + name) render in
+   original order; as many fit in the available width as the
+   slot allows. The remainder fold into a **"+N ▾" trigger**
+   at the right end of the row that opens a dropdown listing
+   only the overflow vaults (no duplicates with what's already
+   visible). When the active vault doesn't fit, it lands in
+   the dropdown and the trigger picks up the active styling so
+   it's still visible at a glance. Right-clicking the active
+   pill (or the trigger when active is hidden) opens an
+   **appearance popover** (12 emoji + 8 colour swatches + auto
+   fallback) for changing the vault's icon/colour. On mobile
+   and during the brief window before the vault list has
+   loaded, the picker is replaced by a plain link to the
+   active vault's name. On routes with no vault context (the
+   bare `/vaults` empty/loading state), the slot is empty and
+   the search box stays centred via the topbar's grid.
 2. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
 3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
@@ -66,6 +75,9 @@ The top bar contains, left to right:
    the current vault (in vault routes).
 5. **Account menu** — current user's name, with a popover menu
    (Account, My sessions, Settings, Sign out).
+
+The "NoteControl /" brand text that used to lead the topbar's
+left column has been removed app-wide.
 
 ## Settings (web UI, not the tray)
 
