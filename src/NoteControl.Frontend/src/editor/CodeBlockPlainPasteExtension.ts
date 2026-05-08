@@ -26,10 +26,14 @@ import type { ResolvedPos } from '@tiptap/pm/model';
  *   goes on `text/plain` instead of just the code text, and now the
  *   clipboard is poisoned.
  *
- *   Fix: register our own `clipboardTextSerializer` that runs FIRST.
- *   When the editor's current selection is fully inside a code
- *   block, return the slice's plain text content. Otherwise return
- *   null and let MarkdownClipboard take over for non-code copies.
+ *   Fix: register our own `clipboardTextSerializer` and force it to
+ *   run before MarkdownClipboard via TipTap's `priority` field
+ *   (1000, matching `@tiptap/extension-link`). When the editor's
+ *   current selection is fully inside a code block, return the
+ *   slice's plain text content. Otherwise return null, which
+ *   ProseMirror's `view.someProp(...) || …` short-circuit treats
+ *   as "defer to the next handler" — MarkdownClipboard then runs
+ *   as normal for non-code-block copies.
  *
  * HALF B (paste landing):
  *
@@ -50,15 +54,28 @@ import type { ResolvedPos } from '@tiptap/pm/model';
  *
  * Composability with MarkdownClipboard:
  *
- *   ProseMirror only uses the FIRST plugin whose
- *   `clipboardTextSerializer` is defined per copy event AND that
- *   returns a non-null value. By registering earlier in the
- *   extension array than MarkdownExtension, we sit before
- *   MarkdownClipboard in the plugin chain. Returning null from
- *   our serializer defers to the next handler — MarkdownClipboard
- *   then runs as normal for non-code-block copies. The markdown
- *   copy/paste flow for paragraphs, lists, and other content is
- *   untouched.
+ *   ProseMirror picks the FIRST plugin whose
+ *   `clipboardTextSerializer` returns a non-null value. TipTap
+ *   orders ProseMirror plugins by extension `priority` (higher
+ *   first), and this matters more than position in the user's
+ *   extension array — TipTap reverses the array before sorting,
+ *   then sorts stably by priority, so for equal-priority extensions
+ *   the LATER-in-array one ends up FIRST in the plugin chain.
+ *   MarkdownClipboard is added by Markdown's `addExtensions()` and
+ *   inherits default priority 100.
+ *
+ *   At default priority, the relative position of MarkdownExtension
+ *   (line ~496 in NoteEditor.tsx) versus this extension (line ~470)
+ *   put MarkdownClipboard first in the plugin chain — which is why
+ *   the previous version of this extension didn't work even though
+ *   the code was deployed correctly. The `priority: 1000` below
+ *   forces this extension to the front of the chain regardless of
+ *   array position.
+ *
+ *   Returning null from our serializer defers to the next handler
+ *   — MarkdownClipboard runs as normal for non-code-block copies.
+ *   The markdown copy/paste flow for paragraphs, lists, and other
+ *   content is untouched.
  *
  * Composability with AssetPasteExtension:
  *
@@ -111,6 +128,15 @@ function selectionInsideCodeBlock($from: ResolvedPos, $to: ResolvedPos): boolean
 
 export const CodeBlockPlainPasteExtension = Extension.create({
   name: 'codeBlockPlainPaste',
+
+  // Force this extension's plugin to the front of ProseMirror's
+  // plugin chain. See the file header for the full ordering story
+  // — short version: at default priority MarkdownClipboard wins
+  // the `clipboardTextSerializer` race and copies from non-default-
+  // titled code blocks emit the `<pre data-title=…>` wrapper as
+  // text/plain. 1000 matches @tiptap/extension-link's convention
+  // for "must run before defaults".
+  priority: 1000,
 
   addProseMirrorPlugins() {
     const editor = this.editor;
