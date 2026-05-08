@@ -33,11 +33,7 @@ Everything renders inside `.nc-app-frame` — a centred band of
 configurable width:
 
 - **Width**: 1000–2400 px in steps of 50, default 1600. Set
-  globally per-browser, not per-vault. The top of the slider
-  range is a "Full width" sentinel — selecting it makes the
-  frame track the viewport width instead of capping at a px
-  value, so the app fills the browser regardless of how wide
-  the monitor is.
+  globally per-browser, not per-vault.
 - **Outside the frame**: a configurable preset gradient acts as
   a "desk surface" — visible as left/right gutters on monitors
   wider than the frame.
@@ -68,9 +64,8 @@ The top bar contains, left to right:
    shared layout.
 4. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-5. **Account menu** — 👤 button with a popover showing the
-   username, Sign out, and (for admins) debug recording controls.
-   See [Account menu](#account-menu) below.
+5. **Account menu** — current user's name, with a popover menu
+   (Account, My sessions, Settings, Sign out).
 
 ## Settings (web UI, not the tray)
 
@@ -78,22 +73,15 @@ Two settings groups, both per-browser via localStorage:
 
 ### Appearance
 Configurable from the appearance cog in the top bar:
-- App frame width (1000–2400 px). Top of the slider is "Full
-  width" — see the **App frame** section above.
+- App frame width (1000–2400 px).
 - Gradient preset (6 presets: Slate, Sky, Mint, Peach, Lavender,
   Charcoal — each with light + dark variants).
 
 ### Note defaults
 Configurable from the same panel:
-- Default note width (700–2400 px, default 1000), as a slider.
-  Top of the slider is "Full width" — when picked, notes
-  without a per-note `width` fill the available editor area
-  (constrained by the app frame and rails, not the literal
-  viewport). Resolution order is unchanged: per-note
-  frontmatter `width` → this default → CSS baseline (700).
-  Per-note `width` in frontmatter is always a plain integer;
-  the "Full width" sentinel only applies to this global
-  default.
+- Default note width (700–2400 px, default 1000). Resolution
+  order: per-note frontmatter `width` → this default → CSS
+  baseline (700).
 - Default font (one of the system aliases: System UI, Sans-serif,
   Serif, Monospace, Inter, Rubik, JetBrains Mono — or "Default").
   Per-note frontmatter `font` overrides.
@@ -131,49 +119,9 @@ the tree on the left and the properties panel on the right, so
 navigation between notes feels like a real desktop app — no
 re-mount, no full-page reload.
 
-Auto-save is **debounced ~800 ms after the last keystroke**. A
-small badge in the breadcrumb row above the editor shows save
-state (Saved, Saving, Unsaved changes, Save failed, or
-Conflict). The save also fires immediately on:
-
-- **editor blur** — clicking outside the editor surface (the
-  properties panel, the tree, the breadcrumb);
-- **tab/window hidden** — switching tabs or minimising;
-- **unmount** — navigating away from the editor route;
-- **Ctrl+S / Cmd+S** — explicit force-save;
-- **Retry button** on the badge after a failure.
-
-When a save fails (network, server error, expired session, etc.)
-the badge turns red, a Retry button appears next to it, and a
-toast surfaces the error message at the bottom-right for ~6
-seconds. The next keystroke also re-arms the debounce, so
-typing through a transient failure recovers automatically. A
-**conflict** (412 from the server — another device or tab saved
-the same note) renders an equally loud red chip but no Retry
-button; the user has to reload the note to recover.
-
-**Click-away navigation guard.** When the user clicks a
-different note in the tree, or the breadcrumb's vault link, with
-unsaved changes pending, the editor flushes the save before
-allowing the navigation. If the flush fails, a centred modal
-appears with two choices:
-
-- **Stay and retry** — closes the modal without navigating; the
-  user remains on the current note with their unsaved text
-  intact, and can use the Retry button or keep typing to try
-  again.
-- **Discard changes and leave** — proceeds with the navigation;
-  the unsaved text is lost.
-
-A click on the dimmed backdrop equals Stay (the safer default
-for a stray click). The guard's scope is the tree's note/folder
-clicks and the editor's breadcrumb back-to-vault link. Top-bar
-navigation (brand, vault picker, Templates link), the account
-menu's Sign out, and search-result clicks are NOT gated yet;
-they take effect immediately like any other route change.
-Browser back/forward and tab close also fall through, with the
-browser's generic `beforeunload` "Leave site?" prompt as the
-only safety net.
+Auto-save is **debounced ~1.5s after the last keystroke**. A
+small badge in the topbar shows save state (Saved, Saving,
+Error). Ctrl+S forces an immediate save.
 
 The editor renders the note inside a fixed-width "page" surface
 (default 700 px, configurable via frontmatter or the global
@@ -184,16 +132,11 @@ itself doesn't grow.
 The editor is **TipTap-based** with a custom extension set;
 features and shortcuts are documented in [notes.md](notes.md).
 
-ST code blocks paired as `Declaration` + `Implementation` get
-an inline **Run** button that opens an overlay modal — the ST
-runtime sandbox. The modal is a self-contained interpreter; it
-makes no server calls and discards its state when closed. The
-component pair lives at `src/components/RuntimeModal.tsx` and
-`src/components/InlineSource.tsx`, with the parser/interpreter
-under `src/runtime/`. The behavioural contract (when the Run
-button appears, what the modal supports, how variable poking
-works, the statement budget) is in
-[notes.md](notes.md#st-runtime-sandbox).
+When the user has flipped the **View** toggle in the properties
+panel to source mode, the breadcrumb row shows a small `source`
+pill next to the path so the mode remains visible even with the
+properties panel hidden. The pill is read-only — the toggle
+itself lives in the panel.
 
 ## Properties panel
 
@@ -204,6 +147,9 @@ Shows the selected note or folder's metadata. For notes:
 - **Read-only**: full path, parent folder, created/updated
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
+- **View toggle**: button that flips the editor surface between
+  the rendered TipTap view and a read-only markdown source
+  view. See "View toggle" below for the full behaviour.
 - **Buttons**: Move (toggles move-mode), Delete (with
   confirmation). Rename happens by editing the name inline.
 
@@ -212,6 +158,41 @@ timestamps. Move/Delete buttons available.
 
 The panel toggles via the rail-toggle button in the topbar (or
 collapses automatically on narrow viewports).
+
+### View toggle
+
+A button in the panel labelled "View source" (or "View
+rendered" when active) swaps the editor's surface between two
+modes for the currently-open note:
+
+- **Rendered** (default): the live TipTap editor.
+- **Source**: a read-only `<pre>` showing the note's markdown
+  body in monospace. Same page card as the rendered view (same
+  width, same padding, same per-note `width` and `fontSize`).
+  The `font` frontmatter is ignored in source mode — source is
+  always monospace.
+
+Source mode is **per-note and ephemeral**:
+
+- Selecting a different note resets the toggle back to rendered.
+- Closing and reopening the same note also returns to rendered.
+- The mode is not persisted in localStorage or frontmatter.
+
+When the user toggles **into** source mode, the editor page
+first awaits any pending autosave and then refetches the note,
+so the source rendered reflects what's actually on disk rather
+than the in-memory contenteditable state. If the save or
+refetch fails the swap still happens (showing the stale body)
+and the existing save-status badge surfaces the failure.
+
+The source body is just the note's body — the YAML frontmatter
+is not included, since the panel already breaks those fields
+out individually.
+
+The toggle is **desktop only**. The mobile properties panel
+(rendered inside the editor on narrow viewports) doesn't expose
+this control, because a source-mode swap would replace the very
+surface the mobile panel lives in.
 
 ## Mobile
 
@@ -225,6 +206,8 @@ A few mobile-specific affordances:
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
+- **The View toggle is not exposed on mobile** — see
+  "View toggle" above for why.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
@@ -385,103 +368,15 @@ are in [notes.md](notes.md).
 
 ## Account menu
 
-A small popover triggered from the 👤 button in the topbar.
-Items, top to bottom:
+A small popover triggered from the user's name in the topbar.
+Items:
 
-- **Username** (small, muted, non-interactive) — the calling
-  user's name as a header for the popover.
-- **Debug recording: ON/OFF** *(admin only)* — toggles the
-  frontend debug recorder. See [debug recorder](#debug-recorder)
-  below.
-- **View log (N)** *(admin only)* — opens the debug log viewer
-  overlay. The count is the current number of captured entries.
+- **Account** — change own password, change email.
+- **My sessions** — list of own active sessions, with revoke
+  buttons.
+- **Settings** — opens the appearance/notes/tree settings panel.
 - **Sign out** — POSTs `/api/auth/logout`, clears in-memory
   state, navigates to `/login`.
-
-Non-admin users see only the username and Sign out.
-
-Open/close behaviour: click the button to toggle; click outside
-or press Escape to close. Toggling Debug recording does NOT
-close the menu (so the user can flip it on and immediately go
-to View log without re-opening). Opening the log viewer DOES
-close the menu (the viewer is a full-page overlay).
-
-## Debug recorder
-
-An admin-only diagnostic tool that captures a rolling buffer of
-frontend events, intended for reproducing "weird things"
-(actions that don't fire, images that fail to load, etc.) and
-sharing the trace for analysis.
-
-Recording is **off by default** and lives entirely in
-**in-memory state, per browser tab**. There is no localStorage
-persistence — closing or reloading the tab clears the buffer.
-The buffer is a ring of up to **500 entries**; once full,
-oldest entries are dropped.
-
-### What's captured
-
-Each entry has a kind, a relative timestamp (ms since recording
-started), and a payload:
-
-- **`api`** — calls through the typed API client. Method, path,
-  request body, response status, duration, and parsed error
-  detail on failure. Bodies are truncated at ~2 KB with a
-  visible `…[truncated]` marker.
-- **`fetch`** — direct `fetch()` calls outside the typed
-  wrapper (multipart uploads for note import and asset upload).
-- **`console`** — calls to `console.error` and `console.warn`,
-  including arguments.
-- **`click`** — every `pointerdown` at document level. Records
-  a CSS-ish descriptor of the closest interactive ancestor
-  (button / link / `[role="button"]` / `[role="menuitem"]`),
-  including its text. Useful for confirming a click registered
-  even when no handler ran.
-- **`nav`** — route changes via `pushState` / `replaceState` /
-  `popstate`.
-- **`image`** — `<img>` element error events (failed asset
-  loads). Records the resolved `src`.
-- **`error`** — uncaught window errors and unhandled promise
-  rejections, with stack traces.
-- **`mark`** — synthesised entries when recording starts and
-  stops, so the boundaries of a recording session are visible.
-
-### Log viewer
-
-Opened from the Account menu's **View log** item. A full-page
-overlay with:
-
-- A header showing recording state (`● Recording` / `○ Stopped`)
-  and the entry count.
-- Action buttons: **Start/Stop**, **Clear**, **Copy JSON**,
-  **Close**.
-- A list of entries (oldest at top), each as a click-to-expand
-  row with `+Nms | kind | summary`. Expanding shows the full
-  JSON payload.
-- A notice line reminding the user that captured request bodies
-  may include note content.
-
-**Copy JSON** writes the full log (entries + URL + user agent +
-viewport size + capture timestamp) to the clipboard. Falls back
-to `document.execCommand('copy')` on plain HTTP (where
-`navigator.clipboard.writeText` is unavailable). Dismissing the
-viewer (Close, Escape, or clicking the backdrop) does NOT stop
-recording.
-
-### Caveats
-
-- **Admin gating is UI-only**. The recorder is also accessible
-  via `window.__ncDebug.{start,stop,clear,getEntries,toJson}()`
-  from the browser console regardless of role. This is by
-  design — the recorder doesn't grant any new access; it
-  records traffic the user could already see in DevTools'
-  Network and Console tabs.
-- **Captured bodies may be sensitive.** Saving a note while
-  recording puts that note's content in the buffer until
-  Clear, Stop, or tab reload. The viewer surfaces a warning;
-  treat exported logs accordingly.
-- **The buffer is per-tab**. Multiple tabs each have their own
-  independent recorder.
 
 ## Keyboard shortcuts
 
