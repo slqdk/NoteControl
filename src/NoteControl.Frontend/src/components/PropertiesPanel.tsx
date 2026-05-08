@@ -78,6 +78,45 @@ export interface PropertiesPanelProps {
    * The parent owns the toggle so we don't have to mirror state.
    */
   onStartMove: () => void;
+
+  // ----- Dashboard selection -----
+  //
+  // When the user is on a dashboard route, the panel switches into
+  // a "dashboard properties" mode that supersedes the note/folder
+  // rendering. The fields below carry the dashboard's identity and
+  // mutation callbacks; they're optional so non-dashboard callers
+  // (the existing folder/editor pages) don't have to wire them.
+
+  /**
+   * The dashboard whose properties to show. When non-null, the
+   * panel renders a small dashboard-specific UI (Name + Delete) and
+   * skips the note/folder rendering entirely. The `selection` prop
+   * is ignored in this mode — dashboards aren't TreeSelections.
+   */
+  dashboardSelection?: { id: string; name: string } | null;
+  /**
+   * Rename callback for the dashboard. Receives the dashboard id
+   * and the user's new name (already trimmed by EditableName).
+   * Throws/rejects to surface a save error in EditableName's
+   * inline status; for example, the call site uses this to reject
+   * names that duplicate another dashboard.
+   */
+  onDashboardRename?: (id: string, newName: string) => Promise<void>;
+  /**
+   * Delete callback for the dashboard. The parent confirms with
+   * the user, calls useDashboards.deleteDashboard, and navigates
+   * to a sibling dashboard if the deleted one was active. Same
+   * shape the right-click menu uses, so behaviour matches across
+   * entry points.
+   */
+  onDashboardDelete?: (id: string) => void;
+  /**
+   * False when this is the only dashboard. Drives the Delete
+   * button's disabled state (and tooltip) — the data layer also
+   * refuses last-dashboard delete, but disabling the button is
+   * what the user actually sees.
+   */
+  canDeleteDashboard?: boolean;
 }
 
 /**
@@ -96,6 +135,10 @@ export function PropertiesPanel({
   onDelete,
   isInMoveMode,
   onStartMove,
+  dashboardSelection,
+  onDashboardRename,
+  onDashboardDelete,
+  canDeleteDashboard,
 }: PropertiesPanelProps) {
   const [note, setNote] = useState<NoteDto | null>(null);
   const [folder, setFolder] = useState<FolderListingDto | null>(null);
@@ -330,6 +373,24 @@ export function PropertiesPanel({
       </div>
 
       <div className="nc-props-body">
+        {dashboardSelection ? (
+          /*
+            Dashboard properties mode. Bypasses the note/folder
+            rendering entirely — dashboards aren't TreeSelections,
+            their fields don't map to Path/Modified/etc., and threading
+            a third selection kind through every existing branch was
+            more change than the feature warrants. This sub-tree
+            owns all dashboard-specific UI.
+          */
+          <DashboardProperties
+            id={dashboardSelection.id}
+            name={dashboardSelection.name}
+            canDelete={canDeleteDashboard ?? true}
+            onRename={onDashboardRename}
+            onDelete={onDashboardDelete}
+          />
+        ) : (
+          <>
         {!selection && (
           <p className="nc-empty">
             Right-click an item in the tree and choose <em>Properties</em> to
@@ -550,6 +611,8 @@ export function PropertiesPanel({
             )}
           </div>
         )}
+          </>
+        )}
       </div>
     </aside>
   );
@@ -576,4 +639,98 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ----- Dashboard properties sub-panel -----
+
+/**
+ * Dashboard-specific properties view. Rendered when the parent
+ * passes a non-null `dashboardSelection`. Two affordances today:
+ *
+ *   - Name (editable inline via EditableName — same component the
+ *     note/folder rename UI uses, so the visual + validation feel
+ *     matches). Empty / slash-bearing names are rejected by
+ *     EditableName before onRename is called.
+ *   - Delete button at the bottom, disabled when this is the only
+ *     dashboard. The data layer (useDashboards) refuses last-
+ *     dashboard delete too, but disabling the button is what the
+ *     user actually sees; the data-layer guard is a defence-in-
+ *     depth check.
+ *
+ * Future fields worth considering: created/updated timestamps
+ * (would require the server to write them into the dashboard
+ * object — currently nothing tracks them), block counts, an order
+ * field (when drag-to-reorder dashboards lands).
+ */
+interface DashboardPropertiesProps {
+  id: string;
+  name: string;
+  canDelete: boolean;
+  onRename?: (id: string, newName: string) => Promise<void>;
+  onDelete?: (id: string) => void;
+}
+
+function DashboardProperties({
+  id,
+  name,
+  canDelete,
+  onRename,
+  onDelete,
+}: DashboardPropertiesProps) {
+  return (
+    <>
+      <dl className="nc-props-grid">
+        <dt>Type</dt>
+        <dd>Dashboard</dd>
+
+        <dt>Name</dt>
+        <dd>
+          <EditableName
+            value={name}
+            // EditableName's onSave is async; useDashboards.renameDashboard
+            // is sync. Wrap for the contract; the inline error UI in
+            // EditableName surfaces any rejection (e.g. the wrapper at
+            // VaultLayout throws on duplicate names).
+            onSave={async (newName) => {
+              if (onRename) {
+                await onRename(id, newName);
+              }
+            }}
+          />
+        </dd>
+      </dl>
+
+      <div className="nc-props-actions">
+        {/*
+          No Move button here — dashboards don't live in folders.
+          The action set is intentionally smaller than the note /
+          folder one: just Delete.
+        */}
+        <button
+          type="button"
+          className="nc-btn nc-btn-danger"
+          disabled={!canDelete || !onDelete}
+          onClick={() => {
+            if (!canDelete || !onDelete) return;
+            // Confirm matches the right-click menu's wording so the
+            // two entry points feel like the same action.
+            if (
+              window.confirm(
+                `Delete dashboard "${name}"?\n\nWidgets on this dashboard will be removed. Other dashboards are unaffected.`,
+              )
+            ) {
+              onDelete(id);
+            }
+          }}
+          title={
+            canDelete
+              ? 'Delete this dashboard'
+              : "Can't delete the only dashboard. Add another first."
+          }
+        >
+          🗑 Delete dashboard
+        </button>
+      </div>
+    </>
+  );
 }

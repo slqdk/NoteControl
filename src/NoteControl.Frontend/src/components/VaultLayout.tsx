@@ -234,14 +234,83 @@ export function VaultLayout() {
   // Ship 81: also hide the props panel entirely on mobile. Same
   // pattern — don't touch the persisted preference, just override
   // for the duration of the mobile viewport.
-  const effectivePropsVisible =
-    layout.propsVisible && !isOnDashboardRoute && !isMobile;
+  // -----------------------------------------------------------------
+  // Properties panel reveal override on dashboard routes.
+  //
+  // Pre-Ship: dashboards force-hid the panel because the panel had
+  // nothing useful to show (only note/folder selections render).
+  // Now the panel renders dashboard-specific properties (Name +
+  // Delete) when on a dashboard route, but the user wants the
+  // initial state to still be HIDDEN — they reveal it on demand
+  // via the ℹ️ rail toggle.
+  //
+  // Mechanics:
+  //   - dashboardPropsRevealed: ephemeral, defaults to false. Reset
+  //     to false whenever the active dashboard id changes (so
+  //     switching dashboards re-hides the panel — each dashboard
+  //     gets a fresh reveal).
+  //   - The rail toggle button continues to flip layout.propsVisible
+  //     globally; we ALSO flip dashboardPropsRevealed when on a
+  //     dashboard route, so a single click of the toggle does the
+  //     right thing in both contexts.
+  //
+  // The user's persisted layout.propsVisible (their note/folder
+  // preference) is left UNTOUCHED across dashboard navigation —
+  // arriving at a note still uses whatever they set there.
+  // -----------------------------------------------------------------
+  const [dashboardPropsRevealed, setDashboardPropsRevealed] = useState(false);
+
+  // Reset the reveal whenever the URL pivots to a different
+  // dashboard. We compare directly against activeDashboardId so the
+  // reset fires once per id-change; switching folder→dashboard
+  // (activeDashboardId goes null→non-null) triggers it too, which
+  // is the "always hide on load" behaviour the user asked for.
+  useEffect(() => {
+    if (activeDashboardId !== null) {
+      setDashboardPropsRevealed(false);
+    }
+  }, [activeDashboardId]);
+
+  // Effective visibility:
+  //   - On non-dashboard routes (folder, editor): same as before —
+  //     user's persisted preference, hidden on mobile.
+  //   - On dashboard routes: hidden by default; revealed only when
+  //     the user has actively flipped it open this dashboard
+  //     session.
+  const effectivePropsVisible = isMobile
+    ? false
+    : isOnDashboardRoute
+      ? dashboardPropsRevealed
+      : layout.propsVisible;
 
   // Ship 81: on mobile the tree is always rendered (it's the
   // navigation primary), but its content collapses to a single-row
   // strip when mobileTreeExpanded is false. Desktop respects the
   // user's persisted treeVisible preference exactly as before.
   const effectiveTreeVisible = isMobile ? true : layout.treeVisible;
+
+  /**
+   * Unified rail-toggle handler for the props panel. Routes to the
+   * right state owner based on whether we're on a dashboard route:
+   *
+   *   - Dashboard route → flip dashboardPropsRevealed (ephemeral).
+   *     Doesn't touch the persisted preference, so leaving the
+   *     dashboard for a note restores the user's last note-side
+   *     setting unchanged.
+   *   - Anything else → flip layout.propsVisible (persisted).
+   *
+   * The button's apparent state (highlighted on / off) follows
+   * effectivePropsVisible, which is what this handler toggles in
+   * either branch — so a single click always inverts what the user
+   * sees, no surprise.
+   */
+  const onTogglePropsPanel = useCallback(() => {
+    if (isOnDashboardRoute) {
+      setDashboardPropsRevealed((v) => !v);
+    } else {
+      layout.setPropsVisible(!layout.propsVisible);
+    }
+  }, [isOnDashboardRoute, layout]);
 
   /**
    * Navigate to a dashboard's URL. Same housekeeping as the legacy
@@ -898,6 +967,25 @@ export function VaultLayout() {
   const actionButtons = (
     <span className="nc-rail-header-actions">
       {/*
+        Dashboards-add button. Lives at the very front of the row
+        because dashboards sit at the top of the tree (above the
+        Daily Notes / regular folders) — keeping the buttons in
+        rough alignment with the section they target. Disabled
+        until the dashboards config has loaded, since clicking
+        before then would no-op silently. Same nc-rail-header-button
+        styling as its siblings; the icon-+plus pattern (🏠+)
+        follows Daily+ / 📄+ / 📁+.
+      */}
+      <button
+        type="button"
+        className="nc-rail-header-button"
+        title="Add a new dashboard"
+        onClick={onAddDashboard}
+        disabled={!dashboardsHook.config}
+      >
+        🏠+
+      </button>
+      {/*
         Daily-note button — always opens (or creates and
         opens) today's daily note. Idempotent server-side,
         so spamming this is harmless. Title shows the local
@@ -958,8 +1046,15 @@ export function VaultLayout() {
   );
 
   const railHeader = (
+    /*
+      Pre-Ship: the rail header rendered a "Tree" label on the
+      left next to the action buttons. The label was redundant —
+      the rail's purpose is obvious from its position and the
+      buttons themselves carry their own labels. Dropped to give
+      the action-buttons row more breathing room for the new
+      dashboards button without forcing the rail wider.
+    */
     <div className="nc-rail-header nc-rail-header-with-action">
-      <span>Tree</span>
       {actionButtons}
     </div>
   );
@@ -1006,7 +1101,6 @@ export function VaultLayout() {
               activeDashboardId={activeDashboardId}
               canDelete={dashboardsHook.config.dashboards.length > 1}
               onSelect={onSelectDashboard}
-              onAdd={onAddDashboard}
               onRename={dashboardsHook.renameDashboard}
               onDelete={onDeleteDashboard}
             />
@@ -1044,9 +1138,9 @@ export function VaultLayout() {
             <ToggleRailButtons
               slot="toggles"
               treeVisible={layout.treeVisible}
-              propsVisible={layout.propsVisible}
+              propsVisible={effectivePropsVisible}
               onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
-              onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
+              onToggleProps={onTogglePropsPanel}
               treeAppearance={treeAppearance}
             />
           )
@@ -1064,9 +1158,9 @@ export function VaultLayout() {
             <ToggleRailButtons
               slot="settings"
               treeVisible={layout.treeVisible}
-              propsVisible={layout.propsVisible}
+              propsVisible={effectivePropsVisible}
               onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
-              onToggleProps={() => layout.setPropsVisible(!layout.propsVisible)}
+              onToggleProps={onTogglePropsPanel}
               treeAppearance={treeAppearance}
             />
           )
@@ -1234,7 +1328,50 @@ export function VaultLayout() {
               vaultId={vaultId}
               selection={selection}
               variant={variant}
-              onClose={() => layout.setPropsVisible(false)}
+              /*
+                onClose flips visibility through the same unified
+                handler the rail-toggle button uses, so the close
+                ✕ behaves identically whether on a dashboard route
+                (toggles ephemeral reveal) or a note/folder route
+                (toggles persisted preference).
+              */
+              onClose={onTogglePropsPanel}
+              /*
+                Dashboard properties: when the URL points at a
+                dashboard the panel switches into a dashboard-only
+                mode (Name + Delete). The fields are passed
+                unconditionally; PropertiesPanel checks
+                dashboardSelection !== null to decide which mode
+                to render.
+              */
+              dashboardSelection={
+                isOnDashboardRoute && activeDashboardId
+                  ? (dashboardsHook.config?.dashboards.find(
+                      (d) => d.id === activeDashboardId,
+                    ) ?? null)
+                  : null
+              }
+              onDashboardRename={async (id, newName) => {
+                // Duplicate-name check at the call site so
+                // EditableName surfaces the rejection in its inline
+                // status. The DashboardList inline rename does its
+                // own dup check before calling renameDashboard, so
+                // the data layer itself stays validation-light.
+                const others = (
+                  dashboardsHook.config?.dashboards ?? []
+                ).filter((d) => d.id !== id);
+                const lower = newName.trim().toLowerCase();
+                if (others.some((o) => o.name.trim().toLowerCase() === lower)) {
+                  throw new Error(
+                    'Another dashboard already has this name.',
+                  );
+                }
+                dashboardsHook.renameDashboard(id, newName);
+              }}
+              onDashboardDelete={onDeleteDashboard}
+              canDeleteDashboard={
+                (dashboardsHook.config?.dashboards.length ?? 0) > 1
+              }
               /*
                 Step 36: pass the move-mode flag for the *currently
                 selected* item only. The Move button in the panel is

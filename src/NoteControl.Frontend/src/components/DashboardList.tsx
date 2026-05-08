@@ -4,7 +4,7 @@ import type { DashboardDto } from '../api/types';
 
 /**
  * Renders the dashboards section at the top of the tree — one row
- * per dashboard plus a small "+" affordance to add a new one.
+ * per dashboard.
  *
  * Replaces the single synthetic "Startpage" row that used to live
  * here. Same rendering shape (plain divs, not TreeNode) for the
@@ -21,6 +21,14 @@ import type { DashboardDto } from '../api/types';
  *   - F2-style inline rename is started from the context menu;
  *     the row swaps to an editable input until Enter / Esc / blur.
  *
+ * Adding a new dashboard is NOT this component's job — it lives in
+ * the rail header's action-buttons row (the 🏠+ button next to
+ * Daily+ / 📄+ / 📁+). VaultLayout owns the action-buttons strip
+ * and wires the click straight to useDashboards.addDashboard. Pre-
+ * Ship: this component rendered an inline "+ New dashboard" row at
+ * the bottom of the list; that was removed when the rail-header
+ * button arrived to avoid two add-affordances on the same screen.
+ *
  * Mutations are NOT done here — this component is a presenter. It
  * gets handlers from VaultLayout (which owns the dashboards data
  * via useDashboards) and calls them. Doing the actual config
@@ -34,7 +42,6 @@ export interface DashboardListProps {
   canDelete: boolean;
 
   onSelect: (id: string) => void;
-  onAdd: () => void;
   onRename: (id: string, newName: string) => void;
   onDelete: (id: string) => void;
 }
@@ -44,7 +51,6 @@ export function DashboardList({
   activeDashboardId,
   canDelete,
   onSelect,
-  onAdd,
   onRename,
   onDelete,
 }: DashboardListProps) {
@@ -138,38 +144,6 @@ export function DashboardList({
           </div>
         ),
       )}
-
-      {/*
-        "+ New dashboard" affordance. Sits below the list, before
-        the regular folder rows. Same row shape as the dashboard
-        rows themselves so the indent geometry matches; the icon
-        is "+" and the label tells the user what it does. We
-        don't use a proper <button> here because the row needs to
-        match the tree's row layout (chevron cell + icon cell +
-        label cell); a button would force a different baseline.
-      */}
-      <div
-        className="nc-tree-row nc-tree-row-startpage nc-tree-row-add-dashboard"
-        role="button"
-        tabIndex={0}
-        onClick={onAdd}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onAdd();
-          }
-        }}
-        title="Add a new dashboard"
-      >
-        <span
-          className="nc-tree-chevron nc-tree-chevron-empty"
-          aria-hidden="true"
-        />
-        <span className="nc-tree-icon" aria-hidden="true">
-          ＋
-        </span>
-        <span className="nc-tree-label">New dashboard</span>
-      </div>
 
       {menu && (
         <div
