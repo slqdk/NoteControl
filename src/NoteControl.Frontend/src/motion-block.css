@@ -102,15 +102,24 @@
   /* Without min-height:0 the form pushes the chart pane out when the
      block is short. The grid-row with overflow handles its own scroll. */
   min-height: 0;
+  /* min-width:0 lets the column shrink below its content's intrinsic
+     width — without it, a long unit string ("u/s³") plus the input's
+     default min-width pushes the column wider than its grid track and
+     the body grows a horizontal scrollbar. */
+  min-width: 0;
 }
 
 .nc-motion-field {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--nc-fg-muted);
+  /* Same min-width:0 reasoning as the form column — prevents the
+     row's intrinsic content width from forcing horizontal overflow
+     when the block is narrow. */
+  min-width: 0;
 }
 
 .nc-motion-field-label {
@@ -128,6 +137,10 @@
   background: var(--nc-bg);
   color: var(--nc-fg);
   width: 100%;
+  /* Browsers give <input> a default min-width of ~150px (size attr
+     fallback). Without min-width:0 here the input refuses to shrink
+     past that, forcing the grid track wider than its container. */
+  min-width: 0;
   box-sizing: border-box;
 }
 .nc-motion-field input[type="text"]:focus {
