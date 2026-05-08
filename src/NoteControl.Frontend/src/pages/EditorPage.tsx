@@ -8,6 +8,7 @@ import {
   type EditorUpload,
   type SaveNowOutcome,
 } from '../components/NoteEditor';
+import { MarkdownSourceView } from '../components/MarkdownSourceView';
 import { SaveStatusIndicator, type SaveState } from '../components/SaveStatusIndicator';
 import { SaveFailedDialog } from '../components/SaveFailedDialog';
 import {
@@ -40,7 +41,21 @@ import type { VaultLayoutContext } from '../components/VaultLayout';
  * this guard - they fall through to the existing beforeunload
  * handler in NoteEditor (which prompts the browser's generic
  * "Leave site?" dialog when there are unsaved changes).
+ *
+ * View mode: the page can render either the live TipTap editor OR
+ * a read-only markdown source viewer. The toggle is driven by the
+ * properties panel via a window event (nc:note-view-mode-changed).
+ * Whenever the URL note path changes the view mode resets to
+ * 'rendered' — opening a different note always lands in the
+ * rendered editor. When swapping into source mode we first flush
+ * any pending save (so the source we display is what's on disk)
+ * and refetch the note (so freshly-saved body is what gets shown).
+ * If the flush fails or the refetch fails, we still swap but log
+ * a warning — the existing save-state badge surfaces the real
+ * failure to the user.
  */
+type ViewMode = 'rendered' | 'source';
+
 export function EditorPage() {
   const { vaultId } = useParams<{ vaultId: string }>();
   const [searchParams] = useSearchParams();
@@ -51,6 +66,16 @@ export function EditorPage() {
   const [note, setNote] = useState<NoteDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+
+  // The current rendering mode of the editor surface. Starts in
+  // 'rendered' for every note, including this initial mount —
+  // see also the load effect below where we reset it on note
+  // change. The properties panel mirrors this state locally and
+  // also resets per selection; we don't try to keep them in lock-
+  // step beyond "both reset on note change" because the only
+  // cross-component signal that matters is the user clicking the
+  // toggle (which fires the event we listen for here).
+  const [viewMode, setViewMode] = useState<ViewMode>('rendered');
 
   // Save status + uploads live here so the breadcrumb row can show
   // them. NoteEditor reports them via callbacks; we don't try to
@@ -174,6 +199,10 @@ export function EditorPage() {
     // on the next breadcrumb.
     setSaveState({ kind: 'idle' });
     setUploads([]);
+    // Always start a freshly-loaded note in rendered mode. This
+    // is the "toggle back when the note loads" behaviour the user
+    // asked for: the source view never persists across notes.
+    setViewMode('rendered');
     // Drop the saveNow handle from the previous editor mount so a
     // stray Retry click on a stale error chip can't fire a save
     // against the new note's editor (it'll just no-op until the
@@ -196,6 +225,74 @@ export function EditorPage() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [vaultId, notePath]);
+
+  // Listen for view-mode toggle requests from the properties panel.
+  // The panel is the single source of intent — we just react.
+  // Behaviours:
+  //   - Ignore events for other notes (multi-tab safety, also
+  //     handles the brief window where the URL has changed but
+  //     the panel's old selection is still firing).
+  //   - On 'source', flush any pending save and refetch the note
+  //     so the source we render reflects what's actually on disk.
+  //     This matters because the autosave debounce means the body
+  //     in `note.body` could be up to 800ms behind the editor's
+  //     contenteditable. If the flush or refetch fails we still
+  //     swap (showing the slightly-stale body) — the existing save
+  //     badge already tells the user what's wrong.
+  //   - On 'rendered' the editor remounts fresh and re-reads
+  //     `note.body` as its initial content; no extra work needed.
+  useEffect(() => {
+    if (!vaultId || !notePath) return;
+
+    let cancelled = false;
+
+    async function onChange(e: Event) {
+      const ce = e as CustomEvent<{ path: string; mode: ViewMode }>;
+      if (!ce.detail || ce.detail.path !== notePath) return;
+      const next = ce.detail.mode;
+
+      if (next === 'source') {
+        // Flush + refetch so the source view shows what's on disk.
+        // saveNow's outcome is 'ok' / 'failed' / 'conflict'; we
+        // treat anything non-ok the same: log, fall through, swap.
+        const saveNow = saveNowRef.current;
+        if (saveNow) {
+          try {
+            await saveNow();
+          } catch {
+            // Swallow: the editor's own error reporting handles
+            // surfacing this to the user. We just want the latest
+            // body if we can get it.
+          }
+        }
+        try {
+          const fresh = await notesApi.get(vaultId!, notePath);
+          if (cancelled) return;
+          if (fresh) setNote(fresh);
+        } catch {
+          // Refetch failed — fall back to the existing in-memory
+          // body. The user will see at most an autosave-debounce
+          // worth of staleness (~800ms).
+        }
+        if (!cancelled) setViewMode('source');
+      } else {
+        if (!cancelled) setViewMode('rendered');
+      }
+    }
+
+    // We have to wrap in a synchronous function because the event
+    // listener API doesn't await the handler. The async work above
+    // runs detached; cancelled guard prevents stale state writes.
+    function onChangeSync(e: Event) {
+      void onChange(e);
+    }
+
+    window.addEventListener('nc:note-view-mode-changed', onChangeSync);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nc:note-view-mode-changed', onChangeSync);
     };
   }, [vaultId, notePath]);
 
@@ -246,6 +343,18 @@ export function EditorPage() {
           </Link>
           <span className="nc-topbar-sep">/</span>
           <span>{notePath}</span>
+          {/*
+            Subtle indicator that the editor is in source mode. The
+            toggle itself lives in the properties panel, but a user
+            who has the panel hidden could otherwise be confused
+            why their note suddenly looks like text. Render-only;
+            no interaction.
+          */}
+          {viewMode === 'source' && (
+            <span className="nc-source-mode-pill" title="Source view — read-only markdown">
+              source
+            </span>
+          )}
         </div>
         <div className="nc-breadcrumb-status">
           {uploads.length > 0 && (
@@ -283,9 +392,19 @@ export function EditorPage() {
         </div>
       )}
 
-      {note && (
+      {/*
+        Surface swap. Rendered mode mounts the live TipTap editor;
+        source mode mounts a read-only markdown viewer. We use the
+        viewMode in the key for the editor so swapping back to
+        rendered remounts it fresh — an editor that was just
+        unmounted into source mode shouldn't carry stale handlers
+        across the swap. The note path remains in the key as well
+        so navigating to a different note also forces a remount,
+        same as before.
+      */}
+      {note && viewMode === 'rendered' && (
         <NoteEditor
-          key={note.path}
+          key={`${note.path}::rendered`}
           vaultId={vaultId}
           initialNote={note}
           onSaveStateChange={setSaveState}
@@ -294,6 +413,9 @@ export function EditorPage() {
             saveNowRef.current = fn;
           }}
         />
+      )}
+      {note && viewMode === 'source' && (
+        <MarkdownSourceView note={note} />
       )}
 
       {dialogOpen && (

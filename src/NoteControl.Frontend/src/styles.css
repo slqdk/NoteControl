@@ -1677,6 +1677,71 @@ body.nc-dragging * {
   font-weight: 600;
 }
 
+/* ----- Markdown source view (read-only swap-in for the editor) ----
+
+   When the user toggles "View source" in the properties panel, the
+   editor page swaps the live TipTap surface for a <pre>-based
+   read-only viewer. The viewer reuses the same .nc-editor card so
+   the swap is visually in-place — same width, same border, same
+   drop shadow as the rendered page.
+
+   We override only the typographic bits: font is forced monospace
+   (the user wants to see "the code"), white-space is pre-wrap so
+   long lines wrap at the page width instead of overflowing into a
+   horizontal scrollbar, and the .nc-editor's prose-spacing rules
+   (h1/h2/li margins, etc.) don't apply because <pre> isn't a
+   ProseMirror tree. */
+.nc-editor.nc-source-view {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: var(--nc-note-font-size, 13px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* <pre> defaults to no margin; .nc-editor's padding handles the
+     inset breathing room. line-height a touch tighter than prose
+     reads better for monospace listings. */
+  line-height: 1.5;
+  margin: 0 auto;
+  /* Selection should feel like a code editor — text, not "page". */
+  cursor: text;
+  /* Subtle tint to communicate "this is read-only metadata-y view"
+     without competing with the locked-note tint (which uses the
+     same elev token). Different cue: no banner, just the toggle
+     button in the panel staying lit + the source pill in the
+     breadcrumb. */
+  background: var(--nc-bg);
+}
+
+/* Small breadcrumb pill that lights up when the editor is in
+   source mode. Sits inline with the path; subdued accent so it
+   doesn't shout, but visible enough that a user with the
+   properties panel hidden still knows why their note looks like
+   text. Deliberately not interactive — the toggle lives in the
+   properties panel; clicking the pill does nothing. */
+.nc-source-mode-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--nc-accent-fg);
+  background: var(--nc-accent-bg-soft);
+  border: 1px solid var(--nc-accent-fg);
+  border-radius: 999px;
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* The View toggle button in the properties panel uses the standard
+   .nc-btn surface; this rule just trims it to a single-line look
+   that matches the surrounding row height. .nc-btn-active is
+   applied by the component when source mode is active so the
+   button reads as "armed". */
+.nc-view-toggle {
+  width: 100%;
+}
+
 /* ---------- Narrow viewports ------------------------------------- */
 
 @media (max-width: 780px) {

@@ -30,6 +30,15 @@ import { EditableVersion } from './EditableVersion';
  * Move-mode state itself lives in VaultLayout (one flag for the
  * whole shell); this panel just renders the button and calls the
  * parent when it's pressed.
+ *
+ * View toggle: when a note is selected, the panel shows a "View"
+ * row with a button that flips between Rendered and Markdown source.
+ * The toggle is communicated to the editor page via a window event
+ * (nc:note-view-mode-changed), same pattern as the appearance live
+ * updates. Local state resets to 'rendered' whenever the selection
+ * changes, so opening a different note always starts in rendered
+ * mode — matching the user's "toggle back when the note loads"
+ * requirement.
  */
 export interface PropertiesPanelProps {
   vaultId: string;
@@ -71,6 +80,13 @@ export interface PropertiesPanelProps {
   onStartMove: () => void;
 }
 
+/**
+ * The two view modes the editor page can be in. Source mode swaps
+ * the live TipTap editor for a read-only markdown source viewer.
+ * Resets to 'rendered' on note change (handled by the receiver).
+ */
+type NoteViewMode = 'rendered' | 'source';
+
 export function PropertiesPanel({
   vaultId,
   selection,
@@ -90,10 +106,23 @@ export function PropertiesPanel({
   // note (in particular so we get the new etag).
   const [refreshTick, setRefreshTick] = useState(0);
 
+  // Local mirror of the editor page's view mode for the *currently
+  // selected* note. Reset on every selection change so each note
+  // starts in rendered mode — matches the requirement that the
+  // toggle reverts when "the note loads". When the user clicks the
+  // View toggle, we flip this AND dispatch a window event that the
+  // editor page picks up to actually swap its surface.
+  const [viewMode, setViewMode] = useState<NoteViewMode>('rendered');
+
   useEffect(() => {
     setNote(null);
     setFolder(null);
     setError(null);
+    // Reset the view mode whenever the selection changes (including
+    // selection-cleared). The editor page resets independently on
+    // its own notePath change; this keeps the panel button label in
+    // sync without a cross-component handshake.
+    setViewMode('rendered');
     if (!selection) return;
 
     let cancelled = false;
@@ -246,6 +275,31 @@ export function PropertiesPanel({
     }
   }
 
+  /**
+   * Toggle the editor page between the rendered TipTap surface and
+   * a read-only markdown source viewer. Two things happen:
+   *   1. local state flips so this button's label updates.
+   *   2. a window event is dispatched so EditorPage swaps its
+   *      surface. EditorPage owns the actual surface render — we
+   *      just signal the intent.
+   *
+   * The event detail includes the note path so EditorPage can
+   * ignore stray events for other notes (multi-tab safety, same
+   * idea as nc:note-appearance-changed). Selection-change resets
+   * us to rendered mode; EditorPage resets independently on
+   * notePath change.
+   */
+  function toggleViewMode() {
+    if (!selection || selection.kind !== 'note') return;
+    const next: NoteViewMode = viewMode === 'rendered' ? 'source' : 'rendered';
+    setViewMode(next);
+    window.dispatchEvent(
+      new CustomEvent('nc:note-view-mode-changed', {
+        detail: { path: selection.path, mode: next },
+      }),
+    );
+  }
+
   // ------------------------------------------------- render
 
   // Step 36: Move button is shown for any movable item — i.e., not
@@ -352,6 +406,30 @@ export function PropertiesPanel({
               onSaveFontSize={(size) => saveAppearance('fontSize', size)}
               onSaveWidth={(w) => saveAppearance('width', w)}
             />
+
+            {/*
+              View toggle. Lives at the bottom of the editable rows
+              and above the read-only ETag so it sits with the
+              "things you can change about how this note looks"
+              cluster. Only meaningful when the user is on the
+              editor route — but harmless on the folder route too,
+              since EditorPage isn't mounted to react to the event.
+            */}
+            <dt>View</dt>
+            <dd>
+              <button
+                type="button"
+                className={`nc-btn nc-view-toggle ${viewMode === 'source' ? 'nc-btn-active' : ''}`}
+                onClick={toggleViewMode}
+                title={
+                  viewMode === 'rendered'
+                    ? 'Show the raw markdown source for this note. Read-only.'
+                    : 'Switch back to the rendered editor view.'
+                }
+              >
+                {viewMode === 'rendered' ? '🧾 View source' : '📖 View rendered'}
+              </button>
+            </dd>
 
             <dt>ETag</dt>
             <dd className="nc-props-mono nc-props-truncate">{note.etag}</dd>
