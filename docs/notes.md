@@ -166,6 +166,28 @@ work; the user is told nothing — pre-existing limitation.
 
 Generated paste filenames: `paste-<unix-ms>-<index>.<ext>`.
 
+### Code blocks: copy and paste
+
+Code blocks bypass the markdown copy/paste round-trip and deal
+in plain text only:
+
+- **Copy from inside a code block**: only the raw code text
+  goes onto the clipboard (`text/plain`). The default markdown
+  copy serializer would emit the `<pre data-title="…"><code>…
+  </code></pre>` wrapper for code blocks with a non-default
+  title, which then pastes back as escaped literal text — so
+  for code-block-internal selections we override and emit just
+  the text.
+- **Paste into a code block**: the HTML payload is ignored;
+  only `text/plain` is inserted. This protects against any
+  upstream source (other browser tab, external editor, stale
+  clipboard) putting markup on the clipboard that would land
+  as escaped text inside the destination block.
+
+Outside code blocks, copy/paste continues to round-trip
+through markdown as normal — bullet lists, formatting, links,
+tables and so on are preserved.
+
 ### Drag and drop
 
 You can drag files from the OS into the editor. Image and
