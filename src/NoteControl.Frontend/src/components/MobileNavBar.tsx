@@ -110,6 +110,34 @@ export function MobileNavBar({
 }: MobileNavBarProps) {
   const navigate = useNavigate();
 
+  // --------------------------------------------------- anchor override
+  //
+  // Ephemeral state for "I came from this anchor — keep row 2 anchored
+  // here even though the URL says otherwise".
+  //
+  // Currently only the Daily Notes button uses this. The user wants
+  // tapping Daily Notes to:
+  //   (a) open today's note in the editor, AND
+  //   (b) show the Daily Notes folder's *immediate* children (year
+  //       folders) in row 2 — NOT the URL-derived month folder that
+  //       today's note actually lives in.
+  //
+  // Without this override, after the navigation to today's note, the
+  // child-row logic below would compute the URL-derived parent
+  // (`Daily Notes/2026/05-May`) and show that month's day files. The
+  // user explicitly wants the top of the Daily Notes structure
+  // instead — the override pins it there until they navigate elsewhere.
+  //
+  // Cleared by every other anchor-row tap (Assignments, a different
+  // root folder) and by any tap on a row-2 child — at that point the
+  // user has explicitly chosen "go somewhere", and the URL-derived
+  // logic should take over again.
+  //
+  // Not persisted: a refresh / deep-link starts with no override,
+  // which is correct — a bookmarked /note?path=Daily Notes/... URL
+  // shouldn't pretend the user came from the Daily Notes anchor.
+  const [anchorOverride, setAnchorOverride] = useState<string | null>(null);
+
   // --------------------------------------------------- active root segment
   //
   // The root folder whose round button gets the active ring on row 1.
@@ -131,12 +159,23 @@ export function MobileNavBar({
   //   - On a folder view: the folder itself (its subfolders + notes).
   //   - On the editor:    the note's parent folder.
   //   - On Assignments / dashboards / vault root: hidden (null).
+  //   - When anchorOverride is set: that folder, unconditionally.
+  //
+  // The override is checked first. It only stays effective while the
+  // URL's active root segment matches the override — if the user
+  // navigates to a different root folder, the URL-derived logic wins
+  // (the override is also cleared explicitly by the row-1 / row-2
+  // tap handlers below, but this guard keeps us correct even if a
+  // navigation happens via the back button or a deep-link).
   //
   // Returning null for vault root is deliberate. Row 1 already shows
   // the root's child folders as round buttons; duplicating them in
   // row 2 would be noise. Row 2's purpose kicks in once the user has
   // drilled below root.
   const childRowTarget: string | null = (() => {
+    if (anchorOverride !== null && activeRootSegment === anchorOverride) {
+      return anchorOverride;
+    }
     if (current.kind === 'assignments' || current.kind === 'dashboard') return null;
     if (current.kind === 'folder') {
       return current.path === '' ? null : current.path;
@@ -202,7 +241,13 @@ export function MobileNavBar({
 
   // --------------------------------------------------- handlers
 
+  // Row-1 / row-2 navigation handlers clear the anchor override.
+  // The override exists to keep row 2 pinned to a parent even
+  // though the URL is on a child — once the user explicitly taps
+  // a navigation button, they're saying "go there", and the URL
+  // is again the source of truth.
   function navigateToFolder(path: string) {
+    setAnchorOverride(null);
     if (path === '') {
       navigate(`/vaults/${vaultId}`);
     } else {
@@ -211,7 +256,24 @@ export function MobileNavBar({
   }
 
   function navigateToNote(path: string) {
+    setAnchorOverride(null);
     navigate(`/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`);
+  }
+
+  function handleSelectAssignments() {
+    setAnchorOverride(null);
+    onSelectAssignments();
+  }
+
+  // The Daily Notes button: open today's note AND pin row 2 to the
+  // Daily Notes folder's immediate children (year folders) until the
+  // user navigates elsewhere. Order matters here only in that the
+  // override is set synchronously; onOpenDailyNote fires its own
+  // async POST + navigation, but the override is already in place
+  // by the time the navigation lands.
+  function handleSelectDailyNotes() {
+    setAnchorOverride(DAILY_NOTES_FOLDER);
+    onOpenDailyNote();
   }
 
   // --------------------------------------------------- render
@@ -222,66 +284,80 @@ export function MobileNavBar({
     <nav className="nc-mobile-nav" aria-label="Vault navigation">
       {/* Row 1 — anchor row. Always rendered. Horizontally scrollable
           (overflow-x: auto in CSS) so long lists of root folders
-          don't wrap or get clipped. */}
+          don't wrap or get clipped.
+
+          Order is FIXED, not alphabetical:
+            1. Assignments        (fixed identity, always position 1)
+            2. Daily Notes        (fixed identity, always position 2)
+            3..N. The rest of the root folders, in the server's
+                  natural order, with the "Daily Notes" folder
+                  filtered out (it's hoisted to position 2 above).
+
+          Pinning Daily Notes here means it appears in the same
+          place regardless of vault name — the user doesn't have to
+          scroll past alphabetically-earlier folders to find it.
+      */}
       <div className="nc-mobile-nav-row nc-mobile-nav-anchors">
-        {/* Assignments — fixed icon + colour. Spec: 📋 + amber. */}
+        {/* Position 1 — Assignments. Fixed icon + colour. */}
         <MobileNavButton
           label="Assignments"
           icon="📋"
           colorKey="amber"
           active={current.kind === 'assignments'}
-          onClick={onSelectAssignments}
+          onClick={handleSelectAssignments}
         />
+
         {/*
-          Root folders. Two special-cases on top of the default
-          file-folder-on-grey rendering:
-            1. The literal "Daily Notes" folder (the vault's daily-
-               notes root — same constant as utils/dailyNoteDisplay.ts)
-               is rendered with a calendar icon on teal, and tapping
-               it opens today's daily note instead of navigating to
-               the folder listing. The result on-screen: ONE Daily-
-               notes button per vault, in the same row as the other
-               folders, in the position the folder occupies in the
-               root listing. The synthetic Daily-notes button that
-               lived here pre-fix has been removed — the merge is
-               the fix.
-            2. All other folders get a single neutral-grey backdrop
-               (.nc-mobile-nav-btn-circle-folder) — the user
-               disliked the per-folder hashed colours. Folder names
-               are distinguishable from the labels alone; the round
-               circle's job is just to be tap-target chrome.
+          Position 2 — Daily Notes. Always rendered, even when the
+          vault has no "Daily Notes" folder yet — the server's
+          openToday endpoint creates the folder + today's file on
+          first call, so tapping the button in a fresh vault works
+          and the folder appears in subsequent renders.
+
+          Tapping this button:
+            (a) navigates to today's daily note in the editor
+                (via VaultLayout's onOpenDailyNote → dailyNotesApi.openToday)
+            (b) sets the anchor override so row 2 shows the Daily
+                Notes folder's immediate children (year folders),
+                NOT the URL-derived month folder that today's note
+                actually lives in. The user explicitly wanted both.
+
+          Active ring lights up while the override is active —
+          consistent with how the other anchor buttons indicate
+          "you came from here".
         */}
-        {rootFolders.map((folder) => {
-          if (folder.name === DAILY_NOTES_FOLDER) {
-            return (
-              <MobileNavButton
-                key={folder.path}
-                label={folder.name}
-                icon="📅"
-                colorKey="teal"
-                // No active ring — this is an action ("open today"),
-                // not a destination. Matches how the pre-fix
-                // synthetic Daily-notes button behaved.
-                active={false}
-                onClick={onOpenDailyNote}
-              />
-            );
-          }
-          return (
+        <MobileNavButton
+          label="Daily notes"
+          icon="📅"
+          colorKey="teal"
+          active={anchorOverride === DAILY_NOTES_FOLDER}
+          onClick={handleSelectDailyNotes}
+        />
+
+        {/*
+          Positions 3..N — other root folders, in the server's
+          natural order, filtered to exclude Daily Notes (which is
+          rendered above at position 2). All use the same neutral-
+          grey treatment — the user disliked the per-folder hashed
+          colours. Folder labels carry the identity; the circle is
+          tap-target chrome.
+        */}
+        {rootFolders
+          .filter((folder) => folder.name !== DAILY_NOTES_FOLDER)
+          .map((folder) => (
             <MobileNavButton
               key={folder.path}
               label={folder.name}
               icon="📁"
               // colorKey is unused for plain folders — they all share
-              // the neutral grey class instead. Passing 'folder' as a
+              // the neutral grey class instead. 'folder' is the
               // sentinel that MobileNavButton interprets as "use the
               // neutral-grey class, not a palette class".
               colorKey="folder"
               active={activeRootSegment === folder.name}
               onClick={() => navigateToFolder(folder.path)}
             />
-          );
-        })}
+          ))}
       </div>
 
       {/* Row 2 — contextual children. Rendered only when there's a
