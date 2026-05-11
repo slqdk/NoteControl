@@ -2,9 +2,10 @@
 
 The browser-side React + TypeScript SPA. Read this when you're
 touching routes, the top bar, the properties panel, sticky
-notes, RSS blocks, dashboards, settings, or the appearance
-system. The editor itself, slash menu, daily-note formatting,
-and tree behaviour are documented in [notes.md](notes.md).
+notes, RSS blocks, dashboards, assignments, settings, or the
+appearance system. The editor itself, slash menu, daily-note
+formatting, and tree behaviour are documented in
+[notes.md](notes.md).
 
 ## Routes
 
@@ -17,6 +18,7 @@ The full route table:
 | `/vaults/:vaultId` | Folder view | required | Tree on the left, folder contents in the middle, properties on the right. |
 | `/vaults/:vaultId/note?path=…` | Editor | required | Single-note editor. The path is URL-encoded. |
 | `/vaults/:vaultId/dashboards/:dashboardId` | Dashboard | required | One dashboard's free-floating canvas. See [Dashboards](#dashboards). |
+| `/vaults/:vaultId/assignments` | Assignments | required | Per-vault list of assignments grouped by category. See [Assignments](#assignments). |
 | `/vaults/:vaultId/startpage` | (redirect) | required | Legacy alias. Loads the vault's dashboard list and replaces itself with the first dashboard's URL. Kept so existing links (the tray's "open vault" menu, the vault list page, user bookmarks) still land somewhere useful. |
 | `/vaults/:vaultId/templates` | Templates | required | Manages the vault's template files. Has its own header (no shared layout). |
 | `*` (anything else) | redirect to `/vaults` | n/a | |
@@ -213,6 +215,13 @@ A few mobile-specific affordances:
   ≤ 768 px — adding a dashboard means dropping widgets onto a
   free-form 2D canvas, which is a desktop workflow. The mobile
   rail row keeps just `Daily+ / 📄+ / 📁+`.
+- **The dashboards section of the tree is hidden** at ≤ 768 px
+  for the same canvas-on-touch reason — combined with the
+  redirect rule below, mobile users don't reach dashboards from
+  this device at all. The tree starts at the Assignments row.
+- **The Assignments row in the tree stays visible** at ≤ 768 px
+  — Assignments is a list, the mobile layout is fully usable,
+  and the user wanted it always reachable.
 - The vault picker collapses to a single-trigger dropdown
   variant (see "Top bar" above).
 - Dashboards redirect to `/vaults/:vaultId` on mobile — the
@@ -422,6 +431,92 @@ See [Properties panel](#properties-panel) above for the
 dashboard fields. The panel is hidden by default on every
 dashboard URL change (including switches between dashboards),
 revealed on demand via the ℹ️ rail toggle.
+
+## Assignments
+
+Per-vault Assignments page at `/vaults/:vaultId/assignments`.
+Sits inside the shared `VaultLayout`, so the tree + topbar
+stay in place when the user navigates to it.
+
+The page lists the vault's assignments grouped into three
+**fixed-order** category buckets:
+
+1. **Short Term** — red accent.
+2. **Long Term** — yellow accent.
+3. **Development** — blue accent.
+
+The order is part of the contract — the UI never sorts the
+buckets at runtime. An empty bucket still renders its header
++ a muted "No assignments here yet" hint, so the user always
+sees the same three-section structure.
+
+Inside a bucket, assignments render in stored-insertion order
+as a responsive card grid:
+
+- **Desktop**: `grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))`
+  — typically one column in a narrow rail, two on a wide one.
+- **Mobile** (≤ 768 px): forced single-column stack; the whole
+  page becomes one long scrollable list.
+
+Each card shows the assignment's **subject** (single-line
+headline) and, if non-empty, **details** (multi-line, newlines
+preserved). A trash icon in the top-right of every card
+deletes after a confirm. There is **no checkbox** and no
+strikethrough — by design; the lifecycle is add → optionally
+edit → delete, without a "done but kept around" state. (This
+is the deliberate difference from sticky notes in task areas,
+which DO have a done flag.)
+
+Clicking anywhere on a card (outside the trash icon) flips
+it into inline edit mode: a category dropdown, subject
+input, and details textarea, with **Done** and **Delete**
+buttons. Esc inside any field collapses the edit form.
+Changing the category in edit mode immediately moves the
+card to the new bucket on the next render.
+
+### Composer
+
+A persistent **+ Add assignment** button at the bottom of
+the page opens an inline composer in its place. The composer
+shows three colour-coded **category pills** (Short Term /
+Long Term / Development) selectable at first sight, a
+subject input, and a details textarea. Subject is required;
+the **Add** button stays disabled until it's non-empty.
+Enter in the subject field submits; Ctrl/Cmd+Enter in the
+details field submits; Esc cancels. Cancelling the composer
+discards the in-progress draft.
+
+### Tree-side row
+
+The tree's left rail carries a single **📋 Assignments**
+row, rendered directly below the dashboards section and
+above the folder rows. Same visual treatment as the
+dashboards section (font-weight + bottom-divider). Active
+when the URL is exactly `/vaults/:vaultId/assignments`.
+
+Unlike the dashboards section, this row is **visible on
+mobile too** — there's only ever one Assignments page per
+vault, the mobile layout (single-column stack) is fully
+usable, and the user wanted it always reachable.
+
+### Persistence
+
+Stored as a single JSON file at
+`{vault}/.notesapp/assignments.json` (see
+[storage.md](storage.md#notesapp-subfolder) for the file
+schema). Read once on initial page load; written debounced
+~500ms after the last edit. Same atomic temp-then-rename
+write pattern the startpage config uses.
+
+### Properties panel
+
+The Assignments page has no per-item selection that maps
+onto the properties panel's note/folder/dashboard surfaces,
+so the panel is **hidden by default** on this route. The
+ℹ️ rail toggle still flips visibility (reusing the same
+ephemeral "revealed" flag the dashboard routes use); when
+revealed, the panel falls back to its empty-selection
+state.
 
 ## Sticky notes
 

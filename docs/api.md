@@ -152,6 +152,19 @@ All under `/api/vaults/{vaultId}/startpage`.
 | PUT | `/config` | vault:editor | Replace the layout. |
 | GET | `/feed?url=` | vault:viewer | Server-side proxy that fetches one RSS/Atom feed and parses it. Used by RSS blocks to avoid CORS. |
 
+## Assignments
+
+All under `/api/vaults/{vaultId}/assignments`. Backs the
+per-vault Assignments page (see
+[frontend.md](frontend.md#assignments)). Bare-route group —
+nothing else lives under `/assignments` so there's no `/config`
+sub-route the way the startpage has one.
+
+| Method | Path | Auth | Behaviour |
+|---|---|---|---|
+| GET | `` | vault:viewer | Read the assignments list from `{vault}/.notesapp/assignments.json`. Missing or empty file returns an empty list (no default placeholder). |
+| PUT | `` | vault:editor | Replace the assignments list. Atomic temp-then-rename write. Server stamps the schema version on write — clients may PUT any number; the on-disk file always carries the current version. |
+
 ## Admin: server config & operations
 
 All under `/api/admin/server`, all admin-only.

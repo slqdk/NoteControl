@@ -40,7 +40,8 @@ it to `dev-data` (relative to the working directory).
 │   │   ├── index.db-shm
 │   │   ├── templates/          ← {name}.md per template
 │   │   ├── trash/              ← deleted notes (vault-scoped)
-│   │   └── startpage.json      ← dashboards + block layout
+│   │   ├── startpage.json      ← dashboards + block layout
+│   │   └── assignments.json    ← per-vault assignments list
 │   ├── My Note.md              ← markdown body + frontmatter
 │   ├── My Note.assets/         ← asset folder for "My Note.md"
 │   │   └── photo.png
@@ -94,6 +95,7 @@ notes or folders called `.notesapp`.
 | `.notesapp/templates/` | Each `*.md` file is one template. Filename without `.md` is the template name. A template called `Daily.md` is the body for new daily notes. |
 | `.notesapp/trash/` | Deleted notes are moved here, keeping their original folder structure as subpaths. No automatic cleanup. |
 | `.notesapp/startpage.json` | Dashboard layouts for the vault: positions, sizes, RSS URLs, sticky note contents, link entries. One file holds every dashboard the vault has. Saved with debounced cadence. |
+| `.notesapp/assignments.json` | Per-vault Assignments page contents. Flat list of assignments, each carrying its own category. Saved with debounced cadence. |
 
 #### startpage.json schema
 
@@ -140,6 +142,45 @@ diffs, and uses temp-then-rename for atomic replacement. Items
 *within* an area or link block (sticky notes, link entries)
 are NOT sorted — their order is user-meaningful (drag-to-
 reorder semantics).
+
+#### assignments.json schema
+
+The file is hand-editable JSON. The current shape (schema
+version **1**) is a versioned envelope around a flat list of
+assignments:
+
+```json
+{
+  "version": 1,
+  "assignments": [
+    {
+      "id": "...",          // stable, client-generated
+      "category": "short",  // "short" | "long" | "dev"
+      "subject": "...",     // single-line headline
+      "details": "..."      // multi-line body, may be empty
+    },
+    ...
+  ]
+}
+```
+
+A missing file (fresh vault) or an empty/whitespace file is
+treated as an empty list — the server does not seed a default
+placeholder. The UI renders three fixed category buckets
+regardless of whether any assignments live in them (see
+[frontend.md](frontend.md#assignments) for the bucket order).
+
+The `category` field is stored verbatim. The UI normalises
+unknown values to `"short"` at render time, so a hand-edit
+that puts an unexpected string there won't drop the row, but
+it'll appear in the Short Term bucket until corrected.
+
+Stored list order is preserved on read and write — assignments
+within a bucket render in the order they appear in the file.
+The server normalises null fields to empty strings on both
+read and write so the on-disk file stays free of `null` noise.
+On write the server stamps the schema version, normalises
+fields, and uses temp-then-rename for atomic replacement.
 
 ### Notes (the `.md` files)
 
