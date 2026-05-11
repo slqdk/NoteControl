@@ -3,6 +3,7 @@
 
 import type {
   AuthMeDto,
+  AssignmentsConfigDto,
   CreateNoteRequest,
   FeedDto,
   FolderListingDto,
@@ -752,4 +753,28 @@ export const startpageApi = {
     request<FeedDto>(
       `/api/vaults/${vaultId}/startpage/feed?url=${encodeURIComponent(url)}`,
     ),
+};
+
+// ============================================================ ASSIGNMENTS
+
+/**
+ * Per-vault assignments list. The route is the bare
+ * /api/vaults/{id}/assignments (no /config sub-route) since
+ * nothing else lives under it — keeps URLs short in logs.
+ *
+ * See server-side
+ * NoteControl.Server.Assignments.Endpoints.AssignmentsEndpoints
+ * for the auth split (GET = viewer, PUT = editor).
+ */
+export const assignmentsApi = {
+  /** GET /api/vaults/{id}/assignments */
+  getConfig: (vaultId: string) =>
+    request<AssignmentsConfigDto>(`/api/vaults/${vaultId}/assignments`),
+
+  /** PUT /api/vaults/{id}/assignments */
+  saveConfig: (vaultId: string, config: AssignmentsConfigDto) =>
+    request<void>(`/api/vaults/${vaultId}/assignments`, {
+      method: 'PUT',
+      body: config,
+    }),
 };

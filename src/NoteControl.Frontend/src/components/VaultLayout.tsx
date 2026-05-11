@@ -225,6 +225,22 @@ export function VaultLayout() {
       null
     : null;
 
+  // -----------------------------------------------------------------
+  // Assignments route detection. Single boolean — the assignments
+  // page has no per-row identity to track (one page per vault), so
+  // there's no "active assignments id" the way there's an active
+  // dashboard id.
+  //
+  // Same role as isOnDashboardRoute downstream:
+  //   - Drives the active-highlight on the Assignments tree row
+  //     (rendered into the assignmentsSlot).
+  //   - Suppresses the properties panel reveal on this route
+  //     (combined with the same dashboardPropsRevealed gating —
+  //     see effectivePropsVisible below).
+  // -----------------------------------------------------------------
+  const isOnAssignmentsRoute =
+    location.pathname === `/vaults/${vaultId}/assignments`;
+
   // Auto-hide override for the props panel: NEVER persist this to
   // localStorage — we want the user's preferred propsVisible setting
   // to come back when they leave the startpage. So we compute an
@@ -271,15 +287,32 @@ export function VaultLayout() {
     }
   }, [activeDashboardId]);
 
+  // Same reset for the assignments route. Arriving at /assignments
+  // (from anywhere) hides the panel; the user can reveal it via
+  // the rail toggle. We don't preserve reveal state across leaves
+  // and returns — same pattern dashboards use.
+  useEffect(() => {
+    if (isOnAssignmentsRoute) {
+      setDashboardPropsRevealed(false);
+    }
+  }, [isOnAssignmentsRoute]);
+
   // Effective visibility:
   //   - On non-dashboard routes (folder, editor): same as before —
   //     user's persisted preference, hidden on mobile.
   //   - On dashboard routes: hidden by default; revealed only when
   //     the user has actively flipped it open this dashboard
   //     session.
+  //   - On the assignments route: the page has no editable
+  //     selection (no note/folder properties to surface), so we
+  //     treat it the same as a dashboard route — hidden by default,
+  //     revealable via the rail toggle through dashboardPropsRevealed.
+  //     Reusing the same state keeps the toggle behaviour
+  //     predictable: one click flips what the user sees regardless
+  //     of which "panel-less" route they're on.
   const effectivePropsVisible = isMobile
     ? false
-    : isOnDashboardRoute
+    : isOnDashboardRoute || isOnAssignmentsRoute
       ? dashboardPropsRevealed
       : layout.propsVisible;
 
@@ -305,12 +338,12 @@ export function VaultLayout() {
    * sees, no surprise.
    */
   const onTogglePropsPanel = useCallback(() => {
-    if (isOnDashboardRoute) {
+    if (isOnDashboardRoute || isOnAssignmentsRoute) {
       setDashboardPropsRevealed((v) => !v);
     } else {
       layout.setPropsVisible(!layout.propsVisible);
     }
-  }, [isOnDashboardRoute, layout]);
+  }, [isOnDashboardRoute, isOnAssignmentsRoute, layout]);
 
   /**
    * Navigate to a dashboard's URL. Same housekeeping as the legacy
@@ -327,6 +360,19 @@ export function VaultLayout() {
     },
     [navigate, vaultId],
   );
+
+  /**
+   * Navigate to this vault's Assignments page. Same selection /
+   * move-mode housekeeping as onSelectDashboard — clicking the
+   * Assignments row in the tree shouldn't leave a folder or note
+   * row highlighted in parallel. The Assignments tree row (built
+   * below into the assignmentsSlot) calls this.
+   */
+  const onSelectAssignments = useCallback(() => {
+    setSelection(null);
+    setMoveModeItem(null);
+    navigate(`/vaults/${vaultId}/assignments`);
+  }, [navigate, vaultId]);
 
   /**
    * Add a new dashboard via useDashboards, then navigate to it so
@@ -1114,6 +1160,51 @@ export function VaultLayout() {
               onDelete={onDeleteDashboard}
             />
           )
+        }
+        assignmentsSlot={
+          /*
+            Assignments row. One static clickable row below the
+            dashboards section and above the folder rows. Always
+            present (no per-vault config needed — the row exists
+            regardless of whether the user has any assignments).
+            The active-highlight class is the same one the dashboard
+            rows use (.nc-tree-row-selected), so the colour matches
+            without a bespoke style.
+
+            We render this inline rather than as its own component
+            because there's nothing to it (one row, one click, one
+            highlight check) — pulling it into a presenter would
+            be more files for no readability win.
+          */
+          <div
+            className={[
+              'nc-tree-row',
+              'nc-tree-row-startpage',
+              isOnAssignmentsRoute ? 'nc-tree-row-selected' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            role="treeitem"
+            aria-selected={isOnAssignmentsRoute}
+            tabIndex={isOnAssignmentsRoute ? 0 : -1}
+            onClick={onSelectAssignments}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelectAssignments();
+              }
+            }}
+            title="Assignments"
+          >
+            <span
+              className="nc-tree-chevron nc-tree-chevron-empty"
+              aria-hidden="true"
+            />
+            <span className="nc-tree-icon" aria-hidden="true">
+              📋
+            </span>
+            <span className="nc-tree-label">Assignments</span>
+          </div>
         }
       />
     </div>

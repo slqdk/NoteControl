@@ -336,3 +336,47 @@ export interface FeedDto {
   link: string | null;
   items: FeedItemDto[];
 }
+
+// --------------------------------------------------------------- Assignments
+
+/**
+ * Category key for an Assignment. The three values are pinned —
+ * the UI groups by category and renders the buckets in this fixed
+ * order (Short Term, Long Term, Development). Stored as a short
+ * string in the JSON file so a hand-edit reads cleanly without a
+ * legend.
+ *
+ * Unknown values from a hand-edit fall back to 'short' when
+ * rendering (see AssignmentsPage).
+ */
+export type AssignmentCategory = 'short' | 'long' | 'dev';
+
+/** One assignment row. Mirrors NoteControl.Shared.Assignments.AssignmentDto. */
+export interface AssignmentDto {
+  /** Stable id, generated client-side via newId(). */
+  id: string;
+  /** 'short' | 'long' | 'dev'. Wire type is a free string; UI normalises. */
+  category: string;
+  /** Single-line headline. May be empty; UI shows a placeholder. */
+  subject: string;
+  /** Multi-line body. May be empty. */
+  details: string;
+}
+
+/**
+ * Per-vault assignments configuration. Mirrors
+ * NoteControl.Shared.Assignments.AssignmentsConfigDto.
+ *
+ * Persisted at {vault}/.notesapp/assignments.json. The endpoint is
+ * /api/vaults/{id}/assignments (no /config suffix — unlike the
+ * startpage endpoint group, there's nothing else under this route).
+ *
+ * Always non-null lists once the initial GET resolves; an empty
+ * assignments list is the steady state for a fresh vault.
+ */
+export interface AssignmentsConfigDto {
+  /** Schema version. Current value is 1. Server is the authority. */
+  version: number;
+  /** All assignments in stored order. UI groups by category at render time. */
+  assignments: AssignmentDto[];
+}

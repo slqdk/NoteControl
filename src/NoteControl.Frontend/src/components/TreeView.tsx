@@ -104,6 +104,17 @@ export interface TreeViewProps {
    * starts with folder rows).
    */
   dashboardsSlot?: ReactNode;
+
+  /**
+   * ReactNode rendered directly below the dashboards section and
+   * above the vault's folder rows. VaultLayout passes the
+   * Assignments tree row here (a single clickable row that
+   * navigates to /vaults/:vaultId/assignments). Same slot pattern
+   * as dashboardsSlot — TreeView stays ignorant of what it's
+   * rendering; the layout owns the data, navigation, and active-
+   * highlight logic. Empty / null is allowed.
+   */
+  assignmentsSlot?: ReactNode;
 }
 
 export function TreeView({
@@ -126,6 +137,7 @@ export function TreeView({
   moveModeItem,
   onMoveModeExit,
   dashboardsSlot,
+  assignmentsSlot,
 }: TreeViewProps) {
   const navigate = useNavigate();
   const dnd = useTreeDragDrop();
@@ -600,6 +612,17 @@ export function TreeView({
         selection model based on the URL).
       */}
       {dashboardsSlot}
+
+      {/*
+        Assignments row. A single clickable tree row that
+        navigates to the vault's Assignments page. Lives between
+        the dashboards section and the folder rows because the
+        user asked for it to sit "below the dashbordlist and
+        above the daily notes". Same slot pattern as
+        dashboardsSlot — VaultLayout owns the data, navigation,
+        and active-highlight; TreeView just inserts the node.
+      */}
+      {assignmentsSlot}
 
       {renderFolder('', 0)}
       {rootDropActive && (

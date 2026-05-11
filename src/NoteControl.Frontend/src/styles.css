@@ -5507,3 +5507,376 @@ a.nc-rss-item-title:hover {
   font-size: 11px;
   color: var(--nc-fg-muted);
 }
+
+/* ============================================================ Assignments
+
+   Per-vault Assignments page. Three pinned category buckets in a
+   fixed order: Short Term (red), Long Term (yellow), Development
+   (blue). Each bucket renders as a section with a coloured left
+   accent stripe + colour-tinted card backgrounds. On desktop the
+   cards inside a bucket flow into a 2-column responsive grid; on
+   mobile (≤768px) every bucket collapses to a single-column stack
+   and the whole page becomes one long scroll.
+
+   The category colour is driven by the section's [data-category]
+   attribute and descendant selectors — that way swapping a card's
+   category at edit time is one DTO update with no re-render of
+   the bucket structure. */
+
+.nc-assignments-page {
+  /* .nc-page already provides padding + max-width inheritance from
+     the app frame; we just tighten the in-page vertical rhythm so
+     three buckets + an add row don't feel cramped. */
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.nc-assignments-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.nc-assignments-save-error {
+  /* Saved-error banner under the title. Reuses .nc-form-error's
+     red styling; this class adds margin-bottom so the title +
+     banner + first section spacing reads consistently. */
+  margin: 0;
+}
+
+/* ---------- One category bucket ---------- */
+
+.nc-assignments-section {
+  /* The coloured left stripe is a 4px border-left whose colour
+     comes from per-category overrides below. The rest of the
+     box is neutral so the cards (which carry their own tint)
+     do the heavy visual work. */
+  border-left: 4px solid var(--nc-border);
+  padding: 4px 0 4px 12px;
+}
+
+.nc-assignments-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+
+.nc-assignments-empty {
+  /* Inherits .nc-empty's muted italic style; this just tightens
+     spacing so empty buckets don't dominate the page. */
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* Per-category accents. Border colour on the section, and the
+   default card background is set further down via the section's
+   data-category descendant selectors. */
+.nc-assignments-section-short { border-left-color: #e35a5a; }
+.nc-assignments-section-long  { border-left-color: #e6c84a; }
+.nc-assignments-section-dev   { border-left-color: #4a8fe6; }
+
+/* ---------- Card grid (desktop) + stack (mobile) ---------- */
+
+.nc-assignments-grid {
+  display: grid;
+  /* auto-fill with a 280px minimum gives one column on a narrow
+     desktop rail and two (or more, in theory) on a wide one,
+     without us hard-coding column counts. The 14px gap matches
+     the visual rhythm of the rest of the section. */
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.nc-assignments-page-mobile .nc-assignments-grid {
+  /* Force a single column on mobile regardless of available
+     width — the cards are the primary content and 280px-min
+     auto-fill would still produce one column on most phones,
+     but being explicit avoids edge cases on landscape phones /
+     small tablets at exactly 768px. */
+  grid-template-columns: 1fr;
+}
+
+/* ---------- One card ---------- */
+
+.nc-assignments-card {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+  padding: 10px 36px 10px 12px; /* extra right padding for the trash button */
+  background: var(--nc-bg-elev);
+  cursor: pointer;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+.nc-assignments-card:hover {
+  border-color: var(--nc-border-strong);
+}
+.nc-assignments-card:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+/* Category-tinted card backgrounds — opaque pastel by category.
+   Tuned to be legible against both light and dark text; the
+   text-colour override at the bottom of the file forces a dark
+   foreground inside cards (the tints don't work with white text
+   in either theme). */
+.nc-assignments-section[data-category='short'] .nc-assignments-card {
+  background: #fde2e2;
+  border-color: #f0b8b8;
+}
+.nc-assignments-section[data-category='long'] .nc-assignments-card {
+  background: #fdf3c4;
+  border-color: #e6d97a;
+}
+.nc-assignments-section[data-category='dev'] .nc-assignments-card {
+  background: #d6e6fb;
+  border-color: #95b8e0;
+}
+
+.nc-assignments-card-body {
+  flex: 1 1 auto;
+  min-width: 0; /* let long words wrap inside the flex item */
+}
+
+.nc-assignments-card-subject {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.3;
+  /* Forced dark text inside coloured cards — the pastel
+     backgrounds need it for legibility, and our dark-theme CSS
+     vars would otherwise flip to a light foreground that
+     disappears against yellow. */
+  color: #0f172a;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.nc-assignments-card-placeholder {
+  font-weight: 400;
+  font-style: italic;
+  color: #64748b;
+}
+
+.nc-assignments-card-details {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #1f2937;
+  white-space: pre-wrap; /* honour newlines in the textarea content */
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.nc-assignments-card-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: #1f2937;
+  opacity: 0.55;
+  transition: opacity 0.1s ease, background 0.1s ease;
+}
+.nc-assignments-card:hover .nc-assignments-card-delete {
+  opacity: 1;
+}
+.nc-assignments-card-delete:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* ---------- Card edit mode ---------- */
+
+.nc-assignments-card-editing {
+  cursor: default;
+  padding: 12px;
+}
+
+.nc-assignments-card-edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nc-assignments-edit-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f2937;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nc-assignments-edit-category,
+.nc-assignments-edit-subject,
+.nc-assignments-edit-details {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  color: #0f172a;
+  text-transform: none;
+  letter-spacing: normal;
+  border: 1px solid var(--nc-border-strong);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #ffffff;
+  width: 100%;
+  box-sizing: border-box;
+}
+.nc-assignments-edit-details {
+  resize: vertical;
+  min-height: 70px;
+  line-height: 1.4;
+}
+
+.nc-assignments-card-edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  /* Live alongside the edit fields on desktop, wrap below on
+     narrow widths via flex-wrap. Keeping the same row as the
+     fields means a long card doesn't grow taller just for two
+     buttons. */
+}
+
+/* ---------- Add button + composer ---------- */
+
+.nc-assignments-add-row {
+  margin-top: 8px;
+}
+
+.nc-assignments-add-btn {
+  /* Wider than the default .nc-btn — this is the primary
+     call-to-action on the page when no composer is open. */
+  min-width: 200px;
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.nc-assignments-composer {
+  border: 1px solid var(--nc-border-strong);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--nc-bg-elev);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nc-assignments-composer-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nc-assignments-pill {
+  /* Pill = small coloured button. Each pill carries its own
+     category tint so the user sees the colour mapping
+     up-front; active pill has a heavier border. */
+  border: 2px solid transparent;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: #0f172a;
+  background: var(--nc-bg);
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+.nc-assignments-pill-short {
+  background: #fde2e2;
+  border-color: #f0b8b8;
+}
+.nc-assignments-pill-long {
+  background: #fdf3c4;
+  border-color: #e6d97a;
+}
+.nc-assignments-pill-dev {
+  background: #d6e6fb;
+  border-color: #95b8e0;
+}
+.nc-assignments-pill-active {
+  /* Active = darker border to call out the selection. The
+     box-shadow ring gives a clearer "selected" cue than a
+     border-width bump alone, which would shift surrounding
+     pills around. */
+  box-shadow: 0 0 0 2px #2563eb;
+  border-color: transparent;
+}
+
+.nc-assignments-composer-subject,
+.nc-assignments-composer-details {
+  font-family: inherit;
+  font-size: 13px;
+  color: #0f172a;
+  border: 1px solid var(--nc-border-strong);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #ffffff;
+  width: 100%;
+  box-sizing: border-box;
+}
+.nc-assignments-composer-details {
+  resize: vertical;
+  min-height: 70px;
+  line-height: 1.4;
+}
+
+.nc-assignments-composer-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ---------- Mobile-only tweaks (≤ 768px) ----------
+   The .nc-assignments-page-mobile class is set by AssignmentsPage
+   from useIsMobile — same approach VaultLayout uses to drive
+   shell shape. Using the class (not a media query) means the
+   layout matches the viewport class the rest of the app uses,
+   so a hot resize past the breakpoint flips behaviour
+   consistently. */
+.nc-assignments-page-mobile .nc-assignments-page {
+  gap: 14px;
+}
+.nc-assignments-page-mobile .nc-assignments-grid {
+  gap: 10px;
+}
+.nc-assignments-page-mobile .nc-assignments-card {
+  /* Slightly smaller padding to give the subject + details more
+     horizontal room on a phone, where 280px-min isn't applied
+     anymore (single column) but every pixel of width still
+     counts for readability. */
+  padding: 9px 34px 9px 10px;
+}
+.nc-assignments-page-mobile .nc-assignments-add-btn {
+  /* Full-width add button on phones — easier to tap, looks
+     deliberate at this width. */
+  width: 100%;
+  min-width: 0;
+}
+
+/* Dark-theme legibility on the dark fg-muted variants — pastel
+   tints are designed for light backgrounds; flipping into dark
+   mode would otherwise pair them with our default --nc-fg
+   (light) and lose contrast. We keep card text explicitly dark
+   above; this rule just makes sure the section header and empty
+   hint stay readable on the dark page background. */
+@media (prefers-color-scheme: dark) {
+  .nc-assignments-section-title {
+    color: var(--nc-fg);
+  }
+}

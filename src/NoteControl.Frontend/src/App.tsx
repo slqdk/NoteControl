@@ -9,6 +9,7 @@ import { EditorPage } from './pages/EditorPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { StartpagePage } from './pages/StartpagePage';
 import { TemplatesPage } from './pages/TemplatesPage';
+import { AssignmentsPage } from './pages/AssignmentsPage';
 import { VaultLayout } from './components/VaultLayout';
 import { useAppliedAppearance } from './settings/appearance';
 
@@ -101,6 +102,15 @@ export default function App() {
               now a tiny redirect to the first dashboard.
             */}
             <Route path="startpage" element={<StartpagePage />} />
+            {/*
+              Per-vault Assignments page. Lives under the shared
+              VaultLayout so the tree + topbar stay visible — the
+              page itself is a 3-bucket list of assignment cards
+              (Short Term / Long Term / Development) with a single
+              add button at the bottom. The tree's "Assignments"
+              row navigates here.
+            */}
+            <Route path="assignments" element={<AssignmentsPage />} />
           </Route>
 
           <Route

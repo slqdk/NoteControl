@@ -296,6 +296,13 @@ try
         NoteControl.Server.Startpage.Services.FeedFetcher>();
     builder.Services.AddHttpClient("feedfetcher");
 
+    // Assignments service. Per-vault JSON file at
+    // {vault}/.notesapp/assignments.json. Scoped because it depends
+    // on the scoped ServerDbContext (vault path lookup) — same
+    // lifetime reasoning as StartpageConfigService above.
+    builder.Services.AddScoped<NoteControl.Server.Assignments.Services.IAssignmentsConfigService,
+        NoteControl.Server.Assignments.Services.AssignmentsConfigService>();
+
     // Search / index services.
     //
     // Pool + build state are singletons because both keep per-vault data
@@ -619,6 +626,7 @@ try
     // "method not allowed" instead of 404.
     NoteControl.Server.DailyNotes.Endpoints.DailyNoteEndpoints.MapDailyNoteEndpoints(app);
     NoteControl.Server.Startpage.Endpoints.StartpageEndpoints.MapStartpageEndpoints(app);
+    NoteControl.Server.Assignments.Endpoints.AssignmentsEndpoints.MapAssignmentsEndpoints(app);
     app.MapAdminConfigEndpoints();
     app.MapAdminBackupEndpoints();
     app.MapAdminAuditEndpoints();
