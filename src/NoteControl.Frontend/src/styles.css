@@ -6030,6 +6030,20 @@ a.nc-rss-item-title:hover {
     transition: box-shadow 120ms ease;
   }
 
+  /* Plain-folder circle backdrop. The user disliked the per-folder
+     hashed palette colours, so all generic folders (both root and
+     drilled-in subfolders) share this single neutral fill. Using a
+     light grey rather than transparent so the round shape stays
+     legible against the navbar's own elevated background. The icon
+     glyph (📁) keeps the kind clear; the label below names it.
+     We use --nc-border-strong as the fill — it's already a slate
+     mid-tone in both themes (#cbd5e1 light, #475569 dark), so the
+     circle reads correctly without needing parallel dark-mode
+     overrides. */
+  .nc-mobile-nav-btn-circle-folder {
+    background: var(--nc-border-strong);
+  }
+
   /* Active ring — outline-style ring around the circle. Box-shadow
      instead of border so the circle's intrinsic size doesn't
      shift when the ring appears/disappears (a border would

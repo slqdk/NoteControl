@@ -3,7 +3,22 @@ import { useNavigate } from 'react-router-dom';
 
 import { ApiError, notesApi } from '../api/client';
 import type { FolderListingDto, FolderSummaryDto } from '../api/types';
-import { colorForName } from '../util/mobileNavColors';
+
+/**
+ * The canonical name of the vault's daily-notes root folder.
+ * Kept in lockstep with utils/dailyNoteDisplay.ts's DAILY_ROOT
+ * constant. When the navbar sees a root folder with this exact
+ * name, it renders the calendar-icon "Daily notes" button on top
+ * of it (instead of a separate synthetic button) so the user
+ * doesn't see two daily-notes buttons stacked together.
+ *
+ * Inlined here rather than imported from dailyNoteDisplay.ts so
+ * the navbar's "what counts as the daily-notes folder" rule is
+ * obvious when reading this file alone. Both files have a comment
+ * pointing at each other; if the canonical name ever changes,
+ * grep for DAILY_ROOT.
+ */
+const DAILY_NOTES_FOLDER = 'Daily Notes';
 
 /**
  * Mobile redesign — always-visible round-button navigation row.
@@ -217,33 +232,56 @@ export function MobileNavBar({
           active={current.kind === 'assignments'}
           onClick={onSelectAssignments}
         />
-        {/* Daily notes — fixed icon + colour. Spec: 📅 + teal.
-            Click = open today (delegates to VaultLayout's existing
-            handler which creates today's note if missing). */}
-        <MobileNavButton
-          label="Daily notes"
-          icon="📅"
-          colorKey="teal"
-          active={false /* no good way to tell "this note IS today"
-                            without parsing the path; leave un-ringed
-                            so the daily-note round button reads as
-                            an action, not a destination */}
-          onClick={onOpenDailyNote}
-        />
-        {/* Root folders — one button per. Colour is hashed from the
-            folder name (stable across mounts). Icon is the folder
-            emoji 📁 for now; future ship could let the user pick a
-            per-folder icon the same way vaults already work. */}
-        {rootFolders.map((folder) => (
-          <MobileNavButton
-            key={folder.path}
-            label={folder.name}
-            icon="📁"
-            colorKey={colorForName(folder.name)}
-            active={activeRootSegment === folder.name}
-            onClick={() => navigateToFolder(folder.path)}
-          />
-        ))}
+        {/*
+          Root folders. Two special-cases on top of the default
+          file-folder-on-grey rendering:
+            1. The literal "Daily Notes" folder (the vault's daily-
+               notes root — same constant as utils/dailyNoteDisplay.ts)
+               is rendered with a calendar icon on teal, and tapping
+               it opens today's daily note instead of navigating to
+               the folder listing. The result on-screen: ONE Daily-
+               notes button per vault, in the same row as the other
+               folders, in the position the folder occupies in the
+               root listing. The synthetic Daily-notes button that
+               lived here pre-fix has been removed — the merge is
+               the fix.
+            2. All other folders get a single neutral-grey backdrop
+               (.nc-mobile-nav-btn-circle-folder) — the user
+               disliked the per-folder hashed colours. Folder names
+               are distinguishable from the labels alone; the round
+               circle's job is just to be tap-target chrome.
+        */}
+        {rootFolders.map((folder) => {
+          if (folder.name === DAILY_NOTES_FOLDER) {
+            return (
+              <MobileNavButton
+                key={folder.path}
+                label={folder.name}
+                icon="📅"
+                colorKey="teal"
+                // No active ring — this is an action ("open today"),
+                // not a destination. Matches how the pre-fix
+                // synthetic Daily-notes button behaved.
+                active={false}
+                onClick={onOpenDailyNote}
+              />
+            );
+          }
+          return (
+            <MobileNavButton
+              key={folder.path}
+              label={folder.name}
+              icon="📁"
+              // colorKey is unused for plain folders — they all share
+              // the neutral grey class instead. Passing 'folder' as a
+              // sentinel that MobileNavButton interprets as "use the
+              // neutral-grey class, not a palette class".
+              colorKey="folder"
+              active={activeRootSegment === folder.name}
+              onClick={() => navigateToFolder(folder.path)}
+            />
+          );
+        })}
       </div>
 
       {/* Row 2 — contextual children. Rendered only when there's a
@@ -282,12 +320,22 @@ interface MobileNavButtonProps {
  * One round button — coloured circle with an icon glyph, label
  * underneath. Active state adds a ring via .nc-mobile-nav-btn-active.
  *
- * Visually the circle reuses the same colour tokens as VaultAvatar
- * (.nc-vault-avatar-{color} classes) so we don't duplicate the 8
- * palette hex values. The wrapping <button> is borderless and
- * transparent; the colour lives on the inner circle so the focus
- * ring (when keyboard-navigated) lands on the whole control without
- * fighting the circle's background colour.
+ * Colour-key handling:
+ *   - 'folder' (sentinel)     → neutral grey backdrop, via
+ *                               .nc-mobile-nav-btn-circle-folder.
+ *                               Used for plain folders in both row 1
+ *                               and row 2; the user disliked the
+ *                               per-folder hashed colours.
+ *   - 'amber' | 'teal' | …    → one of the 8 vault palette classes
+ *                               (.nc-vault-avatar-{name}). Used for
+ *                               the fixed-identity anchor buttons
+ *                               (Assignments, Daily notes, neutral-
+ *                               teal note chips on row 2).
+ *
+ * The wrapping <button> is borderless and transparent; the colour
+ * lives on the inner circle so the focus ring (when keyboard-
+ * navigated) lands on the whole control without fighting the
+ * circle's background colour.
  */
 function MobileNavButton({
   label,
@@ -296,6 +344,16 @@ function MobileNavButton({
   active,
   onClick,
 }: MobileNavButtonProps) {
+  // 'folder' is a non-palette sentinel — map it to the dedicated
+  // neutral-grey class instead of mangling .nc-vault-avatar-folder
+  // (which doesn't exist). Any other colorKey is assumed to be a
+  // vault palette name and uses the matching .nc-vault-avatar-*
+  // class straight.
+  const circleColorClass =
+    colorKey === 'folder'
+      ? 'nc-mobile-nav-btn-circle-folder'
+      : `nc-vault-avatar-${colorKey}`;
+
   return (
     <button
       type="button"
@@ -310,7 +368,7 @@ function MobileNavButton({
       title={label}
     >
       <span
-        className={`nc-mobile-nav-btn-circle nc-vault-avatar-${colorKey}`}
+        className={`nc-mobile-nav-btn-circle ${circleColorClass}`}
         aria-hidden="true"
       >
         {icon}
@@ -394,7 +452,10 @@ function MobileNavChildrenRow({
           key={`folder:${sub.path}`}
           label={sub.name}
           icon="📁"
-          colorKey={colorForName(sub.name)}
+          // Same neutral-grey treatment as row 1's plain folders —
+          // the user wanted the per-folder hashed colours gone
+          // everywhere, not just on the anchor row.
+          colorKey="folder"
           active={activeFolderPath === sub.path}
           onClick={() => onNavigateFolder(sub.path)}
         />
@@ -404,11 +465,10 @@ function MobileNavChildrenRow({
           key={`note:${note.path}`}
           label={stripMd(note.name)}
           icon="📄"
-          /* Notes always get a neutral teal — distinct from the
-             colour-hashed folder circles so the two kinds are
-             distinguishable at a glance even when the labels are
-             cut off by the small circle width. Could be tuned to a
-             grey if teal collides too often with a sibling folder. */
+          /* Notes get a single neutral teal. With both folders and
+             notes now using flat colours (grey vs teal), the two
+             kinds stay distinguishable at small button widths
+             where the label can be cut off. */
           colorKey="teal"
           active={activeNotePath === note.path}
           onClick={() => onNavigateNote(note.path)}
