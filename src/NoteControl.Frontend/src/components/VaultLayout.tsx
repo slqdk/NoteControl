@@ -17,6 +17,7 @@ import { PropertiesPanel } from './PropertiesPanel';
 import { ResizableRail } from './ResizableRail';
 import { ToggleRailButtons } from './ToggleRailButtons';
 import { ImportNoteSplitButton } from './ImportNoteSplitButton';
+import { MobileNavBar, type MobileNavCurrent } from './MobileNavBar';
 import {
   useTreeData,
   useRailLayout,
@@ -56,18 +57,24 @@ import { useIsMobile } from '../hooks/useIsMobile';
  * Ship 81 — Mobile shell.
  *   At ≤768px viewport the layout flips to single-column:
  *     1. Topbar (compact)
- *     2. Tree rail across full width, collapsed by default to a
- *        single-row strip. Tap to expand the strip into the full
- *        tree (still inline; no overlay). Tapping a note collapses
- *        the strip again so the editor takes the full screen.
+ *     2. MobileNavBar — a stacked pair of horizontally-scrolling
+ *        round-button rows replacing the pre-redesign collapsible
+ *        tree strip:
+ *          Row 1 (anchors): Assignments · Daily notes · root folders
+ *          Row 2 (children): immediate subfolders + notes of the
+ *                            currently-viewed folder (walks with you
+ *                            as you drill in).
  *     3. Main content (folder page / editor) below.
  *     4. Properties panel hidden entirely on mobile — the editable
- *        fields will return as a bottom-of-note collapsible in a
- *        later ship.
+ *        fields show inline below the editor via MobileNoteProperties.
+ *     5. On folder views, a mobile-only "Add note / Add folder" footer
+ *        renders at the bottom of FolderPage's content area (see
+ *        FolderPage.tsx + the new onCreateNote/onCreateFolder fields
+ *        exposed on VaultLayoutContext).
  *   The user's persisted desktop preferences for treeVisible and
  *   propsVisible are LEFT ALONE while on mobile, so switching back
- *   to desktop restores their setup. Mobile uses its own ephemeral
- *   tree-strip state instead.
+ *   to desktop restores their setup. Mobile uses the navbar above
+ *   instead of the tree rail entirely.
  */
 export function VaultLayout() {
   const { vaultId: vaultIdParam } = useParams<{ vaultId: string }>();
@@ -93,32 +100,11 @@ export function VaultLayout() {
   // localStorage so flipping back to a wide viewport restores them.
   const isMobile = useIsMobile();
 
-  // Ship 88: tree expanded by default on vault entry, but auto-
-  // collapses when the URL becomes a note path. The user wants to
-  // see the tree on arrival to navigate, but once they're reading
-  // a note the tree should get out of the way. They can re-expand
-  // manually via the chevron toggle when they want to switch notes.
-  //
-  // This was Ship 81's original behaviour. Ship 87 removed the
-  // auto-collapse to keep the tree always-visible; Ship 88 reverts
-  // that part because the user found "tree always above editor"
-  // ate too much screen space when reading.
-  //
-  // Initial state is derived from the URL so a direct deep-link
-  // to a note (e.g. a bookmarked /note URL opened cold) doesn't
-  // flash the tree open for one paint frame before the effect
-  // collapses it. If the URL is already on a note path on mount,
-  // start collapsed; otherwise start expanded.
-  const [mobileTreeExpanded, setMobileTreeExpanded] = useState(
-    () => !location.pathname.endsWith('/note'),
-  );
-
-  useEffect(() => {
-    if (!isMobile) return;
-    if (location.pathname.endsWith('/note')) {
-      setMobileTreeExpanded(false);
-    }
-  }, [isMobile, location.pathname, searchParams]);
+  // Mobile redesign — the pre-redesign mobileTreeExpanded state and
+  // the matching auto-collapse useEffect on /note URLs were removed
+  // when the round-button MobileNavBar replaced the collapsible tree
+  // strip. The navbar is always visible at the top of the mobile
+  // shell; there's no expand/collapse to track anymore.
 
   // Ship 80: the variant picker is gone (compact-only) but we keep
   // the variant STATE itself because TreeView still reads it to
@@ -241,6 +227,30 @@ export function VaultLayout() {
   const isOnAssignmentsRoute =
     location.pathname === `/vaults/${vaultId}/assignments`;
 
+  // Mobile redesign — current-location descriptor for MobileNavBar.
+  //
+  // The navbar uses this to (a) pick which row-1 button gets the
+  // active ring and (b) pick the target folder for row 2 (the
+  // contextual children row). Derivation is purely off the URL —
+  // we don't trust component state because direct deep-links (e.g.
+  // a bookmarked note) need to land with the right buttons lit.
+  //
+  // Computed unconditionally rather than gated on isMobile — the
+  // cost is negligible (a regex test and a couple of string ops) and
+  // it lets the navbar be a dumb prop consumer rather than recomputing
+  // the same thing on every render. We only PASS it to <MobileNavBar>
+  // inside the mobile branch below; desktop never reads it.
+  const mobileNavCurrent: MobileNavCurrent = (() => {
+    if (isOnAssignmentsRoute) return { kind: 'assignments' };
+    if (isOnDashboardRoute) return { kind: 'dashboard' };
+    if (location.pathname === `/vaults/${vaultId}/note`) {
+      return { kind: 'note', path: searchParams.get('path') ?? '' };
+    }
+    // Folder view (root or ?path=…). The bare /vaults/:id index is
+    // root; ?path=A/B is folder A/B.
+    return { kind: 'folder', path: searchParams.get('path') ?? '' };
+  })();
+
   // Auto-hide override for the props panel: NEVER persist this to
   // localStorage — we want the user's preferred propsVisible setting
   // to come back when they leave the startpage. So we compute an
@@ -316,11 +326,11 @@ export function VaultLayout() {
       ? dashboardPropsRevealed
       : layout.propsVisible;
 
-  // Ship 81: on mobile the tree is always rendered (it's the
-  // navigation primary), but its content collapses to a single-row
-  // strip when mobileTreeExpanded is false. Desktop respects the
-  // user's persisted treeVisible preference exactly as before.
-  const effectiveTreeVisible = isMobile ? true : layout.treeVisible;
+  // Mobile redesign: the tree rail is no longer rendered on mobile
+  // (the MobileNavBar above the main content owns navigation now).
+  // Desktop respects the user's persisted treeVisible preference
+  // exactly as before.
+  const effectiveTreeVisible = isMobile ? false : layout.treeVisible;
 
   /**
    * Unified rail-toggle handler for the props panel. Routes to the
@@ -1277,123 +1287,46 @@ export function VaultLayout() {
       />
 
       {/*
-        Ship 81: data-mobile attribute on the shell drives the
-        mobile-only CSS rules in styles.css. Combined with
-        data-tree-expanded it lets the stylesheet collapse the
-        tree rail to a single-row strip when the user hasn't
-        opened it. We avoid toggling React-rendered DOM (the rail
-        always exists); CSS handles the height transition.
+        Mobile redesign:
+          - data-mobile remains on the shell so the mobile CSS rules
+            (single-column flex, narrow gutters, etc.) keep applying.
+          - data-tree-expanded was dropped along with the pre-redesign
+            "Show Tree" collapsible strip. The dead CSS rules tied to
+            that attribute will get cleaned up in a follow-up; leaving
+            them in place for now keeps the diff focused on JSX.
+          - <MobileNavBar /> renders ABOVE .nc-shell on mobile, taking
+            the role the tree rail used to play. It's a sibling, not a
+            child of .nc-shell, because the navbar is a top-level
+            navigation strip (full viewport width, doesn't need
+            single-column-stack styling from inside the shell).
       */}
+      {isMobile && (
+        <MobileNavBar
+          vaultId={vaultId}
+          rootListing={treeData.childrenByPath.get('') ?? null}
+          cachedListings={treeData.childrenByPath}
+          current={mobileNavCurrent}
+          onSelectAssignments={onSelectAssignments}
+          onOpenDailyNote={() => void onOpenDailyNote()}
+        />
+      )}
+
       <div
         className="nc-shell"
         data-mobile={isMobile ? 'true' : undefined}
-        data-tree-expanded={isMobile && mobileTreeExpanded ? 'true' : undefined}
       >
         {effectiveTreeVisible && (
-          isMobile ? (
-            // Ship 81 — Mobile: render the tree as a plain block,
-            // no ResizableRail (its inline width style would
-            // override our full-width CSS, and the drag handle
-            // is meaningless on touch). The rail-collapsed
-            // mobile-strip behaviour comes entirely from CSS
-            // reading the data-tree-expanded attribute on the
-            // shell above.
-            //
-            // The strip header is the SAME .nc-rail-header that
-            // desktop uses, but on mobile we make the whole strip
-            // tappable to expand/collapse. We keep the action
-            // buttons accessible in the expanded state.
-            <div className="nc-rail nc-rail-left nc-rail-mobile">
-              <div className="nc-rail-content">
-                {/*
-                  Ship 87: merged toggle + action-buttons row.
-                  Pre-Ship-87, the chevron toggle and the
-                  Daily+/📄+/📁+ row were two stacked rows (~44 +
-                  30 = ~74px). On a phone that header took 10% of
-                  the viewport before the first folder row even
-                  appeared. Ship 87 puts both in the same flex
-                  row at 44px tall.
-
-                  The toggle stays a real <button> with the
-                  chevron + label; the action buttons live in a
-                  sibling span. Tapping an action button doesn't
-                  bubble to the toggle (different element) so the
-                  expand/collapse state stays put. The original
-                  desktop {railHeader} is no longer rendered in
-                  the mobile branch — its content is fully
-                  represented by the merged row.
-                */}
-                <div className="nc-mobile-tree-row">
-                  <button
-                    type="button"
-                    className="nc-mobile-tree-toggle"
-                    onClick={() => setMobileTreeExpanded((v) => !v)}
-                    aria-expanded={mobileTreeExpanded}
-                    aria-label={
-                      mobileTreeExpanded ? 'Collapse tree' : 'Expand tree'
-                    }
-                  >
-                    <span className="nc-mobile-tree-toggle-chev">
-                      {mobileTreeExpanded ? '▾' : '▸'}
-                    </span>
-                    {/*
-                      Ship 89: label is "Show Tree" (not "Tree") to
-                      make the button's purpose explicit on a phone
-                      where there's no hover-tooltip affordance.
-                      Followed by a visual `|` separator and, when
-                      the tree is COLLAPSED and a note is selected,
-                      the note's display name. The note name is
-                      hidden when expanded — at that point the user
-                      is navigating and the action buttons take the
-                      right side of the row instead. CSS handles
-                      the show/hide via .nc-shell[data-tree-expanded]
-                      so we render the title-span unconditionally
-                      and let CSS pick the visible state.
-                    */}
-                    <span className="nc-mobile-tree-toggle-label">
-                      Show Tree
-                    </span>
-                    <span
-                      className="nc-mobile-tree-toggle-sep"
-                      aria-hidden="true"
-                    >
-                      |
-                    </span>
-                    <span className="nc-mobile-tree-toggle-title">
-                      {selection && selection.kind === 'note'
-                        ? // Strip .md off note names — the user knows
-                          // the underlying file format, no need to
-                          // shout it in the strip.
-                          selection.name.toLowerCase().endsWith('.md')
-                          ? selection.name.slice(0, -3)
-                          : selection.name
-                        : ''}
-                    </span>
-                  </button>
-                  {actionButtons}
-                </div>
-                {/*
-                  Tree content — always rendered; CSS hides it
-                  when [data-tree-expanded] is absent. This lets
-                  the browser keep the tree's scroll position and
-                  React state across collapse/expand cycles.
-                  Ship 87: removed the {railHeader} render from
-                  this mobile branch; its content is now in the
-                  merged row above.
-                */}
-                {treeContent}
-              </div>
-            </div>
-          ) : (
-            <ResizableRail
-              side="left"
-              width={layout.treeWidth}
-              onWidthChange={layout.setTreeWidth}
-            >
-              {railHeader}
-              {treeContent}
-            </ResizableRail>
-          )
+          /* Desktop tree rail. Mobile no longer renders the tree —
+             effectiveTreeVisible is false on mobile (see derivation
+             above), so this whole block is desktop-only. */
+          <ResizableRail
+            side="left"
+            width={layout.treeWidth}
+            onWidthChange={layout.setTreeWidth}
+          >
+            {railHeader}
+            {treeContent}
+          </ResizableRail>
         )}
 
         <main className="nc-shell-main">
@@ -1423,6 +1356,15 @@ export function VaultLayout() {
               vault,
               dashboards: dashboardsHook.config?.dashboards ?? null,
               patchDashboard: dashboardsHook.patchDashboard,
+              // Mobile redesign: FolderPage's mobile-only Add footer
+              // calls these directly. Desktop folder views ignore
+              // them (note/folder creation lives in the tree's rail
+              // header buttons there). Kept on the context rather
+              // than prop-drilled so future pages (search results,
+              // a future "recent" view, etc.) can also hook into
+              // creation without re-wiring.
+              onCreateNote,
+              onCreateFolder,
             }}
           />
         </main>
@@ -1628,6 +1570,23 @@ export interface VaultLayoutContext {
     id: string,
     patch: (d: DashboardDto) => DashboardDto,
   ) => void;
+  /**
+   * Create a new note under `parentPath` (use '' for vault root).
+   * Resolves after the server has created the file, the tree cache
+   * has been refreshed, and the editor has navigated to the new note.
+   * Rejects with an Error whose message is the server's reason on
+   * failure (duplicate name, invalid path, etc.) — callers should
+   * surface that to the user.
+   *
+   * Used by FolderPage's mobile-only Add footer; desktop's note
+   * creation goes through the tree rail header's 📄+ button.
+   */
+  onCreateNote: (parentPath: string, fileName: string) => Promise<void>;
+  /**
+   * Create a new folder under `parentPath`. Same resolve/reject
+   * contract as onCreateNote — see that field for details.
+   */
+  onCreateFolder: (parentPath: string, name: string) => Promise<void>;
 }
 
 function parentOf(path: string): string {

@@ -5896,3 +5896,259 @@ a.nc-rss-item-title:hover {
 .nc-rail-mobile .nc-tree-row-assignments {
   display: flex;
 }
+
+/* ==============================================================
+   Mobile redesign — round-button navigation row (MobileNavBar).
+
+   Replaces the pre-redesign "Show Tree" collapsible strip. The
+   navbar mounts as a sibling of .nc-shell on mobile, so its rules
+   need to live outside the desktop @media (max-width: 768px)
+   block above (the navbar JSX is gated on isMobile in
+   VaultLayout.tsx, not on a CSS media query). For symmetry with
+   the existing convention we still wrap the rules in a media
+   query — but since the markup itself is JSX-gated, the queries
+   are a safety net rather than the primary gate.
+
+   The legacy .nc-mobile-tree-* / .nc-rail-mobile / [data-tree-
+   expanded] CSS rules higher up in this file are now unused
+   (their JSX was removed). They've been left in place to keep
+   this diff focused on the redesign; a follow-up cleanup ship
+   will GC them.
+   ============================================================== */
+
+@media (max-width: 768px) {
+
+  /* The navbar surface itself. Two stacked horizontally-scrolling
+     rows separated by a thin divider so the eye reads "row 1,
+     row 2" rather than one tall band. */
+  .nc-mobile-nav {
+    background: var(--nc-bg-elev);
+    border-bottom: 1px solid var(--nc-border);
+    /* Subtle drop-shadow so the navbar reads as floating above
+       the content. Keeps the visual hierarchy honest when the
+       content scrolls under it. Minimal — a single 1px shadow,
+       not a full elevation card. */
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  /* Common row container. flex with horizontal overflow auto =
+     a strip that scrolls horizontally when its children outflow.
+     -webkit-overflow-scrolling: touch is the iOS Safari hook for
+     momentum scrolling; harmless on other browsers. */
+  .nc-mobile-nav-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    /* Hide the scrollbar on Webkit (Chrome/iOS). Firefox respects
+       scrollbar-width. We don't lose discoverability — the row
+       clearly has more content off-screen because the rightmost
+       button gets cut off, and swiping is the natural gesture. */
+    scrollbar-width: none;
+  }
+  .nc-mobile-nav-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Subtle divider between row 1 (anchors) and row 2 (children).
+     Lighter than the navbar's bottom border so the eye still
+     reads the whole component as one navigation surface. */
+  .nc-mobile-nav-children {
+    border-top: 1px solid var(--nc-border);
+    /* Tighter padding on the children row — smaller buttons
+       there (see .nc-mobile-nav-btn-small below) so the row's
+       intrinsic height is smaller anyway. */
+    padding: 6px 10px;
+  }
+
+  /* Children-row error state. Single-line muted message in place
+     of the row content when the fetch failed. */
+  .nc-mobile-nav-error {
+    color: var(--nc-fg-muted);
+    font-size: 12px;
+    font-style: italic;
+    padding-left: 4px;
+  }
+
+  /* The button — a vertical stack: round circle on top, label
+     below. flex: 0 0 auto so the button keeps its intrinsic
+     width as the row scrolls; min-width gives every label a
+     fair shot at fitting two lines if needed.
+
+     The button itself has no background or border — those live
+     on the inner circle. Keeping the button transparent means
+     the focus ring (when keyboard-navigated) sits around the
+     whole control without fighting the circle's solid fill. */
+  .nc-mobile-nav-btn {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    /* Roughly the width of a 56px circle + label clearance. The
+       label is allowed to wrap to 2 lines via -webkit-line-clamp
+       below; this width gives "Daily notes" room to fit one line
+       and longer folder names two lines without collapsing. */
+    width: 68px;
+    padding: 4px 2px;
+    background: transparent;
+    border: none;
+    color: var(--nc-fg);
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+  }
+  .nc-mobile-nav-btn:focus-visible {
+    outline: 2px solid var(--nc-accent, #2563eb);
+    outline-offset: 2px;
+  }
+
+  /* The coloured circle. Reuses the .nc-vault-avatar-{color}
+     classes for the 8 named hex fills (see top of styles.css)
+     so the colour palette stays in lockstep with vault avatars.
+     52px diameter feels generous on a phone — comfortably
+     thumb-sized without being garish. */
+  .nc-mobile-nav-btn-circle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    color: #ffffff;
+    font-size: 24px;
+    line-height: 1;
+    user-select: none;
+    flex: 0 0 auto;
+    /* Smooth-ish transition for the active ring's appearance.
+       100ms is short enough not to feel laggy on tap, long
+       enough to read as "something changed". */
+    transition: box-shadow 120ms ease;
+  }
+
+  /* Active ring — outline-style ring around the circle. Box-shadow
+     instead of border so the circle's intrinsic size doesn't
+     shift when the ring appears/disappears (a border would
+     reflow the layout by 6px). The inner shadow matches the
+     navbar background so the ring reads as detached from the
+     circle; the outer shadow is the accent colour so the ring
+     pops as a clear "you are here" indicator across both themes. */
+  .nc-mobile-nav-btn-active .nc-mobile-nav-btn-circle {
+    box-shadow:
+      0 0 0 3px var(--nc-bg-elev),
+      0 0 0 5px var(--nc-accent, #2563eb);
+  }
+
+  /* Label under the circle. Two-line max with ellipsis on the
+     third — handles long folder names ("Engineering / Drafting")
+     without bleeding into the next button. Centred so a short
+     label aligns to the circle above; line-height tightened so
+     the two-line case stays inside the button's height budget. */
+  .nc-mobile-nav-btn-label {
+    font-size: 11px;
+    line-height: 1.2;
+    text-align: center;
+    color: var(--nc-fg-muted);
+    /* Multi-line ellipsis. Webkit-only but supported across all
+       target browsers (Chrome Android, iOS Safari, Firefox
+       Android). Falls back to single-line ellipsis on
+       hypothetical non-supporting engines via the white-space
+       rules below — not pretty but not broken. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  /* Active button: brighter label. Pairs with the ring so both
+     the circle and the label say "this is where you are". */
+  .nc-mobile-nav-btn-active .nc-mobile-nav-btn-label {
+    color: var(--nc-fg);
+    font-weight: 600;
+  }
+
+  /* ---- Folder Add row (FolderPage mobile footer) ----------- */
+
+  /* The composer / "+ Add note or folder" button live in this
+     wrapper at the bottom of the folder listing. Same visual
+     pattern as .nc-assignments-add-row above — give it some
+     breathing room above the next page edge. */
+  .nc-folder-add-row {
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+
+  .nc-folder-add-btn {
+    /* Match the assignments add button's width budget so the
+       two pages feel consistent. Full-width on phones is fine —
+       it's the primary call-to-action when the user wants to
+       add. */
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+
+  /* Expanded composer. Border + light bg distinguishes it from
+     the surrounding folder listing. */
+  .nc-folder-add-composer {
+    border: 1px solid var(--nc-border-strong);
+    border-radius: 6px;
+    padding: 12px;
+    background: var(--nc-bg-elev);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Pills row — Note / Folder selectors. Mirrors the
+     .nc-assignments-composer-pills pattern: small pill buttons
+     where the active one has a heavier border. */
+  .nc-folder-add-pills {
+    display: flex;
+    gap: 8px;
+  }
+
+  .nc-folder-add-pill {
+    flex: 1 1 0;
+    padding: 8px 10px;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background: var(--nc-bg);
+    color: var(--nc-fg);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .nc-folder-add-pill-active {
+    border-color: var(--nc-accent, #2563eb);
+    background: var(--nc-bg-elev-2);
+  }
+
+  /* Name input — full width, sized for thumb typing. */
+  .nc-folder-add-input {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 14px;
+    border: 1px solid var(--nc-border-strong);
+    border-radius: 6px;
+    background: var(--nc-bg);
+    color: var(--nc-fg);
+  }
+  .nc-folder-add-input:focus {
+    outline: 2px solid var(--nc-accent, #2563eb);
+    outline-offset: -1px;
+  }
+
+  /* Cancel / Create button row, right-aligned. */
+  .nc-folder-add-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+}
