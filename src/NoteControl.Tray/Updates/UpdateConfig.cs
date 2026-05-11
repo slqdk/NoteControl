@@ -59,4 +59,27 @@ internal static class UpdateConfig
     /// "NoteControl-{version}.zip" which matches.
     /// </summary>
     public const string AssetNameFormat = "NoteControl-{0}.zip";
+
+    /// <summary>
+    /// Whether the tray polls GitHub for updates automatically.
+    ///
+    /// When <c>false</c> (current value): the periodic timer in
+    /// <c>App.StartUpdateChecks</c> never starts. The
+    /// "Check for updates..." menu item still works -- it runs a
+    /// one-shot check on demand -- and the menu label stays on
+    /// the default "Check for updates..." string until the user
+    /// triggers a check.
+    ///
+    /// When <c>true</c>: the historical behaviour. First check
+    /// fires ~3 seconds after tray launch, then every
+    /// <see cref="PollInterval"/> for the lifetime of the tray.
+    ///
+    /// Compile-time constant rather than a per-user preference:
+    /// the tray has no preferences file today, and this is a
+    /// single-operator deployment where the operator can flip
+    /// the constant and rebuild. If multi-user / multi-tenant
+    /// ever becomes a concern, this is the obvious knob to move
+    /// into a tray-prefs JSON.
+    /// </summary>
+    public const bool AutoCheckEnabled = false;
 }

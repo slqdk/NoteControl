@@ -522,6 +522,20 @@ public partial class App : Application
     /// </summary>
     private void StartUpdateChecks()
     {
+        // Honour the compile-time auto-check flag. When it's off,
+        // the timer never starts and the periodic poll never fires.
+        // The "Check for updates..." menu item still works -- it
+        // invokes TriggerManualUpdateCheckAsync independently of
+        // this timer -- so the user can check on demand. We
+        // intentionally do NOT seed _latestUpdateCheck here in the
+        // disabled case; the menu label stays on its default
+        // "Check for updates..." text until a manual check returns
+        // something.
+        if (!UpdateConfig.AutoCheckEnabled)
+        {
+            return;
+        }
+
         // Delay the first check by a couple of seconds so the tray
         // is visibly "Running" before we hit the network. WPF
         // DispatcherTimer is fine for this -- it fires on the UI

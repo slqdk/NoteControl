@@ -141,6 +141,85 @@
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,12"
                                    Text="Sessions, password rules, and login throttling. Most of these take effect for new requests and new sessions; existing logins keep their original settings until they expire."/>
 
+                        <!-- ============================================================
+                             Session timeouts use sliders, not raw minute textboxes.
+
+                             People reason about session lifetime in days ("30-day
+                             session"), not minutes. The server validates in minutes
+                             with caps that aren't obvious from the UI (idle: 30 days
+                             = 43200 min; absolute: 365 days = 525600 min). Pre-slider
+                             behaviour was a free-form TextBox that accepted any
+                             integer; entering something over the cap got "Save
+                             failed: Configuration is invalid" with no hint about
+                             which field or what the limit was.
+
+                             Sliders make the unit, the range, and the resolved
+                             value all visible at a glance and make it impossible
+                             to exceed the cap.
+
+                               - Idle in HOURS (default 12 h = 0.5 days; hour
+                                 granularity lets that be addressable). Slider
+                                 range 1..720 h matches the server's 43200 min cap.
+                               - Absolute in DAYS (default 7 days; finer grain
+                                 isn't useful at a year-scale ceiling). Range
+                                 1..365 d matches the server's 525600 min cap.
+
+                             The minute count derived from the slider is shown next
+                             to it so the wire value is never hidden.
+                             ============================================================ -->
+
+                        <TextBlock Text="Idle timeout" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,6"
+                                   Text="How long a session can sit unused before it's invalidated. The user has to log in again after this much idle time. Range: 1 hour to 30 days."/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider Grid.Column="0"
+                                    x:Name="IdleTimeoutSlider"
+                                    Minimum="1" Maximum="720"
+                                    TickFrequency="24" TickPlacement="BottomRight"
+                                    IsSnapToTickEnabled="False"
+                                    SmallChange="1" LargeChange="24"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="IdleTimeoutSlider_ValueChanged"/>
+                            <TextBlock Grid.Column="1"
+                                       x:Name="IdleTimeoutLabel"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right"
+                                       Margin="12,0,0,0"
+                                       FontFamily="Consolas"/>
+                        </Grid>
+
+                        <TextBlock Text="Absolute lifetime" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,6"
+                                   Text="A hard ceiling: a session expires this long after it was created, regardless of how recently it was used. Range: 1 day to 365 days. Must be ≥ the idle timeout."/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider Grid.Column="0"
+                                    x:Name="AbsoluteTimeoutSlider"
+                                    Minimum="1" Maximum="365"
+                                    TickFrequency="30" TickPlacement="BottomRight"
+                                    IsSnapToTickEnabled="False"
+                                    SmallChange="1" LargeChange="30"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="AbsoluteTimeoutSlider_ValueChanged"/>
+                            <TextBlock Grid.Column="1"
+                                       x:Name="AbsoluteTimeoutLabel"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right"
+                                       Margin="12,0,0,0"
+                                       FontFamily="Consolas"/>
+                        </Grid>
+
+                        <!-- Other auth knobs stay as numeric textboxes. They aren't
+                             prone to the same "what's the unit / what's the cap"
+                             confusion — 12 chars for a password, 5 attempts/min,
+                             etc, are intuitive numbers. -->
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="220"/>
@@ -152,30 +231,22 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <Label Grid.Row="0" Grid.Column="0" Content="Idle timeout (minutes)" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="IdleTimeoutBox" Padding="6,4" Margin="0,0,0,6"/>
+                            <Label Grid.Row="0" Grid.Column="0" Content="Minimum password length" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="MinPasswordLengthBox" Padding="6,4" Margin="0,0,0,6"/>
 
-                            <Label Grid.Row="1" Grid.Column="0" Content="Absolute lifetime (minutes)" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="AbsoluteTimeoutBox" Padding="6,4" Margin="0,0,0,6"/>
+                            <Label Grid.Row="1" Grid.Column="0" Content="Check pwned passwords (HIBP)" VerticalAlignment="Center"/>
+                            <CheckBox Grid.Row="1" Grid.Column="1" x:Name="CheckHibpBox" VerticalAlignment="Center" Margin="0,0,0,6"/>
 
-                            <Label Grid.Row="2" Grid.Column="0" Content="Minimum password length" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="MinPasswordLengthBox" Padding="6,4" Margin="0,0,0,6"/>
+                            <Label Grid.Row="2" Grid.Column="0" Content="Login attempts / IP / minute" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="LoginAttemptsIpBox" Padding="6,4" Margin="0,0,0,6"/>
 
-                            <Label Grid.Row="3" Grid.Column="0" Content="Check pwned passwords (HIBP)" VerticalAlignment="Center"/>
-                            <CheckBox Grid.Row="3" Grid.Column="1" x:Name="CheckHibpBox" VerticalAlignment="Center" Margin="0,0,0,6"/>
+                            <Label Grid.Row="3" Grid.Column="0" Content="Login attempts / account / hour" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="LoginAttemptsAccountBox" Padding="6,4" Margin="0,0,0,6"/>
 
-                            <Label Grid.Row="4" Grid.Column="0" Content="Login attempts / IP / minute" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="LoginAttemptsIpBox" Padding="6,4" Margin="0,0,0,6"/>
-
-                            <Label Grid.Row="5" Grid.Column="0" Content="Login attempts / account / hour" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="LoginAttemptsAccountBox" Padding="6,4" Margin="0,0,0,6"/>
-
-                            <Label Grid.Row="6" Grid.Column="0" Content="Account lockout duration (min)" VerticalAlignment="Center"/>
-                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="LockoutMinutesBox" Padding="6,4" Margin="0,0,0,6"/>
+                            <Label Grid.Row="4" Grid.Column="0" Content="Account lockout duration (min)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="LockoutMinutesBox" Padding="6,4" Margin="0,0,0,6"/>
                         </Grid>
 
                         <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,12,0,0"
