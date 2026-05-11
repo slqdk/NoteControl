@@ -201,37 +201,126 @@ a dashboard, and reappears when they navigate back to a note.
 
 ## Mobile
 
-A few mobile-specific affordances:
+At viewports ≤ 768 px the shell flips to a single-column layout
+with its own dedicated navigation surface (the **MobileNavBar**)
+in place of the desktop tree rail. Properties stay edit-able
+inline inside the editor. A few other desktop-only affordances
+are suppressed (see bullets at the bottom).
 
-- Tree and properties rails collapse by default on narrow
-  viewports.
-- Properties panel content is rendered inside the editor itself
-  via `MobileNoteProperties` when the right rail is hidden, so
-  edits to name/tags/etc. stay accessible.
+### MobileNavBar
+
+The MobileNavBar mounts directly under the top bar on every
+`/vaults/:vaultId/*` route and is the primary navigation surface
+on mobile — the tree rail is **not** rendered. The navbar is two
+stacked horizontally-scrolling rows of round circular buttons,
+each with an icon glyph and a label underneath. Horizontal
+overflow scrolls; scrollbars are hidden so the rows read as
+chrome rather than a list.
+
+**Row 1 — anchors.** Always visible. Fixed order:
+
+1. **Assignments** — calendar-clipboard icon (📋) on amber.
+   Navigates to `/vaults/:vaultId/assignments`. Active ring lights
+   up when the user is on the assignments page.
+2. **Daily notes** — calendar icon (📅) on teal. Pinned at this
+   position regardless of the vault's folder list. Tapping it
+   opens **today's daily note** (via the same `openToday` flow
+   used by the desktop's `Daily+` button) AND anchors row 2 to
+   the **Daily Notes folder's immediate children** (year folders)
+   — see "anchor override" below. The button always renders, even
+   when the vault has no `Daily Notes` folder yet; the server
+   creates the folder + today's file on the first tap.
+3. **Each root folder** — folder icon (📁) on a neutral-grey
+   backdrop, in the server's natural order, with the literal
+   `Daily Notes` folder filtered out (it's hoisted to position 2).
+   Tapping a folder navigates to its listing page; active ring
+   lights up when the URL's first path segment matches.
+
+All folder buttons share a single neutral-grey circle fill —
+folders are distinguishable by label. Only the fixed-identity
+anchors (Assignments amber, Daily Notes teal) and notes in row 2
+(teal) use a palette colour.
+
+**Row 2 — contextual children.** Walks with the user as they
+navigate:
+
+- **On a folder view** (`?path=A/B`) — shows the immediate
+  subfolders and notes of that folder.
+- **On the editor** (`/note?path=A/B/foo.md`) — shows the
+  immediate children of the note's parent folder, so the user
+  can hop to a sibling note in one tap.
+- **On Assignments / dashboards / vault root** — hidden.
+- **On a folder with no children** — hidden.
+
+Subfolder buttons use the same neutral-grey treatment as row 1;
+note buttons use a flat teal. Tapping a subfolder navigates into
+it (row 2 then walks down to show its children); tapping a note
+opens the editor.
+
+**Anchor override.** When the user taps Daily notes, row 2 is
+forced to show the `Daily Notes` folder's own immediate children
+even though the editor URL is now on a note nested several
+levels deeper inside it. The override is local component state
+— ephemeral, not persisted. It clears as soon as the user taps
+any other anchor button or any child in row 2; from that point
+the URL-derived "walks with you" logic resumes. A page refresh
+or deep-link starts with no override (a bookmarked URL on
+today's note doesn't pretend the user came from the Daily Notes
+anchor).
+
+The active ring on Daily Notes reflects the override — it lights
+up while the override is in effect, and goes dark the moment the
+user navigates away.
+
+### Mobile folder Add footer
+
+On folder listing pages (`/vaults/:vaultId?path=...`, also the
+vault root), the bottom of the content area renders an
+**+ Add note or folder** button (mobile only). Tapping it opens
+an inline composer with:
+
+- A **Note / Folder** pill selector.
+- A name input.
+- Cancel / Create buttons.
+
+Validation matches the desktop tree's inline new-row inputs:
+empty rejected, slashes rejected, dup names rejected
+case-insensitively against the current folder's children. On a
+successful Note create, the editor navigates to the new note;
+on a successful Folder create, the composer collapses and the
+new folder appears on the navbar (row 1 if at vault root, row 2
+otherwise) after the listing refresh.
+
+Desktop folder views deliberately skip this footer — note and
+folder creation belongs in the tree rail header buttons (📄+ /
+📁+) there.
+
+### Other mobile-specific behaviours
+
+- Properties panel content for notes is rendered inside the
+  editor itself via `MobileNoteProperties` when the right rail
+  is hidden, so edits to name/tags/etc. stay accessible. There
+  is no separate mobile properties surface for folders — folder
+  rename/move stay desktop workflows.
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
-- **The tree rail's `🏠+` Add-dashboard button is hidden** at
-  ≤ 768 px — adding a dashboard means dropping widgets onto a
-  free-form 2D canvas, which is a desktop workflow. The mobile
-  rail row keeps just `Daily+ / 📄+ / 📁+`.
-- **The dashboards section of the tree is hidden** at ≤ 768 px
-  for the same canvas-on-touch reason — combined with the
-  redirect rule below, mobile users don't reach dashboards from
-  this device at all. The tree starts at the Assignments row.
-- **The Assignments row in the tree stays visible** at ≤ 768 px
-  — Assignments is a list, the mobile layout is fully usable,
-  and the user wanted it always reachable.
 - The vault picker collapses to a single-trigger dropdown
   variant (see "Top bar" above).
 - Dashboards redirect to `/vaults/:vaultId` on mobile — the
   free-floating canvas has no working interaction model on
-  touch.
+  touch. The navbar has no dashboard surface either.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
 This is desktop-first software. Mobile is "doesn't break,"
 not "first-class."
+
+> **Implementation note.** The legacy `.nc-mobile-tree-*`,
+> `.nc-rail-mobile`, and `[data-tree-expanded]` CSS rules in
+> `styles.css` are unused after the redesign and are kept
+> in place pending a cleanup ship. Don't add new rules under
+> those selectors; use `.nc-mobile-nav-*` instead.
 
 ## Templates page
 
