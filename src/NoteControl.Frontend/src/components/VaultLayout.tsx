@@ -1179,7 +1179,16 @@ export function VaultLayout() {
           <div
             className={[
               'nc-tree-row',
+              // Keeps the bottom-divider visual + font-weight that
+              // dashboards use. NB: this class is hidden on mobile
+              // by the Ship 86 CSS rule (see styles.css). The
+              // second class below counteracts that for THIS row
+              // specifically, so dashboards stay hidden on mobile
+              // (preserves their established workflow) but
+              // Assignments stays visible — the user explicitly
+              // asked for "always visible, mobile and desktop".
               'nc-tree-row-startpage',
+              'nc-tree-row-assignments',
               isOnAssignmentsRoute ? 'nc-tree-row-selected' : '',
             ]
               .filter(Boolean)

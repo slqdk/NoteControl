@@ -5880,3 +5880,19 @@ a.nc-rss-item-title:hover {
     color: var(--nc-fg);
   }
 }
+
+/* ---- Assignments row: keep visible on mobile ----------------
+   Ship 86 hides .nc-rail-mobile .nc-tree-row-startpage so the
+   legacy startpage / dashboards section disappears on phones.
+   The Assignments row reuses .nc-tree-row-startpage for its
+   divider/font-weight styling, but the user wants Assignments
+   to stay visible on all screen sizes — so we unhide rows that
+   ALSO carry the .nc-tree-row-assignments discriminator class.
+   The dashboards rows in DashboardList don't carry that class,
+   so they stay hidden on mobile (preserving the Ship 86
+   behaviour that the user has been living with). Outside a
+   media query — `.nc-rail-mobile` is only present in the
+   mobile DOM, so this is effectively mobile-scoped anyway. */
+.nc-rail-mobile .nc-tree-row-assignments {
+  display: flex;
+}
