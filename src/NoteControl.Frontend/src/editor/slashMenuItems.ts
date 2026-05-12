@@ -1,4 +1,5 @@
 import type { Editor, Range } from '@tiptap/core';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi, templatesApi } from '../api/client';
@@ -181,7 +182,8 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
 }
 
 /**
- * Build the prosemirror JSON for a SupportCall skeleton:
+ * Build the SupportCall skeleton as an array of real prosemirror
+ * Node instances:
  *
  *   <info callout>
  *     <paragraph>**Kunde**</paragraph>
@@ -196,88 +198,80 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  *   </table>
  *   <paragraph/>
  *
- * Returns the content as an array suitable for
- * `editor.chain().insertContent(...)`.
+ * Why schema nodes (not raw JSON):
  *
- * Cell-height behaviour: the table is emitted WITHOUT a rowHeight
- * attribute. That means each row sizes to fit its content via the
- * upstream table CSS — pressing Enter inside the "Problem
- * beskrivelse" cell inserts a hard break and the cell grows
- * downward as the user keeps typing. (rowHeight, when set, would
- * pin every row to a fixed pixel height and force overflow inside
- * the cell instead — we don't want that here.)
+ * Earlier revisions built this as a plain `insertContent` JSON
+ * payload. That worked for the callout and the paragraphs, but the
+ * resulting TABLE rendered with a phantom thin third column on the
+ * left — the table-resize plugin's colgroup measurement gets
+ * confused when cells come in without their default attributes
+ * (colspan / rowspan / colwidth) materialised. Building real Node
+ * instances via the schema's `create` / `createChecked` runs the
+ * normal default-attr resolution, so every tableCell carries the
+ * canonical `{ colspan: 1, rowspan: 1, colwidth: null }` set —
+ * which is what tiptap-table's plugin expects when computing the
+ * column layout on first paint.
+ *
+ * Cell-height behaviour: the table has NO rowHeight attribute.
+ * Rows size to fit their content via the upstream table CSS —
+ * pressing Enter inside any cell inserts a hard break and the
+ * cell grows downward. (rowHeight, when set, would pin every row
+ * to a fixed pixel height and force overflow inside the cell.)
  *
  * Label asymmetry: "Project :" is bolded because it's the primary
  * identifier — matches the screenshot the request was based on.
- * The other five labels render plain. Easy to tweak by adding /
- * removing the bold mark on each labelCell call.
+ * The other five labels render plain. Tweak by passing different
+ * bold flags to `labelCell`.
  *
  * The trailing empty paragraph below the table gives the user a
  * clickable escape line beneath the inserted block, same pattern
  * the callout extension uses for its own insertCallout.
  */
-function supportCallNodes(): Array<Record<string, unknown>> {
-  type Json = Record<string, unknown>;
+function supportCallNodes(editor: Editor): ProseMirrorNode[] {
+  const schema = editor.schema;
+  const boldMark = schema.marks.bold;
 
-  // Build a single cell. `label` becomes the paragraph text; pass
-  // `bold:true` to wrap it in a bold mark. An empty label gives an
-  // empty cell (one empty paragraph inside, which is what tiptap-
-  // table needs to be selectable / typeable).
-  const cell = (label: string, bold = false): Json => {
-    const paragraphContent: Json[] =
-      label.length === 0
-        ? []
-        : [
-            {
-              type: 'text',
-              text: label,
-              ...(bold ? { marks: [{ type: 'bold' }] } : {}),
-            },
-          ];
-    return {
-      type: 'tableCell',
-      content: [
-        {
-          type: 'paragraph',
-          ...(paragraphContent.length > 0 ? { content: paragraphContent } : {}),
-        },
-      ],
-    };
+  // --- Helpers --------------------------------------------------------
+  // labelCell builds a tableCell whose paragraph contains the label
+  // text (optionally bold). emptyCell builds a tableCell containing
+  // one empty paragraph — the minimum prosemirror needs for a cell
+  // the user can click into and type in.
+  const labelCell = (label: string, bold: boolean): ProseMirrorNode => {
+    const marks = bold ? [boldMark.create()] : [];
+    const text = schema.text(label, marks);
+    const para = schema.nodes.paragraph.createChecked(null, text);
+    return schema.nodes.tableCell.createChecked(null, para);
   };
 
-  const row = (label: string, bold = false): Json => ({
-    type: 'tableRow',
-    content: [cell(label, bold), cell('')],
-  });
-
-  const table: Json = {
-    type: 'table',
-    // No rowHeight attribute — rows size to content, which lets the
-    // Problem beskrivelse cell grow as the user types.
-    content: [
-      row('Project :', true),
-      row('Kontakt person :'),
-      row('Hardware :'),
-      row('Software :'),
-      row('Remote ID / Password :'),
-      row('Problem beskrivelse :'),
-    ],
+  const emptyCell = (): ProseMirrorNode => {
+    const para = schema.nodes.paragraph.createChecked(null);
+    return schema.nodes.tableCell.createChecked(null, para);
   };
 
-  const callout: Json = {
-    type: 'callout',
-    attrs: { variant: 'info' },
-    content: [
-      {
-        type: 'paragraph',
-        content: [
-          { type: 'text', marks: [{ type: 'bold' }], text: 'Kunde' },
-        ],
-      },
-    ],
-  };
+  const row = (label: string, bold: boolean): ProseMirrorNode =>
+    schema.nodes.tableRow.createChecked(null, [labelCell(label, bold), emptyCell()]);
 
-  return [callout, table, { type: 'paragraph' }];
+  // --- Table ----------------------------------------------------------
+  const table = schema.nodes.table.createChecked(null, [
+    row('Project :', true),
+    row('Kontakt person :', false),
+    row('Hardware :', false),
+    row('Software :', false),
+    row('Remote ID / Password :', false),
+    row('Problem beskrivelse :', false),
+  ]);
+
+  // --- Callout --------------------------------------------------------
+  const calloutPara = schema.nodes.paragraph.createChecked(
+    null,
+    schema.text('Kunde', [boldMark.create()]),
+  );
+  const callout = schema.nodes.callout.createChecked({ variant: 'info' }, calloutPara);
+
+  // --- Trailing paragraph --------------------------------------------
+  const trailing = schema.nodes.paragraph.createChecked(null);
+
+  return [callout, table, trailing];
 }
 
 /**
@@ -478,7 +472,7 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
           .chain()
           .focus()
           .deleteRange(range)
-          .insertContent(supportCallNodes())
+          .insertContent(supportCallNodes(editor))
           .run();
       },
     },
