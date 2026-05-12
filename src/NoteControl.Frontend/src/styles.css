@@ -2446,6 +2446,33 @@ body.nc-dragging * {
   margin: 0;
 }
 
+/* ----- SupportCall frame ------------------------------------------
+   The SupportCall slash item inserts an outer 1x1 table that acts
+   as a resizable frame around an info callout + an inner labelled
+   table. The outer cell is identifiable by having a callout as a
+   direct child — no other table in the app has that signature.
+
+   We use that as the selector to give the outer cell a bolder,
+   slightly darker border than the default thin grey, so the
+   whole SupportCall block reads as a single framed unit. Using
+   --nc-border-strong keeps it theme-aware (light and dark) and
+   stays inside the established grey-scale palette — no coloured
+   border that would compete with the info-blue callout inside.
+
+   2px instead of 1px gives the frame visible weight. Because
+   tables use border-collapse, this 2px wins on the shared edges
+   between the outer cell and any inner-table cells that touch
+   it — the inner table appears framed inside the bold border,
+   which is what we want.
+
+   :has() is supported in all modern browsers (since 2023). If
+   we ever need to support older ones we'd give the outer node a
+   dedicated class via a TipTap attribute instead — for now :has
+   is fine. */
+.ProseMirror table > tbody > tr > td:has(> .nc-callout) {
+  border: 2px solid var(--nc-border-strong);
+}
+
 /* ----- Callouts ----------------------------------------------------- */
 
 /*

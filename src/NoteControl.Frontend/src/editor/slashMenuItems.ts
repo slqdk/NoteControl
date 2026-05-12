@@ -232,17 +232,17 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  *
  *   <outer 1×1 table>                    ← the resizable frame
  *     <row>
- *       <cell>                           ← single big cell, holds it all
+ *       <cell colwidth=[720]>            ← single big cell, default 720px
  *         <info callout>
  *           <paragraph>**Kunde**</paragraph>
  *         </info callout>
- *         <inner table>
- *           <row>  Project :                <empty cell>
- *           <row>  Kontakt person :         <empty cell>
- *           <row>  Hardware :               <empty cell>
- *           <row>  Software :               <empty cell>
- *           <row>  Remote ID / Password :   <empty cell>
- *           <row>  Problem beskrivelse :    <empty cell>
+ *         <inner table>                  ← labels + value columns
+ *           <row>  Project :   [160] | <empty>
+ *           <row>  Kontakt person :
+ *           <row>  Hardware :
+ *           <row>  Software :
+ *           <row>  Remote ID / Password :
+ *           <row>  Problem beskrivelse :
  *         </inner table>
  *       </cell>
  *     </row>
@@ -262,6 +262,31 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  * inner table = 2 block children), and (b) Tab from inside the
  * inner table walks up into the outer cell, which can feel odd
  * the first time but is consistent with how tables work.
+ *
+ * Column widths:
+ *
+ *   - The outer cell carries `colwidth: [720]` so the frame
+ *     defaults to 720px on insert. The user can drag its right
+ *     edge to resize the frame (the standard tiptap-table column
+ *     resize handle), which overwrites this colwidth.
+ *
+ *   - The inner table's FIRST row's first cell carries
+ *     `colwidth: [160]` so the labels column fixes at 160px (just
+ *     enough for the longest label, "Remote ID / Password :",
+ *     without wrapping). prosemirror-tables uses any non-null
+ *     colwidth on any cell in a column to drive that column's
+ *     <col> width; subsequent rows inherit. Subsequent rows'
+ *     label cells keep `colwidth: null` (they'd be ignored anyway
+ *     for column-width computation now that row-0 has set it).
+ *
+ *   - All value cells (the right column of the inner table) have
+ *     `colwidth: null`. With table-layout: fixed and one column
+ *     pinned, the unset column auto-flexes to fill the remaining
+ *     width of the outer cell.
+ *
+ * Border styling (the "bold but grayish" outer frame) lives in
+ * styles.css, scoped to td:has(> .nc-callout). See the
+ * --- SupportCall frame --- block in there.
  *
  * Two values returned:
  *   - frame:    the outer-table node, the single top-level block
@@ -285,8 +310,7 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  *
  * Label asymmetry: "Project :" is bolded (it's the primary
  * identifier — matches the screenshot the request was based on).
- * The other five labels render plain. Tweak by passing different
- * bold flags to `labelCell`.
+ * The other five labels render plain.
  */
 function supportCallNodes(editor: Editor): {
   frame: ProseMirrorNode;
@@ -300,29 +324,50 @@ function supportCallNodes(editor: Editor): {
   // text (optionally bold). emptyCell builds a tableCell containing
   // one empty paragraph — the minimum prosemirror needs for a cell
   // the user can click into and type in.
-  const labelCell = (label: string, bold: boolean): ProseMirrorNode => {
+  //
+  // `colwidthValue` is the array assigned to the cell's colwidth
+  // attribute (null = let the column auto-size). We pin it on the
+  // FIRST inner row's label cell to lock the labels column to
+  // 160px; the value cell and every cell in subsequent rows are
+  // null.
+  const labelCell = (
+    label: string,
+    bold: boolean,
+    colwidthValue: number[] | null,
+  ): ProseMirrorNode => {
     const marks = bold ? [boldMark.create()] : [];
     const text = schema.text(label, marks);
     const para = schema.nodes.paragraph.createChecked(null, text);
-    return schema.nodes.tableCell.createChecked(null, para);
+    return schema.nodes.tableCell.createChecked({ colwidth: colwidthValue }, para);
   };
 
-  const emptyCell = (): ProseMirrorNode => {
+  const emptyCell = (colwidthValue: number[] | null = null): ProseMirrorNode => {
     const para = schema.nodes.paragraph.createChecked(null);
-    return schema.nodes.tableCell.createChecked(null, para);
+    return schema.nodes.tableCell.createChecked({ colwidth: colwidthValue }, para);
   };
 
-  const innerRow = (label: string, bold: boolean): ProseMirrorNode =>
-    schema.nodes.tableRow.createChecked(null, [labelCell(label, bold), emptyCell()]);
+  // First inner row pins the label column at 160px; subsequent rows
+  // pass null for both cells (their colwidths are ignored once the
+  // first row has set the column geometry).
+  const firstInnerRow = schema.nodes.tableRow.createChecked(null, [
+    labelCell('Project :', true, [160]),
+    emptyCell(),
+  ]);
+
+  const innerRow = (label: string): ProseMirrorNode =>
+    schema.nodes.tableRow.createChecked(null, [
+      labelCell(label, false, null),
+      emptyCell(),
+    ]);
 
   // --- Inner table (6 rows × 2 cols) ---------------------------------
   const innerTable = schema.nodes.table.createChecked(null, [
-    innerRow('Project :', true),
-    innerRow('Kontakt person :', false),
-    innerRow('Hardware :', false),
-    innerRow('Software :', false),
-    innerRow('Remote ID / Password :', false),
-    innerRow('Problem beskrivelse :', false),
+    firstInnerRow,
+    innerRow('Kontakt person :'),
+    innerRow('Hardware :'),
+    innerRow('Software :'),
+    innerRow('Remote ID / Password :'),
+    innerRow('Problem beskrivelse :'),
   ]);
 
   // --- Callout --------------------------------------------------------
@@ -335,11 +380,17 @@ function supportCallNodes(editor: Editor): {
   // --- Outer 1×1 frame -----------------------------------------------
   // The outer cell holds two block children — the callout and the
   // inner table. That's schema-valid (TableCellWithAlign inherits
-  // upstream content: 'block+'). The two-child outer cell is also
+  // upstream content: 'block+'). The two-block-cell content is also
   // what trips needsHtmlSerialization's multi-block-cell rule
   // (TableWithOptions.ts), so this whole structure round-trips as
   // raw HTML in the .md file — readable and re-parsable.
-  const outerCell = schema.nodes.tableCell.createChecked(null, [callout, innerTable]);
+  //
+  // colwidth: [720] sets the initial frame width. The user can
+  // drag the column-resize handle on the right edge to resize.
+  const outerCell = schema.nodes.tableCell.createChecked(
+    { colwidth: [720] },
+    [callout, innerTable],
+  );
   const outerRow = schema.nodes.tableRow.createChecked(null, outerCell);
   const frame = schema.nodes.table.createChecked(null, outerRow);
 
