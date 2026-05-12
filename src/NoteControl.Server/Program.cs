@@ -552,7 +552,32 @@ try
             "default-src 'self'; " +
             "script-src 'self'; " +
             "style-src 'self' 'unsafe-inline'; " +
-            "img-src 'self' data:; " +
+            // img-src allows 'self' (own assets), data: (inline /
+            // base64), and https: (any external HTTPS image). The
+            // https: source was widened from 'self' only when the
+            // Links block's preview thumbnails started failing —
+            // og:image / favicon URLs are by definition third-party,
+            // and the strict 'self' policy blocked every external
+            // image even for legitimate user-pasted links.
+            //
+            // Trade-offs accepted:
+            //   - User-pasted URLs anywhere in the app (link blocks,
+            //     RSS thumbnails, future content) can now load
+            //     images from arbitrary hosts. Those hosts see a
+            //     request originating from the user's browser —
+            //     leaks the existence of this NoteControl instance
+            //     and could be used as a tracking pixel surface.
+            //   - The Referrer-Policy header above (strict-origin-
+            //     when-cross-origin) limits what gets leaked: cross-
+            //     origin requests send only the scheme+host, not
+            //     the full URL. Combined with NoteControl being
+            //     self-hosted (a single admin, not a public site),
+            //     the practical risk is low.
+            //   - http: is NOT added to the allowlist. Mixed-content
+            //     blocking still applies when the page is served
+            //     over HTTPS, and we don't want to encourage
+            //     unencrypted image fetches.
+            "img-src 'self' data: https:; " +
             "media-src 'self'; " +
             "object-src 'none'; " +
             "frame-ancestors 'none'; " +
