@@ -5661,9 +5661,18 @@ a.nc-rss-item-title:hover {
    the bucket structure. */
 
 .nc-assignments-page {
-  /* .nc-page already provides padding + max-width inheritance from
-     the app frame; we just tighten the in-page vertical rhythm so
-     three buckets + an add row don't feel cramped. */
+  /* Opt out of the .nc-page 960px cap so the bucket grid fills the
+     app frame (same trick .nc-page-editor uses for the note surface).
+     The Assignments view is a dashboard-style layout — three buckets
+     of cards in a responsive grid — and the 960px ceiling left a lot
+     of empty space to the right of the buckets at any frame width
+     above ~1000px. With max-width: none here the grid auto-fills
+     more columns at wider frame widths while still being bounded by
+     whatever the user configured for the global app frame.
+
+     The 24px horizontal padding from .nc-page is kept (we only drop
+     the cap), so the page still has gutters against the rail edges. */
+  max-width: none;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -5834,6 +5843,15 @@ a.nc-rss-item-title:hover {
 /* ---------- Card edit mode ---------- */
 
 .nc-assignments-card-editing {
+  /* The non-editing card uses flex-row so the body and the trash
+     button sit side by side. In edit mode we want a stacked form
+     layout: Category > Subject > Details > [Done | Delete] row,
+     each block at the card's full inner width. Without this, the
+     Done/Delete buttons end up as a narrow right column squeezed
+     against the inputs (the original bug report's "too cluttered"
+     screenshot). */
+  flex-direction: column;
+  align-items: stretch;
   cursor: default;
   padding: 12px;
 }
@@ -5884,10 +5902,11 @@ a.nc-rss-item-title:hover {
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
-  /* Live alongside the edit fields on desktop, wrap below on
-     narrow widths via flex-wrap. Keeping the same row as the
-     fields means a long card doesn't grow taller just for two
-     buttons. */
+  justify-content: flex-end;
+  /* The editing card is column-flex now (see .nc-assignments-card-editing
+     above), so this row sits below the fields and spans the card's
+     full width. flex-end matches the composer's action alignment for
+     visual consistency between "edit existing" and "compose new". */
 }
 
 /* ---------- Add button + composer ---------- */
