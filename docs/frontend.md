@@ -51,8 +51,13 @@ Cross-tab changes propagate via the `storage` event.
 
 The top bar contains, left to right:
 
-1. **Brand / vault picker** — depends on context:
-   - On the vault list page: just the brand text.
+1. **Brand logo** — the NoteControl `[NC]` mark. Always present
+   on desktop (no click handler — purely a brand anchor). Sits
+   to the left of the vault picker. Hidden on mobile (≤ 768 px)
+   to leave horizontal room for the picker and search box; the
+   browser-tab favicon serves as the mobile brand instead.
+2. **Vault picker** — depends on context:
+   - On the vault list page (no vault open yet): nothing here.
    - On any `/vaults/:vaultId/*` page with the full vault list
      loaded: a **vault picker** with two layout variants:
      - **Desktop** (> 768 px): inline pills. Pills that fit
@@ -70,20 +75,20 @@ The top bar contains, left to right:
        listing every vault. No inline-pill overflow algorithm
        and no appearance popover — vault customisation stays a
        desktop workflow.
-2. **Search box** — searches the current vault. Submits to
+3. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
-3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
+4. **Rail toggle slot** — placeholder filled by VaultLayout. Has
    two buttons (📁 toggles the tree rail, ℹ️ toggles the
    properties panel) in vault routes. Empty on routes without a
    shared layout.
-4. **Widgets+ button** — visible on every dashboard URL
+5. **Widgets+ button** — visible on every dashboard URL
    (`/vaults/:id/dashboards/:dashboardId` and the legacy
    `/vaults/:id/startpage` redirect). Drops down "Add RSS feed
    / Add Task area / Add Links"; selecting one fires a window
    `CustomEvent` that the dashboard page listens for.
-5. **Templates link** — direct route to the templates page for
+6. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-6. **Account menu** — current user's name, with a popover menu
+7. **Account menu** — current user's name, with a popover menu
    (Account, My sessions, Settings, Sign out).
 
 ## Settings (web UI, not the tray)
