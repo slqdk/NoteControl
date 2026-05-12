@@ -4637,6 +4637,41 @@ a.nc-rss-item-title:hover {
   background: var(--nc-bg);
 }
 
+/* Block-title view-mode rendering (Ship 9).
+   Mirrors the input's typography (weight, size, colour) so toggling
+   between view and edit mode doesn't shift the title visually.
+   Padding matches the input's 4px/6px so the text sits in the same
+   place. The border is transparent (no hover ring) to make it
+   clear this is non-interactive — unlike the input, there's no
+   editable affordance here. */
+.nc-links-block-title-view {
+  flex: 1 1 auto;
+  padding: 4px 6px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nc-fg);
+  min-width: 0;
+  /* Match the input's single-line behaviour — long titles
+     truncate with ellipsis instead of wrapping or pushing the
+     gear icon off-screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* User-select on so the title can still be copied; the cursor
+     stays the inherited grab-cursor from the header band, which
+     is the right cue for "this is part of the draggable header,
+     not a clickable widget." */
+  user-select: text;
+}
+.nc-links-block-title-view-empty {
+  /* Match the input's placeholder styling so an empty title in
+     view mode reads the same as an empty input in edit mode. */
+  color: var(--nc-fg-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
 .nc-links-block-menu {
   position: relative;
   flex: 0 0 auto;

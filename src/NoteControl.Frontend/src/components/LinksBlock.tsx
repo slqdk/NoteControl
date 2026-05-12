@@ -277,17 +277,43 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
         onPointerUp={onHeaderPointerUp}
         onPointerCancel={onHeaderPointerUp}
       >
-        <input
-          type="text"
-          className="nc-links-block-title-input"
-          placeholder="Untitled"
-          value={block.title}
-          onChange={(e) => onChange({ title: e.target.value })}
-          // The header has pointerdown handlers; without
-          // data-no-drag, dragging the title text into the field
-          // would start a block drag. Same pattern as TaskArea.
-          data-no-drag
-        />
+        {editMode ? (
+          <input
+            type="text"
+            className="nc-links-block-title-input"
+            placeholder="Untitled"
+            value={block.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+            // The header has pointerdown handlers; without
+            // data-no-drag, dragging the title text into the field
+            // would start a block drag. Same pattern as TaskArea.
+            data-no-drag
+          />
+        ) : (
+          /*
+            View mode: render the title as plain text instead of an
+            input. A read-only input looked confusing (focus ring +
+            cursor on a non-editable field), and an editable title
+            in "view mode" was the original inconsistency the user
+            called out. Empty title falls back to a muted "Untitled"
+            placeholder so the block isn't visually broken.
+
+            data-no-drag here too — the header is otherwise a drag
+            handle, and clicking on text inside it should select the
+            text (browser default) not start a drag. Same reasoning
+            as the original input.
+          */
+          <div
+            className={[
+              'nc-links-block-title-view',
+              !block.title ? 'nc-links-block-title-view-empty' : '',
+            ].filter(Boolean).join(' ')}
+            data-no-drag
+            title={block.title || 'Use the ⚙ menu to rename this block'}
+          >
+            {block.title || 'Untitled'}
+          </div>
+        )}
         <div ref={menuRef} className="nc-links-block-menu" data-no-drag>
           <button
             type="button"
