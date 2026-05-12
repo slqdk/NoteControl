@@ -230,106 +230,84 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
 /**
  * Build the SupportCall skeleton.
  *
- *   <outer 1×1 table>                    ← the resizable frame
- *     <row>
- *       <cell colwidth=[720]>            ← single big cell, default 720px
- *         <info callout>
- *           <paragraph>**Kunde**</paragraph>
- *         </info callout>
- *         <inner table>                  ← labels + value columns
- *           <row>  Project :   [160] | <empty>
- *           <row>  Kontakt person :
- *           <row>  Hardware :
- *           <row>  Software :
- *           <row>  Remote ID / Password :
- *           <row>  Problem beskrivelse :
- *         </inner table>
- *       </cell>
- *     </row>
- *   </outer 1×1 table>
+ *   <info callout>
+ *     <paragraph>**Kunde**</paragraph>
+ *   </info callout>
+ *   <table>                              ← the resizable structure
+ *     <row>  Project : [180]  | _ [540]   ← first row pins col widths
+ *     <row>  Kontakt person :
+ *     <row>  Hardware :
+ *     <row>  Software :
+ *     <row>  Remote ID / Password :
+ *     <row>  Problem beskrivelse :
+ *   </table>
  *   <paragraph/>
  *
- * Why the outer 1×1 table:
+ * History — why this isn't wrapped in an outer 1×1 frame:
  *
- * The user wants the whole SupportCall block to be resizable like
- * a table — drag the right edge to make the frame wider or
- * narrower. Wrapping it in a single-cell outer table reuses the
- * existing tiptap-table column-resize handle for free; no custom
- * node or drag logic needed. The trade-off is two: (a) markdown
- * round-trip falls through to HTML serialisation rather than the
- * cleaner pipe syntax (forced by needsHtmlSerialization's
- * multi-block-cell rule, since the outer cell holds a callout +
- * inner table = 2 block children), and (b) Tab from inside the
- * inner table walks up into the outer cell, which can feel odd
- * the first time but is consistent with how tables work.
+ * An earlier ship wrapped the callout + table in an outer 1×1
+ * table so the whole composition was draggable as a single frame.
+ * That broke at the markdown serializer (TableWithOptions's HTML
+ * emitter only writes cell.textContent, no recursion through
+ * nested block content) — saving the note flattened the whole
+ * thing into a single cell containing all the labels concatenated,
+ * and re-parsing produced nothing. Also: the nested table was
+ * almost impossible for the user to delete via normal keyboard
+ * gestures.
  *
- * Column widths:
+ * The redesign drops the outer frame. The inner table alone gives
+ * the user width-adjustability (its column-resize handle on the
+ * right edge), and the callout sits above as a labelled cap. The
+ * "frame" affordance is gone but the resize affordance — which
+ * is what the user actually asked for — is intact, and the
+ * structure round-trips cleanly through the existing serializer
+ * because it's the same flat shape regular tables use.
  *
- *   - The outer cell carries `colwidth: [720]` so the frame
- *     defaults to 720px on insert. The user can drag its right
- *     edge to resize the frame (the standard tiptap-table column
- *     resize handle), which overwrites this colwidth.
+ * Column widths (set on the FIRST row's cells per prosemirror-
+ * tables convention; subsequent rows inherit):
  *
- *   - The inner table's FIRST row's first cell carries
- *     `colwidth: [160]` so the labels column fixes at 160px (just
- *     enough for the longest label, "Remote ID / Password :",
- *     without wrapping). prosemirror-tables uses any non-null
- *     colwidth on any cell in a column to drive that column's
- *     <col> width; subsequent rows inherit. Subsequent rows'
- *     label cells keep `colwidth: null` (they'd be ignored anyway
- *     for column-width computation now that row-0 has set it).
+ *   - Label column: 180px. Enough for "Remote ID / Password :"
+ *     and "Problem beskrivelse :" — the two longest labels —
+ *     without wrapping. Earlier 160px was just slightly too
+ *     narrow; the wrap was visible in the user's screenshot.
  *
- *   - All value cells (the right column of the inner table) have
- *     `colwidth: null`. With table-layout: fixed and one column
- *     pinned, the unset column auto-flexes to fill the remaining
- *     width of the outer cell.
+ *   - Value column: 540px. 180 + 540 = 720px total, which is
+ *     the default table width on insert. The user can drag the
+ *     column-resize handle (the right edge of any cell border)
+ *     to resize after insert.
  *
- * Border styling (the "bold but grayish" outer frame) lives in
- * styles.css, scoped to td:has(> .nc-callout). See the
- * --- SupportCall frame --- block in there.
+ * Cell-height behaviour: no rowHeight on the table, so cells size
+ * to fit their content via the upstream table CSS — pressing
+ * Enter inside any cell inserts a hard break and the cell grows
+ * downward.
  *
- * Two values returned:
- *   - frame:    the outer-table node, the single top-level block
- *               the slash command inserts to land the skeleton.
- *   - trailing: an empty paragraph the command inserts AFTER the
- *               frame so the user has a clickable escape line
- *               below the frame.
+ * Label asymmetry: "Project :" is bolded (primary identifier).
  *
- * They're returned separately because tiptap's insertContent
- * array-path round-trips each item through Fragment.fromJSON,
- * which rejects a freshly-built top-level Fragment containing
- * heterogenous block children (tested empirically — see the
- * "Invalid input for Fragment.fromJSON" RangeError we hit on the
- * first attempt). Inserting one node at a time via two chained
- * insertContent calls avoids that path entirely.
- *
- * Cell-height behaviour: neither the outer nor inner table sets
- * rowHeight, so cells size to fit their content via the upstream
- * table CSS — pressing Enter inside any inner cell inserts a
- * hard break and the cell grows downward.
- *
- * Label asymmetry: "Project :" is bolded (it's the primary
- * identifier — matches the screenshot the request was based on).
- * The other five labels render plain.
+ * Three values returned (callout, table, trailing) because
+ * tiptap's insertContent array-path round-trips each item through
+ * Fragment.fromJSON, which rejects a freshly-built top-level
+ * Fragment containing heterogenous block children. Each node is
+ * inserted via a separate chained insertContent call to dodge
+ * that path.
  */
 function supportCallNodes(editor: Editor): {
-  frame: ProseMirrorNode;
+  callout: ProseMirrorNode;
+  table: ProseMirrorNode;
   trailing: ProseMirrorNode;
 } {
   const schema = editor.schema;
   const boldMark = schema.marks.bold;
 
-  // --- Inner-table helpers -------------------------------------------
+  // --- Cell helpers ---------------------------------------------------
   // labelCell builds a tableCell whose paragraph contains the label
   // text (optionally bold). emptyCell builds a tableCell containing
   // one empty paragraph — the minimum prosemirror needs for a cell
   // the user can click into and type in.
   //
   // `colwidthValue` is the array assigned to the cell's colwidth
-  // attribute (null = let the column auto-size). We pin it on the
-  // FIRST inner row's label cell to lock the labels column to
-  // 160px; the value cell and every cell in subsequent rows are
-  // null.
+  // attribute. Non-null only on the first row; null on subsequent
+  // rows (those values are ignored anyway once row 0 has set the
+  // column geometry).
   const labelCell = (
     label: string,
     bold: boolean,
@@ -346,28 +324,27 @@ function supportCallNodes(editor: Editor): {
     return schema.nodes.tableCell.createChecked({ colwidth: colwidthValue }, para);
   };
 
-  // First inner row pins the label column at 160px; subsequent rows
-  // pass null for both cells (their colwidths are ignored once the
-  // first row has set the column geometry).
-  const firstInnerRow = schema.nodes.tableRow.createChecked(null, [
-    labelCell('Project :', true, [160]),
-    emptyCell(),
+  // First row sets column widths for the whole table:
+  // labels = 180px, values = 540px, total = 720px.
+  const firstRow = schema.nodes.tableRow.createChecked(null, [
+    labelCell('Project :', true, [180]),
+    emptyCell([540]),
   ]);
 
-  const innerRow = (label: string): ProseMirrorNode =>
+  const otherRow = (label: string): ProseMirrorNode =>
     schema.nodes.tableRow.createChecked(null, [
       labelCell(label, false, null),
-      emptyCell(),
+      emptyCell(null),
     ]);
 
-  // --- Inner table (6 rows × 2 cols) ---------------------------------
-  const innerTable = schema.nodes.table.createChecked(null, [
-    firstInnerRow,
-    innerRow('Kontakt person :'),
-    innerRow('Hardware :'),
-    innerRow('Software :'),
-    innerRow('Remote ID / Password :'),
-    innerRow('Problem beskrivelse :'),
+  // --- Table (6 rows × 2 cols) ---------------------------------------
+  const table = schema.nodes.table.createChecked(null, [
+    firstRow,
+    otherRow('Kontakt person :'),
+    otherRow('Hardware :'),
+    otherRow('Software :'),
+    otherRow('Remote ID / Password :'),
+    otherRow('Problem beskrivelse :'),
   ]);
 
   // --- Callout --------------------------------------------------------
@@ -377,27 +354,10 @@ function supportCallNodes(editor: Editor): {
   );
   const callout = schema.nodes.callout.createChecked({ variant: 'info' }, calloutPara);
 
-  // --- Outer 1×1 frame -----------------------------------------------
-  // The outer cell holds two block children — the callout and the
-  // inner table. That's schema-valid (TableCellWithAlign inherits
-  // upstream content: 'block+'). The two-block-cell content is also
-  // what trips needsHtmlSerialization's multi-block-cell rule
-  // (TableWithOptions.ts), so this whole structure round-trips as
-  // raw HTML in the .md file — readable and re-parsable.
-  //
-  // colwidth: [720] sets the initial frame width. The user can
-  // drag the column-resize handle on the right edge to resize.
-  const outerCell = schema.nodes.tableCell.createChecked(
-    { colwidth: [720] },
-    [callout, innerTable],
-  );
-  const outerRow = schema.nodes.tableRow.createChecked(null, outerCell);
-  const frame = schema.nodes.table.createChecked(null, outerRow);
-
   // --- Trailing paragraph --------------------------------------------
   const trailing = schema.nodes.paragraph.createChecked(null);
 
-  return { frame, trailing };
+  return { callout, table, trailing };
 }
 
 /**
@@ -594,8 +554,8 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
       icon: '☎',
       keywords: ['support', 'call', 'kunde', 'customer', 'ticket', 'intake'],
       command: ({ editor, range }) => {
-        const { frame, trailing } = supportCallNodes(editor);
-        // Two separate insertContent calls (rather than a single
+        const { callout, table, trailing } = supportCallNodes(editor);
+        // Three separate insertContent calls (rather than a single
         // array) — see supportCallNodes' header for why. Each call
         // takes a single node, which goes through tiptap's
         // single-node insertion path and skips the array-path
@@ -605,7 +565,8 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
           .chain()
           .focus()
           .deleteRange(range)
-          .insertContent(frame)
+          .insertContent(callout)
+          .insertContent(table)
           .insertContent(trailing)
           .run();
       },
