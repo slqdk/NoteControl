@@ -607,6 +607,41 @@ function LinkRow({
           <div className="nc-links-row-desc">{item.description}</div>
         )}
       </div>
+      {/*
+        Hover-visible delete on display rows. Without this the only
+        way to delete a single link was to click into edit mode and
+        find the small × next to the URL field — discoverability was
+        poor. The button is hidden by default (opacity: 0) and fades
+        in on row hover, same pattern the assignments cards use.
+
+        stopPropagation on the click is required: the row's outer
+        onClick triggers edit mode, and we don't want the row to
+        flip into edit mode at the same moment the user is deleting
+        it (would briefly flash the editor before the row is gone).
+        For rows with any content (title or url), we confirm first
+        — accidental clicks on a hover-only button would otherwise
+        be very easy. Empty rows skip the confirm; they're cheap to
+        re-add.
+      */}
+      <button
+        type="button"
+        className="nc-links-row-display-delete"
+        title="Delete this link"
+        aria-label="Delete this link"
+        onClick={(e) => {
+          e.stopPropagation();
+          const hasContent =
+            item.title.trim().length > 0 || item.url.trim().length > 0;
+          if (hasContent) {
+            const label = item.title.trim() || item.url.trim();
+            // eslint-disable-next-line no-alert
+            if (!window.confirm(`Delete link "${label}"?`)) return;
+          }
+          onDelete();
+        }}
+      >
+        🗑
+      </button>
     </div>
   );
 }

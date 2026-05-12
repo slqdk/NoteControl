@@ -263,6 +263,35 @@ public sealed class LinkPreviewFetcher : ILinkPreviewFetcher
         // ("img/x.png") image URLs; all need the base.
         var imageAbs = ResolveAbsolute(imageRaw, baseUri);
 
+        // Final fallback: the well-known /favicon.ico path at the
+        // page's host. Every browser tries this when no <link rel>
+        // declares a favicon, and most sites have one served from
+        // the document root regardless of whether they advertise it
+        // in HTML. This rescues two common cases:
+        //   1. Pages with no OG/twitter/<link rel> meta at all
+        //      (lots of plain content pages, internal tools).
+        //   2. Cookie-consent / interstitial pages that serve a
+        //      stub HTML before the real content (Beckhoff's
+        //      "Inden du fortsætter" gate, GDPR walls, etc.) —
+        //      the gate has no OG meta but the favicon is still
+        //      served from the same host.
+        // We don't HEAD-check the URL exists. The client hotlinks
+        // it and the <img onError> handler hides it if the file
+        // genuinely doesn't exist (returns 404 / 403). This trades
+        // one network round-trip server-side for graceful degrade
+        // client-side, which matches the existing trade-off for
+        // og:image (also un-HEAD-checked).
+        if (string.IsNullOrEmpty(imageAbs))
+        {
+            // Build "{scheme}://{authority}/favicon.ico". Authority
+            // is host + non-default port (e.g. "example.com:8080"),
+            // so a service on a custom port still gets the right
+            // favicon URL. UriBuilder is overkill for a fixed path;
+            // string interpolation is fine here.
+            var port = baseUri.IsDefaultPort ? "" : $":{baseUri.Port}";
+            imageAbs = $"{baseUri.Scheme}://{baseUri.Host}{port}/favicon.ico";
+        }
+
         return new LinkPreviewDto(
             Url: baseUri.ToString(),
             Title: DecodeAndCollapse(title),

@@ -4688,6 +4688,10 @@ a.nc-rss-item-title:hover {
   border-radius: var(--nc-radius-sm);
   cursor: pointer;
   transition: background-color 80ms ease;
+  /* position: relative so the hover-visible delete button anchors
+     to the row's top-right corner. Added when the per-row display
+     delete shipped — see .nc-links-row-display-delete below. */
+  position: relative;
 }
 .nc-links-row:hover {
   background: var(--nc-bg-elev-2);
@@ -4894,6 +4898,67 @@ a.nc-rss-item-title:hover {
 }
 @keyframes nc-links-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ----- Display-mode delete button ----- */
+/*
+   Small trash button anchored to the row's top-right. Hidden by
+   default (opacity: 0) and fades in on row hover. The pattern
+   mirrors the assignments card delete: discoverable on hover,
+   invisible at rest so the row reads as content-first.
+
+   Keyboard users still get the existing edit-mode delete (the ×
+   next to the URL input). This button is a discoverability win
+   for mouse users who'd otherwise have to click into edit to find
+   delete.
+*/
+.nc-links-row-display-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--nc-radius-sm);
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 80ms ease, background 80ms ease,
+              color 80ms ease, border-color 80ms ease;
+  /* The emoji glyph needs a small flex centre to look right at
+     this size — avoids a vertical wobble across browsers. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.nc-links-row:hover .nc-links-row-display-delete,
+.nc-links-row:focus-within .nc-links-row-display-delete {
+  /* :focus-within so keyboard users tabbing INTO the row also
+     see the button — without this, keyboard-only users have no
+     visible cue that delete exists. */
+  opacity: 0.75;
+}
+.nc-links-row-display-delete:hover {
+  opacity: 1;
+  background: var(--nc-danger-bg, #ffe5e5);
+  color: var(--nc-danger, #c53030);
+  border-color: var(--nc-danger, #c53030);
+}
+.nc-links-row-display-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+}
+
+/* Hide the display-mode delete when the row is in edit mode —
+   edit mode has its own delete button next to the URL field and
+   we don't want two delete affordances stacking visually. */
+.nc-links-row-editing .nc-links-row-display-delete {
+  display: none;
 }
 
 /* ====================================================================
