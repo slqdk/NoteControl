@@ -17,6 +17,7 @@ import { MarkdownExtension } from '../markdown/markdownExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
+import { tableAwareClipboardTextSerializer } from '../editor/tableClipboardSerializer';
 import { TrailingParagraph } from '../editor/TrailingParagraph';
 import { UnderlineMark } from '../editor/UnderlineMark';
 import { ColorMark } from '../editor/ColorMark';
@@ -218,6 +219,17 @@ export function TemplateEditor({
     // Templates are always editable. There's no locked-mode
     // concept like notes have.
     editable: true,
+    editorProps: {
+      // Override the text/plain channel of the clipboard so copies
+      // from inside a table cell paste cleanly into plain-text
+      // targets (Notepad, email subject lines, browser address
+      // bar). Without this, the cell's HTML wrapper —
+      // `<table>...<td>hello</td>...</table>` — leaks into the
+      // plain-text channel. See editor/tableClipboardSerializer.ts
+      // for details. Same hook NoteEditor uses; templates can
+      // contain tables too (SupportCall-style skeletons, etc.).
+      clipboardTextSerializer: tableAwareClipboardTextSerializer,
+    },
     onUpdate: ({ editor: ed }) => {
       const md = ed.storage.markdown.getMarkdown();
       onChangeRef.current(md);

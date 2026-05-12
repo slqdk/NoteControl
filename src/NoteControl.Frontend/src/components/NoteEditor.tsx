@@ -17,6 +17,7 @@ import { VideoExtension } from '../editor/VideoExtension';
 import { CodeBlockWithTitle } from '../editor/CodeBlockWithTitle';
 import { CalloutExtension } from '../editor/CalloutExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
+import { tableAwareClipboardTextSerializer } from '../editor/tableClipboardSerializer';
 import { TrailingParagraph } from '../editor/TrailingParagraph';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
@@ -519,6 +520,19 @@ export function NoteEditor({
             : 'nc-editor',
           spellcheck: 'false',
         },
+        // Override the text/plain channel of the clipboard. Default
+        // prosemirror behaviour, when copying from inside a table
+        // cell (especially via CellSelection — double-click,
+        // drag-select with cell boundaries, etc.), can hand the
+        // HTML serialization to the plain-text clipboard channel
+        // too. Pasting into a plain-text target (Notepad, email
+        // subject line, the browser address bar) then shows the
+        // literal `<table>...<td>hello</td>...</table>` wrapper
+        // instead of just "hello". The helper turns single-cell
+        // copies into clean text, and multi-cell copies into
+        // tab/newline-separated spreadsheet-style text. See
+        // editor/tableClipboardSerializer.ts for the walk.
+        clipboardTextSerializer: tableAwareClipboardTextSerializer,
       },
       onUpdate: ({ editor: ed }) => {
         const md = ed.storage.markdown.getMarkdown() as string;
