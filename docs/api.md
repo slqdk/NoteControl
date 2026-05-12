@@ -151,6 +151,7 @@ All under `/api/vaults/{vaultId}/startpage`.
 | GET | `/config` | vault:viewer | Read the startpage block layout from `{vault}/.notesapp/startpage.json`. |
 | PUT | `/config` | vault:editor | Replace the layout. |
 | GET | `/feed?url=` | vault:viewer | Server-side proxy that fetches one RSS/Atom feed and parses it. Used by RSS blocks to avoid CORS. |
+| GET | `/link-preview?url=` | vault:viewer | Server-side proxy that fetches a page and extracts Open Graph / Twitter Card / `<title>` / favicon metadata. Used by Links-block entries for thumbnail + title auto-fill. Empty fields are valid (page had no usable metadata); upstream failures (timeout, SSRF block, 4xx/5xx) propagate as 4xx/5xx here. Cached server-side for 1 hour per URL. |
 
 ## Assignments
 

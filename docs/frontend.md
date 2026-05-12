@@ -481,9 +481,38 @@ its own free-floating canvas of blocks. The canvas is a 2D area
   a one-line headline, a multi-line content textarea, and a
   gear menu. Notes have one of a fixed colour palette (yellow
   is default).
-- **Links block** — up to 10 link entries (title + description
-  + URL), click-to-edit, opens in new tab on click when not
-  editing.
+- **Links block** — a list of link entries (max 10 per block).
+  Has two modes toggled from the gear menu:
+  - **View mode** (default): rows are read-only. Each row shows
+    an optional thumbnail on the left, then the bold title and
+    a muted description line. Clicking a row opens the URL in
+    a new tab. The gear menu shows **Edit links** and
+    **Delete block**.
+  - **Edit mode**: the block gets an accent-coloured border as a
+    visual cue. Clicking a row opens its inline editor
+    (title / description / URL). On URL blur (or Enter) the
+    client calls `/api/vaults/{id}/startpage/link-preview` and
+    auto-fills any empty fields from the response (title,
+    description, thumbnail image URL). A hover-visible trash
+    button appears on each row for per-row deletion, and a
+    `+ Add link` button appears at the bottom of the list.
+    The gear menu shows **Done editing** and **Delete block**.
+
+  Thumbnails are **hotlinked** — the stored `imageUrl` is the
+  original third-party URL, not a server-cached copy; the CSP
+  allows external HTTPS images. If the source image later 404s,
+  the row renders without a thumbnail (no broken-image icon)
+  but the URL is preserved in the JSON.
+
+  Rows are **zebra-striped** in the active theme's tint —
+  alternating rows use a tonal cousin of the current gradient
+  preset (driven by the `--nc-stripe-bg-*` CSS vars). Hover
+  and edit-mode backgrounds override the stripe.
+
+  Edit-mode state is **per-session**: refreshing the page
+  returns the block to view mode. Adding the first link
+  requires entering edit mode first — view mode is fully
+  read-only.
 - **Motion calculator block** — a jerk-limited S-curve solver,
   picked at insert-time from one of four sub-modes:
   - **Calculator A** (Time → Dynamics): given travel time and
