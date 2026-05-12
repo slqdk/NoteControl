@@ -181,6 +181,106 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
 }
 
 /**
+ * Build the prosemirror JSON for a SupportCall skeleton:
+ *
+ *   <info callout>
+ *     <paragraph>**Kunde**</paragraph>
+ *   </info callout>
+ *   <table>
+ *     <row>  Project :                <empty cell>
+ *     <row>  Kontakt person :         <empty cell>
+ *     <row>  Hardware :               <empty cell>
+ *     <row>  Software :               <empty cell>
+ *     <row>  Remote ID / Password :   <empty cell>
+ *     <row>  Problem beskrivelse :    <empty cell>
+ *   </table>
+ *   <paragraph/>
+ *
+ * Returns the content as an array suitable for
+ * `editor.chain().insertContent(...)`.
+ *
+ * Cell-height behaviour: the table is emitted WITHOUT a rowHeight
+ * attribute. That means each row sizes to fit its content via the
+ * upstream table CSS — pressing Enter inside the "Problem
+ * beskrivelse" cell inserts a hard break and the cell grows
+ * downward as the user keeps typing. (rowHeight, when set, would
+ * pin every row to a fixed pixel height and force overflow inside
+ * the cell instead — we don't want that here.)
+ *
+ * Label asymmetry: "Project :" is bolded because it's the primary
+ * identifier — matches the screenshot the request was based on.
+ * The other five labels render plain. Easy to tweak by adding /
+ * removing the bold mark on each labelCell call.
+ *
+ * The trailing empty paragraph below the table gives the user a
+ * clickable escape line beneath the inserted block, same pattern
+ * the callout extension uses for its own insertCallout.
+ */
+function supportCallNodes(): Array<Record<string, unknown>> {
+  type Json = Record<string, unknown>;
+
+  // Build a single cell. `label` becomes the paragraph text; pass
+  // `bold:true` to wrap it in a bold mark. An empty label gives an
+  // empty cell (one empty paragraph inside, which is what tiptap-
+  // table needs to be selectable / typeable).
+  const cell = (label: string, bold = false): Json => {
+    const paragraphContent: Json[] =
+      label.length === 0
+        ? []
+        : [
+            {
+              type: 'text',
+              text: label,
+              ...(bold ? { marks: [{ type: 'bold' }] } : {}),
+            },
+          ];
+    return {
+      type: 'tableCell',
+      content: [
+        {
+          type: 'paragraph',
+          ...(paragraphContent.length > 0 ? { content: paragraphContent } : {}),
+        },
+      ],
+    };
+  };
+
+  const row = (label: string, bold = false): Json => ({
+    type: 'tableRow',
+    content: [cell(label, bold), cell('')],
+  });
+
+  const table: Json = {
+    type: 'table',
+    // No rowHeight attribute — rows size to content, which lets the
+    // Problem beskrivelse cell grow as the user types.
+    content: [
+      row('Project :', true),
+      row('Kontakt person :'),
+      row('Hardware :'),
+      row('Software :'),
+      row('Remote ID / Password :'),
+      row('Problem beskrivelse :'),
+    ],
+  };
+
+  const callout: Json = {
+    type: 'callout',
+    attrs: { variant: 'info' },
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', marks: [{ type: 'bold' }], text: 'Kunde' },
+        ],
+      },
+    ],
+  };
+
+  return [callout, table, { type: 'paragraph' }];
+}
+
+/**
  * After the user picks a slash-menu item we want them to land on
  * a fresh empty paragraph BELOW the just-inserted block, ready to
  * keep typing. Without this the cursor sits at the end of the
@@ -344,6 +444,45 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
   // its dynamic submenu and cache lookup live in one place at the
   // end of this function.
   const items: SlashMenuItem[] = [
+    // --- SupportCall -------------------------------------------------
+    // Inserts a customer-support intake skeleton: an Info callout
+    // titled "Kunde" followed by a 2-column / 6-row label table
+    // (Project, Kontakt person, Hardware, Software, Remote ID /
+    // Password, Problem beskrivelse).
+    //
+    // Sits at the front of the base array so — after the post-build
+    // Templates unshift — it lands at position 1 in the menu (just
+    // below Templates). When no templates exist for the vault, it
+    // falls through to position 0, which is fine.
+    //
+    // No allow-flag gate: works in both note and template editors.
+    // (Authoring a "SupportCall.md" template by inserting the
+    // skeleton and saving is a perfectly reasonable workflow.)
+    //
+    // Cursor placement: after insertion the cursor lands at the
+    // natural insertContent end-position (just after the trailing
+    // paragraph below the table). The user clicks into the
+    // "Project :" value cell to start filling fields. Trying to
+    // auto-land the cursor inside the first table cell would
+    // require computing a position offset that depends on the
+    // exact prosemirror serialisation of the inserted structure —
+    // fragile if the skeleton shape ever changes. One extra click
+    // is the safer trade.
+    {
+      title: 'SupportCall',
+      subtitle: 'Kunde intake skeleton (callout + labelled table)',
+      icon: '☎',
+      keywords: ['support', 'call', 'kunde', 'customer', 'ticket', 'intake'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertContent(supportCallNodes())
+          .run();
+      },
+    },
+
     // --- Asset upload (gated) ---------------------------------------
     ...(ctx.allowImages !== false ? [imageItem] : []),
 
