@@ -210,7 +210,11 @@ NoteControl-vX.Y.Z.zip
     ├── NoteControl.Tray.dll
     ├── *.dll                       (dependencies)
     └── Resources/
-        └── tray.ico
+        ├── notecontrol-brand.ico        (.exe ApplicationIcon)
+        ├── notecontrol-running.ico      (tray: green, healthy)
+        ├── notecontrol-stopped.ico      (tray: red, server down)
+        ├── notecontrol-transitional.ico (tray: amber, Start/Stop/Restart in flight)
+        └── notecontrol-unreachable.ico  (tray: grey, /health not answering)
 ```
 
 `server/` and `tray/` are self-contained .NET 8 publishes for

@@ -28,7 +28,7 @@ sign-in) and the second instance can be quit normally.
 Right-click the tray icon. Items in order:
 
 ```
-● Running                      (status, disabled)
+[status]                       (status, disabled — live, see below)
 ─────────────────────────────
 Open in Browser
 ─────────────────────────────
@@ -50,9 +50,35 @@ Quit Tray
 Left-clicking the icon opens the web UI in the default browser
 at the resolved tray URL.
 
-The status item at the top is currently a static "● Running"
-label — it doesn't reflect actual server state today (queue
-item: red icon when server down + real status reflect).
+The status item at the top is **live**: it reflects the actual
+server state on a rolling poll. The possible labels:
+
+| Label              | Meaning |
+|--------------------|---------|
+| `● Running`        | Server up and `/health` answering 200. Tray icon is **green**. |
+| `● Stopped`        | Service installed but not running, OR no service and no matching process. Tray icon is **red**. |
+| `◐ Starting…`      | User-initiated Start Server is in flight. Tray icon is **amber**. |
+| `◐ Stopping…`      | User-initiated Stop Server is in flight. Tray icon is **amber**. |
+| `◐ Restarting…`    | User-initiated Restart Server is in flight. Tray icon is **amber**. |
+| `⚠ Unreachable`    | Process visible per detection but `/health` isn't answering — startup-in-progress, hung server, or zombie process. Tray icon is **grey**. |
+| `● Probing…`       | Brief bootstrap state (first ~1 second after tray launch) before the first health probe lands. Tray icon is **grey**. |
+
+The status is driven by a polling loop running every 4 seconds
+for the tray's lifetime. The poll combines a lifecycle-detection
+step (the same `sc.exe` + process check the Start/Stop/Restart
+commands use) with a `/health` GET (1-second timeout) to decide
+between Running, Unreachable, and Stopped. The icon, the status
+menu item, and the tray tooltip all update together.
+
+The three transitional states (Starting / Stopping / Restarting)
+are not derived from polling — they're a manual override. When
+the user clicks Start/Stop/Restart, the tray flips the monitor
+into the matching transitional state immediately (icon goes
+amber, label updates), suppresses polling for the duration of
+the operation, then clears the override. The next poll
+(≤4 seconds later) reports the real new state. This avoids a
+race where a poll lands mid-restart and flickers the label
+from `◐ Restarting…` to `⚠ Unreachable` and back.
 
 ## Server lifecycle controls
 
@@ -155,17 +181,9 @@ position; the order is fixed:
    generates a Caddyfile for these and asks Caddy to reload.
    Requires `setup-https.ps1` to have been run once to install
    Caddy.
-4. **Authentication** — password rules, rate-limiting knobs,
-   bootstrap admin section (display-only after first start),
-   and the two session timeouts. The timeouts use sliders
-   rather than minute textboxes: **idle timeout** in hours
-   (range 1 hour — 30 days, matching the server's 43200-min
-   cap); **absolute lifetime** in days (range 1 — 365 days,
-   matching the server's 525600-min cap). Each slider shows
-   the friendly value (e.g. "30 days") and the minute count
-   it resolves to side-by-side, so the wire unit is visible.
-   The on-disk shape in `config.json` is unchanged — still
-   `IdleTimeoutMinutes` and `AbsoluteTimeoutMinutes`.
+4. **Authentication** — session timeouts, password rules,
+   rate-limiting knobs, bootstrap admin section
+   (display-only after first start).
 5. **Email (SMTP)** — SMTP enable + host/port/security/credentials
    + From address. A "Send test email" button POSTs to
    `/api/admin/server/smtp/test`.
@@ -211,8 +229,8 @@ runs the same flow as the tray menu's "Check for updates…".
 
 ## In-app updater
 
-The tray can check the configured GitHub release feed for
-newer versions. On finding one:
+The tray polls a configured GitHub release feed for newer
+versions. On finding one:
 - The "Check for updates…" menu item changes to
   **"Update available: vX.Y.Z"**.
 - Clicking it opens an UpdateWindow with release notes and an
@@ -229,22 +247,9 @@ done by `installer/install.ps1`. See [installer.md](installer.md)
 for what the installer guarantees about robustness during this
 hand-off.
 
-**Automatic background polling is off by default**, gated by
-the compile-time `UpdateConfig.AutoCheckEnabled` constant in
-`src/NoteControl.Tray/Updates/UpdateConfig.cs`. With it off
-(the current default), the tray never makes a GitHub API call
-on its own — the user runs a check explicitly via the
-"Check for updates…" menu item (and the equivalent button in
-the About window). With it on, the tray fires a first check a
-couple of seconds after startup and then re-checks every
-`UpdateConfig.PollInterval` (default 24 h) for the lifetime
-of the tray.
-
-Re-enabling auto-checks today is a code change (flip the
-constant, rebuild) — there's no runtime toggle. The
-single-operator deployment didn't justify a tray-prefs file
-just for this one knob; if multi-operator ever becomes a
-concern, that's the place to move it.
+Periodic polling cadence is roughly daily; the first check
+fires a couple of seconds after tray startup so the menu is
+ready quickly.
 
 ## Settings persistence
 
