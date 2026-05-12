@@ -227,11 +227,75 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  * clickable escape line beneath the inserted block, same pattern
  * the callout extension uses for its own insertCallout.
  */
-function supportCallNodes(editor: Editor): ProseMirrorNode[] {
+/**
+ * Build the SupportCall skeleton.
+ *
+ *   <outer 1×1 table>                    ← the resizable frame
+ *     <row>
+ *       <cell>                           ← single big cell, holds it all
+ *         <info callout>
+ *           <paragraph>**Kunde**</paragraph>
+ *         </info callout>
+ *         <inner table>
+ *           <row>  Project :                <empty cell>
+ *           <row>  Kontakt person :         <empty cell>
+ *           <row>  Hardware :               <empty cell>
+ *           <row>  Software :               <empty cell>
+ *           <row>  Remote ID / Password :   <empty cell>
+ *           <row>  Problem beskrivelse :    <empty cell>
+ *         </inner table>
+ *       </cell>
+ *     </row>
+ *   </outer 1×1 table>
+ *   <paragraph/>
+ *
+ * Why the outer 1×1 table:
+ *
+ * The user wants the whole SupportCall block to be resizable like
+ * a table — drag the right edge to make the frame wider or
+ * narrower. Wrapping it in a single-cell outer table reuses the
+ * existing tiptap-table column-resize handle for free; no custom
+ * node or drag logic needed. The trade-off is two: (a) markdown
+ * round-trip falls through to HTML serialisation rather than the
+ * cleaner pipe syntax (forced by needsHtmlSerialization's
+ * multi-block-cell rule, since the outer cell holds a callout +
+ * inner table = 2 block children), and (b) Tab from inside the
+ * inner table walks up into the outer cell, which can feel odd
+ * the first time but is consistent with how tables work.
+ *
+ * Two values returned:
+ *   - frame:    the outer-table node, the single top-level block
+ *               the slash command inserts to land the skeleton.
+ *   - trailing: an empty paragraph the command inserts AFTER the
+ *               frame so the user has a clickable escape line
+ *               below the frame.
+ *
+ * They're returned separately because tiptap's insertContent
+ * array-path round-trips each item through Fragment.fromJSON,
+ * which rejects a freshly-built top-level Fragment containing
+ * heterogenous block children (tested empirically — see the
+ * "Invalid input for Fragment.fromJSON" RangeError we hit on the
+ * first attempt). Inserting one node at a time via two chained
+ * insertContent calls avoids that path entirely.
+ *
+ * Cell-height behaviour: neither the outer nor inner table sets
+ * rowHeight, so cells size to fit their content via the upstream
+ * table CSS — pressing Enter inside any inner cell inserts a
+ * hard break and the cell grows downward.
+ *
+ * Label asymmetry: "Project :" is bolded (it's the primary
+ * identifier — matches the screenshot the request was based on).
+ * The other five labels render plain. Tweak by passing different
+ * bold flags to `labelCell`.
+ */
+function supportCallNodes(editor: Editor): {
+  frame: ProseMirrorNode;
+  trailing: ProseMirrorNode;
+} {
   const schema = editor.schema;
   const boldMark = schema.marks.bold;
 
-  // --- Helpers --------------------------------------------------------
+  // --- Inner-table helpers -------------------------------------------
   // labelCell builds a tableCell whose paragraph contains the label
   // text (optionally bold). emptyCell builds a tableCell containing
   // one empty paragraph — the minimum prosemirror needs for a cell
@@ -248,17 +312,17 @@ function supportCallNodes(editor: Editor): ProseMirrorNode[] {
     return schema.nodes.tableCell.createChecked(null, para);
   };
 
-  const row = (label: string, bold: boolean): ProseMirrorNode =>
+  const innerRow = (label: string, bold: boolean): ProseMirrorNode =>
     schema.nodes.tableRow.createChecked(null, [labelCell(label, bold), emptyCell()]);
 
-  // --- Table ----------------------------------------------------------
-  const table = schema.nodes.table.createChecked(null, [
-    row('Project :', true),
-    row('Kontakt person :', false),
-    row('Hardware :', false),
-    row('Software :', false),
-    row('Remote ID / Password :', false),
-    row('Problem beskrivelse :', false),
+  // --- Inner table (6 rows × 2 cols) ---------------------------------
+  const innerTable = schema.nodes.table.createChecked(null, [
+    innerRow('Project :', true),
+    innerRow('Kontakt person :', false),
+    innerRow('Hardware :', false),
+    innerRow('Software :', false),
+    innerRow('Remote ID / Password :', false),
+    innerRow('Problem beskrivelse :', false),
   ]);
 
   // --- Callout --------------------------------------------------------
@@ -268,10 +332,21 @@ function supportCallNodes(editor: Editor): ProseMirrorNode[] {
   );
   const callout = schema.nodes.callout.createChecked({ variant: 'info' }, calloutPara);
 
+  // --- Outer 1×1 frame -----------------------------------------------
+  // The outer cell holds two block children — the callout and the
+  // inner table. That's schema-valid (TableCellWithAlign inherits
+  // upstream content: 'block+'). The two-child outer cell is also
+  // what trips needsHtmlSerialization's multi-block-cell rule
+  // (TableWithOptions.ts), so this whole structure round-trips as
+  // raw HTML in the .md file — readable and re-parsable.
+  const outerCell = schema.nodes.tableCell.createChecked(null, [callout, innerTable]);
+  const outerRow = schema.nodes.tableRow.createChecked(null, outerCell);
+  const frame = schema.nodes.table.createChecked(null, outerRow);
+
   // --- Trailing paragraph --------------------------------------------
   const trailing = schema.nodes.paragraph.createChecked(null);
 
-  return [callout, table, trailing];
+  return { frame, trailing };
 }
 
 /**
@@ -468,11 +543,19 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
       icon: '☎',
       keywords: ['support', 'call', 'kunde', 'customer', 'ticket', 'intake'],
       command: ({ editor, range }) => {
+        const { frame, trailing } = supportCallNodes(editor);
+        // Two separate insertContent calls (rather than a single
+        // array) — see supportCallNodes' header for why. Each call
+        // takes a single node, which goes through tiptap's
+        // single-node insertion path and skips the array-path
+        // Fragment.fromJSON round-trip that previously rejected
+        // the structure with "Invalid input for Fragment.fromJSON".
         editor
           .chain()
           .focus()
           .deleteRange(range)
-          .insertContent(supportCallNodes(editor))
+          .insertContent(frame)
+          .insertContent(trailing)
           .run();
       },
     },
