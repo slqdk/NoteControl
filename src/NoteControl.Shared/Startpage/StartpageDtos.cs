@@ -190,6 +190,52 @@ public sealed record FeedItemDto(
     DateTimeOffset? PublishedAt);
 
 /// <summary>
+/// Open Graph / fallback metadata for a single URL, returned by
+/// <c>GET /api/vaults/{id}/startpage/link-preview?url=...</c>.
+///
+/// Used by the Links-block auto-fill flow: when the user types/pastes
+/// a URL into a fresh entry, the client calls this endpoint and pre-
+/// fills the title, description, and thumbnail image.
+///
+/// Resolution order (most-preferred first) for each field:
+///   Title       — og:title  →  twitter:title  →  &lt;title&gt; tag
+///   Description — og:description  →  twitter:description  →
+///                 &lt;meta name="description"&gt;
+///   ImageUrl    — og:image  →  twitter:image  →  apple-touch-icon
+///                 →  favicon (resolved to an absolute URL)
+///
+/// All fields may be empty/null if the page didn't expose anything
+/// usable — the endpoint never fails for "no metadata found", it
+/// just returns mostly-empty strings. Outright errors (timeout,
+/// SSRF block, non-HTML response, 4xx/5xx upstream) propagate as
+/// HTTP 4xx/5xx on this endpoint so the client can show a hint to
+/// the user.
+///
+/// The image URL is **not** fetched/downloaded by the server — it's
+/// just whatever string the OG tag contained, resolved against the
+/// page's base URL to be absolute. The client hotlinks it directly
+/// (or doesn't, if rendering fails). This trades long-term image
+/// stability for simplicity; the user can paste a different URL or
+/// hand-edit the field if a hotlink later 404s.
+/// </summary>
+public sealed record LinkPreviewDto(
+    /// <summary>The URL that was fetched (normalized — final URL after redirects).</summary>
+    string Url,
+
+    /// <summary>Page title, or empty when nothing usable was found.</summary>
+    string Title,
+
+    /// <summary>Page description, or empty.</summary>
+    string Description,
+
+    /// <summary>
+    /// Absolute URL to a representative image, or empty when no
+    /// usable image meta was found. Always http(s); relative paths
+    /// from the source HTML are resolved against the final page URL.
+    /// </summary>
+    string ImageUrl);
+
+/// <summary>
 /// One free-floating task area on a dashboard.
 /// Acts as a container for an ordered list of sticky notes. The
 /// notes stack vertically inside the area; the area itself moves

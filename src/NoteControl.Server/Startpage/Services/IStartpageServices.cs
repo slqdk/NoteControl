@@ -25,6 +25,17 @@ public interface IFeedFetcher
 }
 
 /// <summary>
+/// Fetches a webpage and extracts Open Graph / Twitter Card / HTML
+/// fallback metadata for the LinksBlock auto-fill flow. SSRF-guarded
+/// (loopback/RFC1918 blocked), response-size-capped (1 MB), and
+/// timed out (8 s). Results cached for 1 hour in-memory.
+/// </summary>
+public interface ILinkPreviewFetcher
+{
+    Task<LinkPreviewDto> FetchAsync(string url, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Caller-fixable startpage errors. Status code maps to HTTP.
 /// </summary>
 public sealed class StartpageException : Exception

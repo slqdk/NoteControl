@@ -10,10 +10,13 @@ namespace NoteControl.Server.Startpage.Endpoints;
 /// HTTP surface for the per-vault startpage / dashboards.
 ///
 /// Routes (all under <c>/api/vaults/{vaultId}/startpage</c>):
-///   <c>GET  /config</c>                — read the saved layout
-///                                        (multi-dashboard shape)
-///   <c>PUT  /config</c>                — write the saved layout
-///   <c>GET  /feed?url={encoded}</c>    — fetch + parse one feed
+///   <c>GET  /config</c>                       — read the saved layout
+///                                               (multi-dashboard shape)
+///   <c>PUT  /config</c>                       — write the saved layout
+///   <c>GET  /feed?url={encoded}</c>           — fetch + parse one feed
+///   <c>GET  /link-preview?url={encoded}</c>   — fetch OG/Twitter meta
+///                                               for one URL (used by
+///                                               LinksBlock auto-fill)
 ///
 /// The endpoint group name "startpage" is preserved because the
 /// route shape is the contract for the on-disk
@@ -22,15 +25,17 @@ namespace NoteControl.Server.Startpage.Endpoints;
 /// break legacy-reader compat for nothing. The DTO shape it
 /// returns is multi-dashboard now (see StartpageConfigDto).
 ///
-/// Auth: viewers can read config and fetch feeds (they need to
-/// see the dashboards); editors can save layout changes. The feed
-/// fetch is gated as viewer because read-only users still see
-/// the same feeds; we want them to render, not 403.
+/// Auth: viewers can read config and fetch feeds / link previews
+/// (they need to see the dashboards); editors can save layout
+/// changes. The feed + link-preview fetches are gated as viewer
+/// because read-only users still see the same dashboards; we want
+/// them to render, not 403.
 ///
-/// The feed proxy could be abused as a generic HTTP fetcher by
-/// any logged-in viewer. Mitigations: SSRF guard inside
-/// FeedFetcher (blocks loopback/private IPs), strict HTTP-only
-/// scheme allowlist, response size cap, fetch timeout.
+/// Both the feed and link-preview proxies could be abused as
+/// generic HTTP fetchers by any logged-in viewer. Mitigations:
+/// SSRF guard inside each fetcher (blocks loopback/private IPs),
+/// strict HTTP-only scheme allowlist, response size cap, fetch
+/// timeout.
 /// </summary>
 public static class StartpageEndpoints
 {
@@ -48,6 +53,10 @@ public static class StartpageEndpoints
 
         group.MapGet("/feed", FetchFeedAsync)
             .WithName("FetchStartpageFeed")
+            .RequireVault("viewer");
+
+        group.MapGet("/link-preview", FetchLinkPreviewAsync)
+            .WithName("FetchStartpageLinkPreview")
             .RequireVault("viewer");
 
         return app;
@@ -203,6 +212,40 @@ public static class StartpageEndpoints
         {
             return Results.Problem(
                 title: "Could not load feed",
+                detail: ex.Message,
+                statusCode: ex.StatusCode);
+        }
+    }
+
+    /// <summary>
+    /// GET /link-preview?url={encoded}. Same wire shape as /feed —
+    /// URL goes in the query string. Returns a <see cref="LinkPreviewDto"/>
+    /// with whatever metadata could be extracted; empty fields are
+    /// fine (the client treats them as "user fills these in
+    /// manually"). Upstream errors (timeout, SSRF block, 4xx/5xx,
+    /// unreachable host) propagate as 4xx/5xx on this endpoint.
+    /// </summary>
+    private static async Task<IResult> FetchLinkPreviewAsync(
+        Guid vaultId,
+        string? url,
+        ILinkPreviewFetcher fetcher,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return Results.Problem(
+                statusCode: 400,
+                title: "Missing 'url' query parameter.");
+        }
+        try
+        {
+            var preview = await fetcher.FetchAsync(url, ct);
+            return Results.Ok(preview);
+        }
+        catch (StartpageException ex)
+        {
+            return Results.Problem(
+                title: "Could not load link preview",
                 detail: ex.Message,
                 statusCode: ex.StatusCode);
         }

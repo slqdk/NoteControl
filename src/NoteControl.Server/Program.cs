@@ -296,6 +296,14 @@ try
         NoteControl.Server.Startpage.Services.FeedFetcher>();
     builder.Services.AddHttpClient("feedfetcher");
 
+    // LinkPreviewFetcher: same lifetime + reasoning as FeedFetcher
+    // (singleton with in-memory cache + dedicated HttpClient pool).
+    // Cache TTL is longer (1h vs 5m) because link metadata changes
+    // much less often than feed content.
+    builder.Services.AddSingleton<NoteControl.Server.Startpage.Services.ILinkPreviewFetcher,
+        NoteControl.Server.Startpage.Services.LinkPreviewFetcher>();
+    builder.Services.AddHttpClient("linkpreviewfetcher");
+
     // Assignments service. Per-vault JSON file at
     // {vault}/.notesapp/assignments.json. Scoped because it depends
     // on the scoped ServerDbContext (vault path lookup) — same
