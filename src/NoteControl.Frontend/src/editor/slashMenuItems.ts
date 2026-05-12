@@ -244,80 +244,110 @@ function insertTrailingParagraph(editor: Editor): void {
  * to thread state through the suggestion plugin's filter calls.
  */
 export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
+  // --- Image item (conditional) -----------------------------------
+  // Built as a const so we can splice it into the items array at
+  // the correct position via a conditional spread rather than
+  // pushing it on at the end. Pre-Ship-98 templates set
+  // allowImages=false; Ship 98 introduces template asset folders,
+  // so the template editor now keeps allowImages=true and sets
+  // ctx.templateName — the command branches based on that to hit
+  // either the note-asset endpoint or the template-asset endpoint.
+  const imageItem: SlashMenuItem = {
+    title: 'Image',
+    subtitle: 'Pick a file to upload and insert',
+    icon: '🖼',
+    keywords: ['image', 'picture', 'photo', 'upload', 'img'],
+    command: async ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run();
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+
+      const cleanup = () => {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      };
+
+      input.addEventListener('change', async () => {
+        try {
+          const file = input.files?.[0];
+          if (!file) return;
+
+          // Branch based on context: template-mode (Ship 98) goes
+          // through templatesApi.uploadAsset; note-mode keeps the
+          // existing assetsApi.upload path. We don't fall back —
+          // an editor with allowImages=true must have either a
+          // notePath or a templateName, and it's a real bug if
+          // neither is set.
+          let res;
+          if (ctx.templateName) {
+            res = await templatesApi.uploadAsset(
+              ctx.vaultId,
+              ctx.templateName,
+              file,
+              file.name,
+            );
+          } else {
+            const notePath = ctx.getNotePath();
+            if (!notePath) return;
+            res = await assetsApi.upload(ctx.vaultId, notePath, file, file.name);
+          }
+
+          editor
+            .chain()
+            .focus()
+            .setImage({
+              src: res.relativeMarkdownPath,
+              alt: res.originalFileName,
+              title: res.originalFileName,
+            })
+            .run();
+          insertTrailingParagraph(editor);
+        } finally {
+          cleanup();
+        }
+      });
+
+      const onFocusBack = () => {
+        window.removeEventListener('focus', onFocusBack);
+        setTimeout(() => {
+          if (!input.files || input.files.length === 0) {
+            cleanup();
+          }
+        }, 300);
+      };
+      window.addEventListener('focus', onFocusBack);
+
+      input.click();
+    },
+  };
+
+  // --- Slash menu ordering ----------------------------------------
+  // Items shown in the slash menu, in display order. Templates (if
+  // the cache is non-empty) is unshifted onto the front later in
+  // this function, so the first entry here is what appears at
+  // index 1 when templates exist.
+  //
+  // Order rationale (ship): the high-value insertable assets sit
+  // at the top so they're one tap away — Image, Code block,
+  // PLCOpen import — followed by the colour-coded callouts. The
+  // structural / formatting blocks (headings, lists, quote,
+  // divider, table) sit at the bottom: they're still easy to
+  // filter to by typing (`/h1`, `/table`), but visually they
+  // shouldn't dominate the menu since the user already has
+  // markdown shortcuts (`#`, `-`, `1.`) for most of them.
+  //
+  // Image is conditional (allowImages gate) and goes in via
+  // conditional spread. Templates stays a post-build unshift so
+  // its dynamic submenu and cache lookup live in one place at the
+  // end of this function.
   const items: SlashMenuItem[] = [
-    // --- Headings ----------------------------------------------------
-    {
-      title: 'Heading 1',
-      subtitle: 'Big section title',
-      icon: 'H1',
-      keywords: ['h1', 'heading', 'title'],
-      command: ({ editor, range }) => {
-        editor
-          .chain()
-          .focus()
-          .deleteRange(range)
-          .setNode('heading', { level: 1 })
-          .run();
-        insertTrailingParagraph(editor);
-      },
-    },
-    {
-      title: 'Heading 2',
-      subtitle: 'Section heading',
-      icon: 'H2',
-      keywords: ['h2', 'heading'],
-      command: ({ editor, range }) => {
-        editor
-          .chain()
-          .focus()
-          .deleteRange(range)
-          .setNode('heading', { level: 2 })
-          .run();
-        insertTrailingParagraph(editor);
-      },
-    },
-    {
-      title: 'Heading 3',
-      subtitle: 'Subsection heading',
-      icon: 'H3',
-      keywords: ['h3', 'heading'],
-      command: ({ editor, range }) => {
-        editor
-          .chain()
-          .focus()
-          .deleteRange(range)
-          .setNode('heading', { level: 3 })
-          .run();
-        insertTrailingParagraph(editor);
-      },
-    },
+    // --- Asset upload (gated) ---------------------------------------
+    ...(ctx.allowImages !== false ? [imageItem] : []),
 
-    // --- Lists -------------------------------------------------------
-    {
-      title: 'Bullet list',
-      subtitle: 'Unordered list',
-      icon: '•',
-      keywords: ['ul', 'unordered', 'list', 'bullets'],
-      command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).toggleBulletList().run();
-        // Lists naturally get an empty <li> as their first child;
-        // adding a trailing paragraph here would put a blank line
-        // between the list and whatever comes next which is what
-        // the user expects when they type out of the list. We
-        // leave the cursor in the first <li>.
-      },
-    },
-    {
-      title: 'Numbered list',
-      subtitle: 'Ordered list',
-      icon: '1.',
-      keywords: ['ol', 'ordered', 'list', 'numbered'],
-      command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).toggleOrderedList().run();
-      },
-    },
-
-    // --- Code & quote ------------------------------------------------
+    // --- Code & PLCOpen ----------------------------------------------
     // Code block: produces the SAME structure the PLCOpen XML import
     // produces, minus the file-picker / XML parsing. That means a
     // bold name paragraph + Declaration code block + Implementation
@@ -354,59 +384,100 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
         ]);
       },
     },
+    // PLCOpen XML import: import a PLCOpen XML file (typically a
+    // TwinCAT 3 PLCopenXML export of a single POU) and insert each
+    // POU as a paragraph header followed by two code blocks —
+    // Declaration (the PROGRAM/VAR/END_VAR area) and Implementation
+    // (the body).
+    //
+    // Both blocks use language=st so the existing Structured Text
+    // highlighter colours them. Titles "Declaration" and
+    // "Implementation" carry through the markdown round-trip
+    // because the code block extension serialises non-default
+    // titles as raw <pre data-title="..."> HTML.
+    //
+    // No allow-flag gate — this is not asset-bound, works in both
+    // the note editor and the template editor. (Templates can't
+    // host live runtime state, but a *static* declaration+body
+    // pair is just text — perfectly fine to keep in a template
+    // body.)
     {
-      title: 'Quote',
-      subtitle: 'Blockquote for citing or emphasising',
-      icon: '❝',
-      keywords: ['quote', 'blockquote', 'cite'],
+      title: 'PLCOpen XML',
+      subtitle: 'Import a TwinCAT 3 PLCopenXML export as code blocks',
+      icon: 'PLC',
+      keywords: ['plc', 'plcopen', 'twincat', 'st', 'xml', 'import'],
       command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).toggleBlockquote().run();
-        insertTrailingParagraph(editor);
-      },
-    },
-    {
-      title: 'Divider',
-      subtitle: 'Horizontal line separator',
-      icon: '—',
-      keywords: ['hr', 'horizontal', 'rule', 'separator', 'line'],
-      command: ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).setHorizontalRule().run();
-        insertTrailingParagraph(editor);
-      },
-    },
+        // Strip the "/" trigger immediately so the editor isn't left
+        // with a stranded slash if the user cancels the file picker.
+        editor.chain().focus().deleteRange(range).run();
 
-    // --- Table -------------------------------------------------------
-    {
-      title: 'Table',
-      // The subtitle no longer locks "3×3" because the host can pop a
-      // dialog to pick dimensions. Keep it short and accurate either
-      // way the host wires this up.
-      subtitle: 'Insert a table',
-      icon: '⊞',
-      keywords: ['table', 'grid', 'rows', 'columns'],
-      command: ({ editor, range }) => {
-        // Two paths:
-        //   - Host wired up onTableInsertRequest → delete the trigger
-        //     range first (so the user's typed "/" + filter goes
-        //     away), then hand off to the host. The host shows its
-        //     TableInsertDialog and runs insertTable when the user
-        //     confirms.
-        //   - Host did not wire up the callback → fall back to the
-        //     legacy immediate insert of a 3×3 with header row.
-        //     Keeps headless callers (tests, or future contexts that
-        //     don't want a dialog) working unchanged.
-        if (ctx.onTableInsertRequest) {
-          editor.chain().focus().deleteRange(range).run();
-          ctx.onTableInsertRequest();
-          return;
-        }
-        editor
-          .chain()
-          .focus()
-          .deleteRange(range)
-          .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-          .run();
-        insertTrailingParagraph(editor);
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.xml,application/xml,text/xml';
+        input.style.display = 'none';
+        document.body.appendChild(input);
+
+        const cleanup = () => {
+          if (input.parentNode) input.parentNode.removeChild(input);
+        };
+
+        input.addEventListener('change', async () => {
+          try {
+            const file = input.files?.[0];
+            if (!file) return;
+
+            let text: string;
+            try {
+              text = await file.text();
+            } catch (e) {
+              window.alert(
+                `Couldn't read the file: ${e instanceof Error ? e.message : String(e)}`,
+              );
+              return;
+            }
+
+            let result;
+            try {
+              result = parsePlcopenXml(text);
+            } catch (e) {
+              window.alert(
+                `PLCOpen XML import failed.\n\n${e instanceof Error ? e.message : String(e)}`,
+              );
+              return;
+            }
+
+            insertPousAtSelection(editor, result.pous);
+
+            if (result.skippedNonST.length > 0) {
+              // Non-fatal — the ST POUs were imported. Tell the
+              // user about the ones we couldn't handle so they're
+              // not surprised by a partial import.
+              window.alert(
+                `Imported ${result.pous.length} POU(s). ` +
+                  `Skipped ${result.skippedNonST.length} non-ST POU(s) ` +
+                  `(LD/FBD/SFC are not supported): ${result.skippedNonST.join(', ')}`,
+              );
+            }
+          } finally {
+            cleanup();
+          }
+        });
+
+        // Same focus-back cleanup pattern as the Image item: if the
+        // user dismisses the picker without selecting anything, the
+        // change event never fires, so we tear down the hidden
+        // input a moment after the window regains focus.
+        const onFocusBack = () => {
+          window.removeEventListener('focus', onFocusBack);
+          setTimeout(() => {
+            if (!input.files || input.files.length === 0) {
+              cleanup();
+            }
+          }, 300);
+        };
+        window.addEventListener('focus', onFocusBack);
+
+        input.click();
       },
     },
 
@@ -488,184 +559,136 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
         insertTrailingParagraph(editor);
       },
     },
-  ];
 
-  // --- Asset upload ------------------------------------------------
-  // Gated: pre-Ship-98 templates passed allowImages=false because
-  // they had no asset folder. Ship 98 introduces template asset
-  // folders, so the template editor now keeps allowImages=true and
-  // sets ctx.templateName — the command branches based on that to
-  // hit either the note-asset endpoint or the template-asset
-  // endpoint.
-  if (ctx.allowImages !== false) {
-    items.push({
-      title: 'Image',
-      subtitle: 'Pick a file to upload and insert',
-      icon: '🖼',
-      keywords: ['image', 'picture', 'photo', 'upload', 'img'],
-      command: async ({ editor, range }) => {
-        editor.chain().focus().deleteRange(range).run();
-
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.style.display = 'none';
-        document.body.appendChild(input);
-
-        const cleanup = () => {
-          if (input.parentNode) input.parentNode.removeChild(input);
-        };
-
-        input.addEventListener('change', async () => {
-          try {
-            const file = input.files?.[0];
-            if (!file) return;
-
-            // Branch based on context: template-mode (Ship 98) goes
-            // through templatesApi.uploadAsset; note-mode keeps the
-            // existing assetsApi.upload path. We don't fall back —
-            // an editor with allowImages=true must have either a
-            // notePath or a templateName, and it's a real bug if
-            // neither is set.
-            let res;
-            if (ctx.templateName) {
-              res = await templatesApi.uploadAsset(
-                ctx.vaultId,
-                ctx.templateName,
-                file,
-                file.name,
-              );
-            } else {
-              const notePath = ctx.getNotePath();
-              if (!notePath) return;
-              res = await assetsApi.upload(ctx.vaultId, notePath, file, file.name);
-            }
-
-            editor
-              .chain()
-              .focus()
-              .setImage({
-                src: res.relativeMarkdownPath,
-                alt: res.originalFileName,
-                title: res.originalFileName,
-              })
-              .run();
-            insertTrailingParagraph(editor);
-          } finally {
-            cleanup();
-          }
-        });
-
-        const onFocusBack = () => {
-          window.removeEventListener('focus', onFocusBack);
-          setTimeout(() => {
-            if (!input.files || input.files.length === 0) {
-              cleanup();
-            }
-          }, 300);
-        };
-        window.addEventListener('focus', onFocusBack);
-
-        input.click();
+    // --- Headings ----------------------------------------------------
+    {
+      title: 'Heading 1',
+      subtitle: 'Big section title',
+      icon: 'H1',
+      keywords: ['h1', 'heading', 'title'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode('heading', { level: 1 })
+          .run();
+        insertTrailingParagraph(editor);
       },
-    });
-  }
-
-  // --- PLCOpen XML import ----------------------------------------
-  // Import a PLCOpen XML file (typically a TwinCAT 3 PLCopenXML
-  // export of a single POU) and insert each POU as a paragraph
-  // header followed by two code blocks — Declaration (the
-  // PROGRAM/VAR/END_VAR area) and Implementation (the body).
-  //
-  // Both blocks use language=st so the existing Structured Text
-  // highlighter colours them. Titles "Declaration" and
-  // "Implementation" carry through the markdown round-trip
-  // because the code block extension serialises non-default
-  // titles as raw <pre data-title="..."> HTML.
-  //
-  // No allow-flag gate — this is not asset-bound, works in both
-  // the note editor and the template editor. (Templates can't
-  // host live runtime state, but a *static* declaration+body pair
-  // is just text — perfectly fine to keep in a template body.)
-  items.push({
-    title: 'PLCOpen XML',
-    subtitle: 'Import a TwinCAT 3 PLCopenXML export as code blocks',
-    icon: 'PLC',
-    keywords: ['plc', 'plcopen', 'twincat', 'st', 'xml', 'import'],
-    command: ({ editor, range }) => {
-      // Strip the "/" trigger immediately so the editor isn't left
-      // with a stranded slash if the user cancels the file picker.
-      editor.chain().focus().deleteRange(range).run();
-
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.xml,application/xml,text/xml';
-      input.style.display = 'none';
-      document.body.appendChild(input);
-
-      const cleanup = () => {
-        if (input.parentNode) input.parentNode.removeChild(input);
-      };
-
-      input.addEventListener('change', async () => {
-        try {
-          const file = input.files?.[0];
-          if (!file) return;
-
-          let text: string;
-          try {
-            text = await file.text();
-          } catch (e) {
-            window.alert(
-              `Couldn't read the file: ${e instanceof Error ? e.message : String(e)}`,
-            );
-            return;
-          }
-
-          let result;
-          try {
-            result = parsePlcopenXml(text);
-          } catch (e) {
-            window.alert(
-              `PLCOpen XML import failed.\n\n${e instanceof Error ? e.message : String(e)}`,
-            );
-            return;
-          }
-
-          insertPousAtSelection(editor, result.pous);
-
-          if (result.skippedNonST.length > 0) {
-            // Non-fatal — the ST POUs were imported. Tell the user
-            // about the ones we couldn't handle so they're not
-            // surprised by a partial import.
-            window.alert(
-              `Imported ${result.pous.length} POU(s). ` +
-                `Skipped ${result.skippedNonST.length} non-ST POU(s) ` +
-                `(LD/FBD/SFC are not supported): ${result.skippedNonST.join(', ')}`,
-            );
-          }
-        } finally {
-          cleanup();
-        }
-      });
-
-      // Same focus-back cleanup pattern as the Image item: if the
-      // user dismisses the picker without selecting anything, the
-      // change event never fires, so we tear down the hidden input
-      // a moment after the window regains focus.
-      const onFocusBack = () => {
-        window.removeEventListener('focus', onFocusBack);
-        setTimeout(() => {
-          if (!input.files || input.files.length === 0) {
-            cleanup();
-          }
-        }, 300);
-      };
-      window.addEventListener('focus', onFocusBack);
-
-      input.click();
     },
-  });
+    {
+      title: 'Heading 2',
+      subtitle: 'Section heading',
+      icon: 'H2',
+      keywords: ['h2', 'heading'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode('heading', { level: 2 })
+          .run();
+        insertTrailingParagraph(editor);
+      },
+    },
+    {
+      title: 'Heading 3',
+      subtitle: 'Subsection heading',
+      icon: 'H3',
+      keywords: ['h3', 'heading'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode('heading', { level: 3 })
+          .run();
+        insertTrailingParagraph(editor);
+      },
+    },
+
+    // --- Lists -------------------------------------------------------
+    {
+      title: 'Bullet list',
+      subtitle: 'Unordered list',
+      icon: '•',
+      keywords: ['ul', 'unordered', 'list', 'bullets'],
+      command: ({ editor, range }) => {
+        editor.chain().focus().deleteRange(range).toggleBulletList().run();
+        // Lists naturally get an empty <li> as their first child;
+        // adding a trailing paragraph here would put a blank line
+        // between the list and whatever comes next which is what
+        // the user expects when they type out of the list. We
+        // leave the cursor in the first <li>.
+      },
+    },
+    {
+      title: 'Numbered list',
+      subtitle: 'Ordered list',
+      icon: '1.',
+      keywords: ['ol', 'ordered', 'list', 'numbered'],
+      command: ({ editor, range }) => {
+        editor.chain().focus().deleteRange(range).toggleOrderedList().run();
+      },
+    },
+
+    // --- Quote & divider ---------------------------------------------
+    {
+      title: 'Quote',
+      subtitle: 'Blockquote for citing or emphasising',
+      icon: '❝',
+      keywords: ['quote', 'blockquote', 'cite'],
+      command: ({ editor, range }) => {
+        editor.chain().focus().deleteRange(range).toggleBlockquote().run();
+        insertTrailingParagraph(editor);
+      },
+    },
+    {
+      title: 'Divider',
+      subtitle: 'Horizontal line separator',
+      icon: '—',
+      keywords: ['hr', 'horizontal', 'rule', 'separator', 'line'],
+      command: ({ editor, range }) => {
+        editor.chain().focus().deleteRange(range).setHorizontalRule().run();
+        insertTrailingParagraph(editor);
+      },
+    },
+
+    // --- Table -------------------------------------------------------
+    {
+      title: 'Table',
+      // The subtitle no longer locks "3×3" because the host can pop a
+      // dialog to pick dimensions. Keep it short and accurate either
+      // way the host wires this up.
+      subtitle: 'Insert a table',
+      icon: '⊞',
+      keywords: ['table', 'grid', 'rows', 'columns'],
+      command: ({ editor, range }) => {
+        // Two paths:
+        //   - Host wired up onTableInsertRequest → delete the trigger
+        //     range first (so the user's typed "/" + filter goes
+        //     away), then hand off to the host. The host shows its
+        //     TableInsertDialog and runs insertTable when the user
+        //     confirms.
+        //   - Host did not wire up the callback → fall back to the
+        //     legacy immediate insert of a 3×3 with header row.
+        //     Keeps headless callers (tests, or future contexts that
+        //     don't want a dialog) working unchanged.
+        if (ctx.onTableInsertRequest) {
+          editor.chain().focus().deleteRange(range).run();
+          ctx.onTableInsertRequest();
+          return;
+        }
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+          .run();
+        insertTrailingParagraph(editor);
+      },
+    },
+  ];
 
   // --- Templates (dynamic submenu) -------------------------------
   //
