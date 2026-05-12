@@ -25,7 +25,7 @@
   --nc-radius-sm: 4px;
   --nc-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
   --nc-shadow-popover: 0 4px 12px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.08);
-  --nc-topbar-h: 44px;
+  --nc-topbar-h: 52px;
 }
 
 /* Auto mode (Ship 80 default + pre-Ship-80 only behaviour): the
@@ -199,20 +199,31 @@ body.nc-dragging * {
    Hidden at <= 768px (the same breakpoint used elsewhere to drop
    the Templates link on mobile). The brand on a mobile topbar
    eats horizontal space we need for the picker + search box,
-   and the browser-tab favicon already brands the page on mobile. */
+   and the browser-tab favicon already brands the page on mobile.
+
+   Ship C-fix: bumped from 28 -> 40 px because at 28 px the logo
+   read as "small button next to picker pills" rather than a
+   brand mark. 40 px in a 52 px topbar leaves 6 px clearance
+   top/bottom — the bracket frame is now clearly visible as
+   framing, distinct from the rounded picker pills (which are
+   28 px tall). The 8 px gap to the next element (from
+   .nc-topbar-left's gap: 8px rule) is enough at this size; we
+   add a small margin-right too so the logo sits visually apart
+   from the picker. */
 .nc-brand {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  height: 28px;
+  height: 40px;
+  margin-right: 8px;
   /* user-select:none keeps a stray double-click from selecting
      the (invisible) alt text; the logo isn't interactive. */
   user-select: none;
 }
 .nc-brand img {
   display: block;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
 }
 @media (max-width: 768px) {
   .nc-brand { display: none; }
@@ -4719,13 +4730,27 @@ a.nc-rss-item-title:hover {
 
 @media (max-width: 768px) {
 
+  /* Ship C-fix: override the desktop --nc-topbar-h (52 px, set in
+     :root) back to the compact mobile value (44 px). The variable
+     is read by .nc-topbar's own height rule AND by .nc-shell's
+     `calc(100vh - var(--nc-topbar-h))` height rule, so the
+     override must live at a scope both selectors descend from —
+     hence :root, not .nc-topbar.
+
+     The desktop default of 52 px exists to host the 40 px brand
+     logo; on mobile the logo is hidden (.nc-brand { display:
+     none } at this same breakpoint above), so 52 px on phones
+     would just be wasted vertical real estate. */
+  :root {
+    --nc-topbar-h: 44px;
+  }
+
   /* Ship 88: keep the topbar on ONE line on mobile — brand +
      search + 👤 fit in a 3-column grid where search shrinks to
      fit the leftover space. Pre-Ship-88 (Ship 81/87), search
      wrapped onto a second row, making the topbar ~88px tall and
      forcing --nc-topbar-h to be bumped. The user wants a single
-     compact line; --nc-topbar-h stays at the desktop 44px so the
-     shell starts immediately below.
+     compact line.
 
      Why a 3-col grid over flexbox: the desktop rule is already a
      3-col grid (1fr | minmax(280px,480px) | 1fr) — we mirror its
@@ -4745,7 +4770,8 @@ a.nc-rss-item-title:hover {
     gap: 8px;
     padding: 6px 10px;
     /* height: var(--nc-topbar-h) inherits from the desktop rule —
-       no override needed since we kept --nc-topbar-h at 44px. */
+       the variable itself is overridden at :root above, so this
+       still resolves to 44 px on mobile. */
   }
   .nc-topbar-center {
     grid-column: auto;
