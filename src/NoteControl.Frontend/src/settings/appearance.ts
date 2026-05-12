@@ -67,6 +67,23 @@ export interface GradientPreset {
   light: string;
   /** CSS background value used in dark mode. */
   dark: string;
+  /**
+   * Subtle theme-tinted colour for striping list rows in light mode.
+   * Used as the background of every-other row in the Links block
+   * (and potentially other striped lists in the future). Tuned to be
+   * a tonal cousin of `light` — recognisably the same family — but
+   * far less saturated so a row of stripes doesn't look loud against
+   * the elevated background. Roughly: half-way between the gradient's
+   * second stop and a neutral elevated surface.
+   */
+  lightStripe: string;
+  /**
+   * Dark-mode counterpart of <see cref="lightStripe"/>. Lifted a few
+   * shades from the dark gradient stops so the stripe is just visible
+   * against the elevated dark surface — bottom-stop colours are too
+   * close to the row's base background to show separation.
+   */
+  darkStripe: string;
 }
 
 /**
@@ -85,36 +102,48 @@ export const GRADIENT_PRESETS: readonly GradientPreset[] = [
     label: 'Slate',
     light: 'linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%)',
     dark: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
+    lightStripe: '#eef2f7',
+    darkStripe: '#1a2638',
   },
   {
     id: 'sky',
     label: 'Sky',
     light: 'linear-gradient(180deg, #e0f2fe 0%, #cce8fb 100%)',
     dark: 'linear-gradient(180deg, #0c2440 0%, #061629 100%)',
+    lightStripe: '#e7f2fb',
+    darkStripe: '#172d49',
   },
   {
     id: 'mint',
     label: 'Mint',
     light: 'linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%)',
     dark: 'linear-gradient(180deg, #0a2a22 0%, #051915 100%)',
+    lightStripe: '#e8f7ee',
+    darkStripe: '#143028',
   },
   {
     id: 'peach',
     label: 'Peach',
     light: 'linear-gradient(180deg, #fff1e6 0%, #ffd9be 100%)',
     dark: 'linear-gradient(180deg, #2a1a10 0%, #170c06 100%)',
+    lightStripe: '#fbeadc',
+    darkStripe: '#2f1f15',
   },
   {
     id: 'lavender',
     label: 'Lavender',
     light: 'linear-gradient(180deg, #f3e8ff 0%, #e9d5ff 100%)',
     dark: 'linear-gradient(180deg, #251a3a 0%, #130a22 100%)',
+    lightStripe: '#ede1f7',
+    darkStripe: '#2a1f3f',
   },
   {
     id: 'sunset',
     label: 'Sunset',
     light: 'linear-gradient(180deg, #ffe4e6 0%, #fecaca 100%)',
     dark: 'linear-gradient(180deg, #2a1218 0%, #15080c 100%)',
+    lightStripe: '#fbdfe2',
+    darkStripe: '#2f181d',
   },
 ] as const;
 
@@ -270,6 +299,11 @@ export function useAppearance(): {
  *
  * --nc-page-bg-light / --nc-page-bg-dark drive the body background;
  *   CSS picks the right one via prefers-color-scheme.
+ *
+ * --nc-stripe-bg-light / --nc-stripe-bg-dark drive the alternating
+ *   row background in striped lists (e.g. the Links block). Same
+ *   light/dark switching pattern as the page background; values
+ *   come from each preset's lightStripe / darkStripe fields.
  */
 export function applyAppearanceCss(settings: AppearanceSettings): void {
   if (typeof document === 'undefined') return;
@@ -288,6 +322,11 @@ export function applyAppearanceCss(settings: AppearanceSettings): void {
 
   root.setProperty('--nc-page-bg-light', preset.light);
   root.setProperty('--nc-page-bg-dark', preset.dark);
+  // Theme-tinted stripe colour for striped lists (Links block etc.).
+  // Light/dark pair mirrors the page-bg pattern; CSS picks the right
+  // one via the same @media + [data-theme] triple-rule.
+  root.setProperty('--nc-stripe-bg-light', preset.lightStripe);
+  root.setProperty('--nc-stripe-bg-dark', preset.darkStripe);
 
   // Ship 80: theme override. data-theme="auto" means "let
   // prefers-color-scheme decide" — represented here as no

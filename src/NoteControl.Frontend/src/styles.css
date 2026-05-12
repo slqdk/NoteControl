@@ -4693,6 +4693,29 @@ a.nc-rss-item-title:hover {
      delete shipped — see .nc-links-row-display-delete below. */
   position: relative;
 }
+
+/* Zebra-stripe every other row using the active theme's tinted
+   stripe colour (set by applyAppearanceCss from the gradient
+   preset). :where() keeps the selector at 1-class specificity so
+   the existing :hover / .nc-links-row-editing rules still win
+   without further specificity gymnastics. Light + dark switch
+   follows the same triple-rule pattern as --nc-page-bg-*. The
+   fallback in each var() matches the 'slate' preset so first paint
+   before JS runs doesn't flash unstyled. */
+.nc-links-row:where(:nth-of-type(even)) {
+  background: var(--nc-stripe-bg-light, #eef2f7);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .nc-links-row:where(:nth-of-type(even)) {
+    background: var(--nc-stripe-bg-dark, #1a2638);
+  }
+}
+:root[data-theme="dark"] .nc-links-row:where(:nth-of-type(even)) {
+  background: var(--nc-stripe-bg-dark, #1a2638);
+}
+:root[data-theme="light"] .nc-links-row:where(:nth-of-type(even)) {
+  background: var(--nc-stripe-bg-light, #eef2f7);
+}
 .nc-links-row:hover {
   background: var(--nc-bg-elev-2);
 }
