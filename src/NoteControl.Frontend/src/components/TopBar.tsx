@@ -8,6 +8,17 @@ import { VaultPicker } from './VaultPicker';
 import { useIsMobile } from '../hooks/useIsMobile';
 import type { VaultDto } from '../api/types';
 
+// Ship C: NoteControl brand logo for the top-left of the topbar.
+// Vite resolves SVG imports to a hashed URL at build time (no
+// JSX-component magic) — `logoUrl` is a plain string we can drop
+// into <img src>. The asset itself is the "brand" variant from
+// the logo asset set: the full bracket-framed [NC] folder, blue.
+//
+// Hidden on mobile viewports via CSS to keep the cramped mobile
+// topbar usable; the browser-tab favicon serves as the mobile
+// brand anchor instead.
+import logoUrl from '../assets/notecontrol-logo.svg';
+
 interface TopBarProps {
   /**
    * The currently-open vault, if any.
@@ -174,6 +185,17 @@ export function TopBar({
   return (
     <header className="nc-topbar">
       <div className="nc-topbar-left">
+        {/*
+          Ship C: brand logo. Always present (no click handler, no
+          link wrapper — purely visual brand anchor). Sits to the
+          left of the vault picker on desktop; hidden on mobile via
+          CSS to leave room for the picker + search box. The width
+          is fixed in CSS so the topbar's three-column grid stays
+          predictable even before the vault list loads.
+        */}
+        <span className="nc-brand" aria-hidden="true">
+          <img src={logoUrl} alt="" />
+        </span>
         {/*
           Left side. Renders the VaultPicker whenever the parent has
           loaded a `vaults` list — desktop and mobile both, just in

@@ -190,6 +190,34 @@ body.nc-dragging * {
   gap: 12px;
 }
 
+/* Ship C: brand logo in .nc-topbar-left.
+   Fixed size so the topbar layout doesn't shift as the SVG loads
+   or as the surrounding picker fills in. The img element gets
+   the size; the wrapper span exists only as a flex item so the
+   topbar's gap rule applies consistently.
+
+   Hidden at <= 768px (the same breakpoint used elsewhere to drop
+   the Templates link on mobile). The brand on a mobile topbar
+   eats horizontal space we need for the picker + search box,
+   and the browser-tab favicon already brands the page on mobile. */
+.nc-brand {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 28px;
+  /* user-select:none keeps a stray double-click from selecting
+     the (invisible) alt text; the logo isn't interactive. */
+  user-select: none;
+}
+.nc-brand img {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+@media (max-width: 768px) {
+  .nc-brand { display: none; }
+}
+
 .nc-vault-name { color: var(--nc-fg); text-decoration: none; }
 .nc-topbar-sep { color: var(--nc-fg-muted); }
 .nc-username { color: var(--nc-fg-muted); font-size: 13px; }

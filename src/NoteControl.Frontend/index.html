@@ -3,6 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      Favicon. Ship C: four files in /public, listed in
+      preference order. Modern browsers pick the SVG (vector,
+      scales to any DPI), older browsers fall back to the PNG
+      or the multi-resolution .ico. The .ico is also what
+      Windows pinned-site shortcuts and Outlook web-app
+      desktop integrations expect, so it's worth keeping.
+
+      Apple touch icon is fetched only when iOS adds the page
+      to the home screen — costs nothing on every other browser.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
     <title>NoteControl</title>
   </head>
   <body>

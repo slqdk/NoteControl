@@ -1,0 +1,95 @@
+<!--
+  NoteControl logo / tray icon — master SVG template.
+
+  One geometry, five rendered variants:
+    - brand (blue):     frontend top-bar + favicon
+    - running (green):  tray icon when /health is responding
+    - stopped (red):    tray icon when service is stopped
+    - transitional (amber): tray icon while starting / stopping / restarting
+    - unreachable (grey): tray icon when /health probe fails for non-stopped reasons
+
+  Design decisions:
+   - Flat 2D, no gradients / bevels / drop shadows. This is the same
+     reason VS Code, Slack, Discord all ship flat marks: a 16x16 tray
+     icon is essentially a silhouette, and gloss / bevel turns to mud
+     at that size. The 4-panel mockup's flat panel (top-right) was
+     the target; the glossy ones were AI-generated style flair, not
+     a production target.
+   - viewBox 64x64. Square canvas with the actual artwork inset to
+     ~52x52 so the brackets don't kiss the edges when rendered at
+     small sizes. Windows renders 16x16 tray icons by downsampling
+     a larger source from the .ico, so generous padding survives
+     the downsample.
+   - Stroke geometry uses round joins to avoid pixel-snapping
+     artifacts at small sizes.
+   - "NC" lettering is set in a system sans-serif at heavy weight.
+     Heavy weight is required at small sizes — a thin sans turns
+     to one-pixel hairlines at 16x16 and vanishes.
+
+  PLACEHOLDERS the renderer substitutes:
+    #2563EB    — main fill color for the folder body (hex)
+    #1E40AF  — accent / outline color (the bracket strokes, the
+                  folder outline). Usually a darker shade of #2563EB.
+    #FFFFFF    — color for the "NC" lettering on the folder face.
+                  Always white in current variants for max contrast.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"
+     width="64" height="64">
+  <!-- Brackets framing the folder. Drawn as two open paths so
+       they share stroke metrics. Stroke-linecap=square so the
+       bracket arms have crisp corners; stroke-linejoin=miter
+       for the same reason at the corners. -->
+  <g fill="none" stroke="#1E40AF" stroke-width="3"
+     stroke-linecap="square" stroke-linejoin="miter">
+    <!-- Left bracket: opens to the right. -->
+    <path d="M 10 14 L 6 14 L 6 50 L 10 50"/>
+    <!-- Right bracket: opens to the left. Mirror of the left. -->
+    <path d="M 54 14 L 58 14 L 58 50 L 54 50"/>
+  </g>
+
+  <!-- Folder body. Classic tab-folder silhouette: a tab on the top
+       left (~40% of the folder width) sits on top of the main
+       rectangle. Drawn as a single path so the fill is one piece
+       and rendering stays consistent at every size.
+
+       Path walks:
+         start at top-left of the tab,
+         across to the tab's right edge,
+         down a short angle to the top of the main body,
+         across to the folder's top-right corner,
+         down the right side,
+         across the bottom,
+         up the left side back to start.
+  -->
+  <path d="M 14 20
+           L 26 20
+           L 30 24
+           L 50 24
+           L 50 46
+           L 14 46
+           Z"
+        fill="#2563EB"
+        stroke="#1E40AF"
+        stroke-width="1.5"
+        stroke-linejoin="round"/>
+
+  <!-- "NC" lettering on the folder face.
+       Positioned at the folder body's visual center. font-size is
+       tuned so the glyphs fill the folder face vertically without
+       crowding the top fold.
+
+       font-family: a stack that hits a heavy sans on every realistic
+       host. Arial Black on Windows, Helvetica on macOS, the
+       generic 'sans-serif' as a last resort. cairosvg uses Pango/
+       fontconfig and resolves whichever is installed on the
+       render host; the rasterizer side of this ship pins fonts to
+       what's available in the sandbox.
+  -->
+  <text x="32" y="40.5"
+        text-anchor="middle"
+        font-family="Arial Black, Helvetica, sans-serif"
+        font-weight="900"
+        font-size="14"
+        fill="#FFFFFF"
+        letter-spacing="0.5">NC</text>
+</svg>
