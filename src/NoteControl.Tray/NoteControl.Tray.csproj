@@ -8,14 +8,15 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!--
-      Step 38: ApplicationIcon stamps the icon onto the .exe itself,
-      so Windows Explorer shows it in file lists, on the taskbar
-      when the app is focused, and in Alt+Tab. This is independent
-      of the tray icon below — they happen to share the same .ico
-      file but use different mechanisms (PE resource vs WPF
-      pack URI).
+      Ship B: ApplicationIcon stamps the .exe with our brand mark.
+      Windows Explorer, Alt+Tab and the focused-app taskbar slot
+      all read this from the PE resource section. The state-aware
+      tray icon is a different mechanism (WPF pack URI; see the
+      Resource list below) — it changes at runtime per server
+      state, whereas the .exe icon is fixed and is always our
+      brand-blue mark.
     -->
-    <ApplicationIcon>Resources\tray.ico</ApplicationIcon>
+    <ApplicationIcon>Resources\notecontrol-brand.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!--
@@ -59,15 +60,34 @@
   </ItemGroup>
 
   <!--
-    Step 38: tray icon as a WPF Resource so it's addressable via
-    pack://application:,,,/Resources/tray.ico from runtime code.
-    A <Resource> entry compiles the file into the assembly itself
-    (no separate file shipped alongside the .exe). The same .ico
-    is referenced by ApplicationIcon above, so the file is needed
-    on disk at build time but not at runtime.
+    Ship B: tray icon resources, addressable at runtime via
+    pack://application:,,,/Resources/<name>.ico.
+
+    Five files:
+      - notecontrol-brand.ico        used by ApplicationIcon (above)
+                                     and not loaded at runtime
+      - notecontrol-running.ico      tray: server up + /health 200
+      - notecontrol-stopped.ico      tray: service down / no process
+      - notecontrol-transitional.ico tray: Start/Stop/Restart in flight
+      - notecontrol-unreachable.ico  tray: process visible but /health
+                                     isn't answering (or initial probe)
+
+    Each .ico is multi-resolution (16/24/32/48/64/256). Windows
+    picks the right size for the rendering context. The 16/24/32
+    frames use a simplified silhouette (no brackets, single "N"
+    glyph) so they survive Windows tray downscaling without
+    turning into a colored blob.
+
+    The legacy tray.ico is no longer referenced. If your repo
+    still has Resources\tray.ico on disk from before this ship,
+    you can delete it — it's unused.
   -->
   <ItemGroup>
-    <Resource Include="Resources\tray.ico" />
+    <Resource Include="Resources\notecontrol-brand.ico" />
+    <Resource Include="Resources\notecontrol-running.ico" />
+    <Resource Include="Resources\notecontrol-stopped.ico" />
+    <Resource Include="Resources\notecontrol-transitional.ico" />
+    <Resource Include="Resources\notecontrol-unreachable.ico" />
   </ItemGroup>
 
 </Project>

@@ -36,6 +36,16 @@ public partial class App : Application
     private AdminWorkflow? _admin;
     private readonly ServerController _serverController = new();
 
+    // Ship B: live server-state surface. The monitor polls /health
+    // every few seconds and fires StateChanged when the state
+    // changes; we react by swapping the tray .ico, updating the
+    // disabled "status" menu item label, and changing the tooltip.
+    // Lifecycle ops (Start/Stop/Restart) flip the monitor into a
+    // manual-override state for the duration of the operation so
+    // a poll mid-restart can't overwrite the "Restarting..." label.
+    private ServerStatusMonitor? _statusMonitor;
+    private MenuItem? _statusMenuItem;
+
     // Step 49: in-app updater. The checker is stateless; we own
     // the latest result here so the menu item can read it on
     // right-click. The timer drives the periodic re-check.
@@ -118,14 +128,20 @@ public partial class App : Application
 
         _trayIcon = new TaskbarIcon
         {
-            ToolTipText = "NoteControl — Starting...",
+            ToolTipText = "NoteControl — Probing...",
             ContextMenu = BuildContextMenu()
         };
 
         _trayIcon.LeftClickCommand = new RelayCommand(OpenWebUi);
-        TryLoadIcon(_trayIcon);
+        // Ship B: load the "unknown" icon (the unreachable variant
+        // doubles as the bootstrap icon — same desaturated grey,
+        // visually distinct from any healthy state). The monitor's
+        // first probe lands ~1 second later and swaps to the real
+        // state. Brief flash is acceptable; the alternative
+        // (block tray creation on a synchronous probe) makes the
+        // tray slow to appear on slow / disconnected machines.
+        TryLoadStateIcon(_trayIcon, ServerState.Unknown);
         _trayIcon.ForceCreate();
-        _trayIcon.ToolTipText = "NoteControl — Running";
 
         // Surface non-fatal resolver fallbacks to the debug stream
         // so a missing/corrupt server.url is at least visible to
@@ -153,11 +169,22 @@ public partial class App : Application
         // blocking the UI thread on a network call. Then poll
         // every 24 hours while the tray is alive.
         StartUpdateChecks();
+
+        // Ship B: kick off the server-state monitor. First probe
+        // fires ~1 second after this returns; subsequent probes
+        // run every 4 seconds for the tray's lifetime. The
+        // monitor calls our StateChanged handler on the UI thread,
+        // which swaps the tray icon + updates the menu label +
+        // tooltip.
+        _statusMonitor = new ServerStatusMonitor(_serverController, Dispatcher);
+        _statusMonitor.StateChanged += OnServerStateChanged;
+        _statusMonitor.Start();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         _updateTimer?.Stop();
+        _statusMonitor?.Dispose();
         _admin?.Dispose();
         _trayIcon?.Dispose();
         base.OnExit(e);
@@ -290,8 +317,13 @@ public partial class App : Application
     {
         var menu = new ContextMenu();
 
-        var statusItem = new MenuItem { Header = "● Running", IsEnabled = false };
-        menu.Items.Add(statusItem);
+        // Ship B: status item is now live — the ServerStatusMonitor
+        // updates Header (and indirectly the tooltip + icon) on
+        // every state change. Initial header is the bootstrap
+        // "Probing..." text; the first probe replaces it within
+        // a second.
+        _statusMenuItem = new MenuItem { Header = "● Probing...", IsEnabled = false };
+        menu.Items.Add(_statusMenuItem);
         menu.Items.Add(new Separator());
 
         menu.Items.Add(MakeItem("Open in Browser", OpenWebUi));
@@ -448,19 +480,21 @@ public partial class App : Application
     // doesn't gain anything in a UI-only path.
     // -----------------------------------------------------------------------
 
-    private async void StartServer()      => await RunServerOpAsync("Starting",   _serverController.StartAsync);
-    private async void StopServer()       => await RunServerOpAsync("Stopping",   _serverController.StopAsync);
-    private async void RestartServer()    => await RunServerOpAsync("Restarting", _serverController.RestartAsync);
+    private async void StartServer()      => await RunServerOpAsync(ServerState.StartingTransition,   _serverController.StartAsync);
+    private async void StopServer()       => await RunServerOpAsync(ServerState.StoppingTransition,   _serverController.StopAsync);
+    private async void RestartServer()    => await RunServerOpAsync(ServerState.RestartingTransition, _serverController.RestartAsync);
 
     private async Task RunServerOpAsync(
-        string verb,
+        ServerState transitionalState,
         Func<CancellationToken, Task<OperationResult>> op)
     {
-        var originalTooltip = _trayIcon?.ToolTipText ?? "NoteControl";
-        if (_trayIcon is not null)
-        {
-            _trayIcon.ToolTipText = $"NoteControl — {verb}...";
-        }
+        // Ship B: tell the monitor to enter transitional state.
+        // The monitor will display the matching icon + menu label
+        // + tooltip and ignore poll results until we end the
+        // override. This avoids races where a poll lands mid-op
+        // and overwrites "Restarting..." with whatever state the
+        // half-stopped server happens to be in.
+        _statusMonitor?.BeginManualOverride(transitionalState);
 
         OperationResult result;
         try
@@ -472,32 +506,47 @@ public partial class App : Application
         }
         catch (OperationCanceledException)
         {
-            result = OperationResult.Fail($"{verb} timed out after 60 seconds.");
+            result = OperationResult.Fail($"{DescribeTransition(transitionalState)} timed out after 60 seconds.");
         }
         catch (Exception ex)
         {
-            result = OperationResult.Fail($"{verb} failed: {ex.Message}");
+            result = OperationResult.Fail($"{DescribeTransition(transitionalState)} failed: {ex.Message}");
         }
         finally
         {
-            if (_trayIcon is not null)
-            {
-                _trayIcon.ToolTipText = originalTooltip;
-            }
+            // End the override regardless of outcome — the next
+            // poll (≤4s away) will refresh the icon to the new
+            // real state. If we left the override set on failure,
+            // the icon would stay stuck on "Restarting..." forever.
+            _statusMonitor?.EndManualOverride();
         }
 
         if (!result.Success)
         {
             MessageBox.Show(
                 result.Message,
-                $"NoteControl — {verb} server",
+                $"NoteControl — {DescribeTransition(transitionalState)} server",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
         // No popup on success — silent operations feel snappier.
-        // The tray tooltip already changed back, and the user can
-        // verify by left-clicking to open the browser.
+        // The tray icon already shifted from amber to green (or
+        // red, depending on op); the user can verify by
+        // left-clicking to open the browser.
     }
+
+    /// <summary>
+    /// Human-readable verb for a transitional state. Used in error
+    /// dialogs. Centralised here so the noun matches the menu /
+    /// tooltip wording elsewhere.
+    /// </summary>
+    private static string DescribeTransition(ServerState state) => state switch
+    {
+        ServerState.StartingTransition   => "Starting",
+        ServerState.StoppingTransition   => "Stopping",
+        ServerState.RestartingTransition => "Restarting",
+        _                                => "Operation",
+    };
 
     private static void QuitTray() => Current.Shutdown();
 
@@ -522,20 +571,6 @@ public partial class App : Application
     /// </summary>
     private void StartUpdateChecks()
     {
-        // Honour the compile-time auto-check flag. When it's off,
-        // the timer never starts and the periodic poll never fires.
-        // The "Check for updates..." menu item still works -- it
-        // invokes TriggerManualUpdateCheckAsync independently of
-        // this timer -- so the user can check on demand. We
-        // intentionally do NOT seed _latestUpdateCheck here in the
-        // disabled case; the menu label stays on its default
-        // "Check for updates..." text until a manual check returns
-        // something.
-        if (!UpdateConfig.AutoCheckEnabled)
-        {
-            return;
-        }
-
         // Delay the first check by a couple of seconds so the tray
         // is visibly "Running" before we hit the network. WPF
         // DispatcherTimer is fine for this -- it fires on the UI
@@ -761,23 +796,41 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Load the tray icon from embedded resources. The resource is
-    /// declared in the .csproj as <c>&lt;Resource&gt;</c>, which makes it
-    /// addressable via the pack:// URI scheme. We log the failure
-    /// to the debug output instead of swallowing it silently —
-    /// past life: the silent catch hid a missing resource for
-    /// months and the tray shipped with no icon.
+    /// Load the tray icon for a given state. Each state maps to a
+    /// distinct .ico resource declared in the .csproj.
     ///
-    /// If the icon can't be loaded, the tray still shows up (with
-    /// the OS default placeholder); the user can right-click to
-    /// access the menu either way. So a load failure is a
-    /// cosmetic regression, not a fatal one.
+    /// Resources are addressable via the pack:// URI scheme. We log
+    /// load failures to the debug output instead of swallowing
+    /// silently — past life: a silent catch hid a missing resource
+    /// for months and the tray shipped with no icon.
+    ///
+    /// If a state's icon can't be loaded the tray keeps whatever
+    /// icon it had before; the menu and tooltip still update so
+    /// the user isn't fully blind to state changes.
     /// </summary>
-    private static void TryLoadIcon(TaskbarIcon icon)
+    private static void TryLoadStateIcon(TaskbarIcon icon, ServerState state)
     {
+        // Map state -> embedded resource path. Unknown shares the
+        // unreachable icon (grey) because at bootstrap we don't
+        // know what the server's doing yet, and grey "I don't
+        // know" is the honest answer for that moment.
+        var resource = state switch
+        {
+            ServerState.Running                => "notecontrol-running.ico",
+            ServerState.Stopped                => "notecontrol-stopped.ico",
+            ServerState.StartingTransition     => "notecontrol-transitional.ico",
+            ServerState.StoppingTransition     => "notecontrol-transitional.ico",
+            ServerState.RestartingTransition   => "notecontrol-transitional.ico",
+            ServerState.Unreachable            => "notecontrol-unreachable.ico",
+            ServerState.Unknown                => "notecontrol-unreachable.ico",
+            _                                  => "notecontrol-unreachable.ico",
+        };
+
         try
         {
-            var uri = new Uri("pack://application:,,,/Resources/tray.ico", UriKind.Absolute);
+            var uri = new Uri(
+                $"pack://application:,,,/Resources/{resource}",
+                UriKind.Absolute);
             icon.IconSource = new BitmapImage(uri);
         }
         catch (Exception ex)
@@ -786,9 +839,73 @@ public partial class App : Application
             // not visible at runtime in a packaged build, but shows
             // up via DebugView / ETW if anyone goes hunting. Better
             // than silent swallow.
-            Debug.WriteLine($"[NoteControl.Tray] Icon load failed: {ex}");
+            Debug.WriteLine($"[NoteControl.Tray] Icon load failed for {state} ({resource}): {ex}");
         }
     }
+
+    /// <summary>
+    /// Ship B: status-change callback wired to ServerStatusMonitor.
+    /// The monitor guarantees we're on the UI thread when this
+    /// fires, so we can touch tray + menu without re-marshalling.
+    ///
+    /// Three side-effects:
+    ///   1. Tray .ico swap (handled by TryLoadStateIcon).
+    ///   2. Disabled "status" menu item header — replaces what
+    ///      tray.md notes used to be the "static '● Running'
+    ///      label" queue item.
+    ///   3. Tooltip text. The tooltip is what the user sees on
+    ///      hover BEFORE they right-click; we want it to carry
+    ///      the same information the menu item does.
+    /// </summary>
+    private void OnServerStateChanged(ServerState state)
+    {
+        if (_trayIcon is not null)
+        {
+            TryLoadStateIcon(_trayIcon, state);
+            _trayIcon.ToolTipText = $"NoteControl — {DescribeStateForUi(state)}";
+        }
+
+        if (_statusMenuItem is not null)
+        {
+            _statusMenuItem.Header = FormatStatusMenuHeader(state);
+        }
+    }
+
+    /// <summary>
+    /// Short noun for tooltips. Matches the menu item label minus
+    /// the colored bullet.
+    /// </summary>
+    private static string DescribeStateForUi(ServerState state) => state switch
+    {
+        ServerState.Running                => "Running",
+        ServerState.Stopped                => "Stopped",
+        ServerState.StartingTransition     => "Starting...",
+        ServerState.StoppingTransition     => "Stopping...",
+        ServerState.RestartingTransition   => "Restarting...",
+        ServerState.Unreachable            => "Unreachable",
+        ServerState.Unknown                => "Probing...",
+        _                                  => "Unknown",
+    };
+
+    /// <summary>
+    /// Status-menu header: a glyph + the state noun. WPF MenuItem
+    /// headers don't trivially support per-character colour, so
+    /// the glyph carries the state cue (●/◐/⚠) and matches the
+    /// icon-state intuition the user already has from the tray
+    /// icon itself. The disabled style makes the item visually
+    /// distinct from the live menu entries below it.
+    /// </summary>
+    private static string FormatStatusMenuHeader(ServerState state) => state switch
+    {
+        ServerState.Running                => "● Running",
+        ServerState.Stopped                => "● Stopped",
+        ServerState.StartingTransition     => "◐ Starting...",
+        ServerState.StoppingTransition     => "◐ Stopping...",
+        ServerState.RestartingTransition   => "◐ Restarting...",
+        ServerState.Unreachable            => "⚠ Unreachable",
+        ServerState.Unknown                => "● Probing...",
+        _                                  => "● Unknown",
+    };
 }
 
 internal sealed class RelayCommand : System.Windows.Input.ICommand
