@@ -1,5 +1,5 @@
 import type { Editor, Range } from '@tiptap/core';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { Fragment, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi, templatesApi } from '../api/client';
@@ -283,12 +283,11 @@ function codeBlockNode(title: string, source: string): Record<string, unknown> {
  *
  * Label asymmetry: "Project :" is bolded (primary identifier).
  *
- * Three values returned (callout, table, trailing) because
- * tiptap's insertContent array-path round-trips each item through
- * Fragment.fromJSON, which rejects a freshly-built top-level
- * Fragment containing heterogenous block children. Each node is
- * inserted via a separate chained insertContent call to dodge
- * that path.
+ * Three values returned (callout, table, trailing). The caller
+ * assembles them into a single Fragment and passes that to one
+ * insertContent call — see the command-site comment for the
+ * history of why neither chained inserts nor a JS array of nodes
+ * works in this case.
  */
 function supportCallNodes(editor: Editor): {
   callout: ProseMirrorNode;
@@ -555,19 +554,29 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
       keywords: ['support', 'call', 'kunde', 'customer', 'ticket', 'intake'],
       command: ({ editor, range }) => {
         const { callout, table, trailing } = supportCallNodes(editor);
-        // Three separate insertContent calls (rather than a single
-        // array) — see supportCallNodes' header for why. Each call
-        // takes a single node, which goes through tiptap's
-        // single-node insertion path and skips the array-path
-        // Fragment.fromJSON round-trip that previously rejected
-        // the structure with "Invalid input for Fragment.fromJSON".
+        // Build the three top-level blocks as a single Fragment, then
+        // insert it in ONE insertContent call. Two earlier attempts
+        // failed:
+        //   - Passing them as a JS array tripped Fragment.fromJSON's
+        //     array-path validation ("Invalid input for
+        //     Fragment.fromJSON" RangeError).
+        //   - Chaining .insertContent(callout).insertContent(table)
+        //     left the cursor INSIDE the callout after the first
+        //     insert (the callout's content rule is `block+`, so it
+        //     happily accepted the table as a child) — the table
+        //     ended up nested inside the Kunde callout, painted by
+        //     the callout's blue background.
+        //
+        // Fragment.from(Node[]) builds a prosemirror Fragment from
+        // real Node instances, sidestepping the JSON round-trip,
+        // and a single insertContent call places all three nodes
+        // at the same depth as siblings.
+        const fragment = Fragment.from([callout, table, trailing]);
         editor
           .chain()
           .focus()
           .deleteRange(range)
-          .insertContent(callout)
-          .insertContent(table)
-          .insertContent(trailing)
+          .insertContent(fragment)
           .run();
       },
     },
