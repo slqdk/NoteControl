@@ -117,26 +117,97 @@ block-insertion shortcuts. Items shown in order:
 
 1. **Templates** (only if the vault has at least one template;
    opens a submenu of the templates by name)
-2. **Heading 1**
-3. **Heading 2**
-4. **Heading 3**
-5. **Bullet list**
-6. **Numbered list**
-7. **Code block**
-8. **Quote**
-9. **Divider**
-10. **Table** (3×3 with header)
-11. **Error callout**
-12. **Warning callout**
-13. **Info callout**
-14. **Tip callout**
-15. **Note callout**
-16. **Image** (only outside the templates editor; opens a file
-    picker, uploads, inserts)
+2. **SupportCall** — inserts a customer-support intake skeleton
+   (see SupportCall subsection below)
+3. **Image** (only when image upload is enabled for the editor;
+   opens a file picker, uploads, inserts)
+4. **Code block** — ST runtime-ready Declaration + Implementation
+   pair (the same shape the PLCOpen XML import emits)
+5. **PLCOpen XML** — imports a TwinCAT 3 PLCopenXML export, one
+   POU at a time, as paired Declaration + Implementation code
+   blocks
+6. **Error callout**
+7. **Warning callout**
+8. **Info callout**
+9. **Tip callout**
+10. **Note callout**
+11. **Heading 1**
+12. **Heading 2**
+13. **Heading 3**
+14. **Bullet list**
+15. **Numbered list**
+16. **Quote**
+17. **Divider**
+18. **Table** (3×3 with header by default; opens a dimensions
+    dialog if the host wired one up)
+
+Ordering rationale: high-value insertable assets (SupportCall,
+Image, Code block, PLCOpen import) sit at the top so they're
+one tap away. Colour-coded callouts follow. Structural and
+formatting blocks (headings, lists, quote, divider, table) sit
+at the bottom — still easy to filter to by typing (`/h1`,
+`/table`), but visually they shouldn't dominate the menu since
+markdown shortcuts (`#`, `-`, `1.`) already cover most of them.
 
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
+
+#### SupportCall
+
+A single slash-menu item that inserts a pre-built customer
+intake skeleton: an info callout labelled "Kunde" stacked above
+a 6-row, 2-column labelled table.
+
+Layout produced by one pick:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Kunde                                          [i] Info │  (info callout)
+└──────────────────────────────────────────────────────────┘
+┌──────────────────────┬───────────────────────────────────┐
+│  **Project :**       │                                   │
+│  Kontakt person :    │                                   │
+│  Hardware :          │                                   │
+│  Software :          │                                   │
+│  Remote ID/Password :│                                   │
+│  Problem beskrivelse:│                                   │
+└──────────────────────┴───────────────────────────────────┘
+(empty paragraph below)
+```
+
+Defaults:
+
+- Total table width: **720 px** (180 label column + 540 value
+  column). Both column widths are set explicitly on the first
+  row's cells so the layout is deterministic on insert.
+- Label column is sized to fit the longest label
+  (`Remote ID / Password :`) without wrapping.
+- Cells have no fixed height; pressing Enter inside any value
+  cell inserts a hard break and the cell grows downward.
+
+Resize: drag the column divider between labels and values to
+shift the split, or drag the right edge of the table to widen
+or narrow the whole thing. Standard TipTap table column-resize
+behaviour — no SupportCall-specific drag handling.
+
+Markdown round-trip: because the table cells carry explicit
+`colwidth` attributes, the saved file uses HTML serialisation
+for this table rather than pipe syntax. Re-parsing on load
+works via the existing `parseHTML` rule.
+
+Known limitation: **bold marks inside cells are dropped on
+save** when the cell has a custom `colwidth`. This is a
+broader serializer limitation (applies to any table with
+column widths set), not SupportCall-specific. Visible effect:
+"Project :" is bolded immediately after insert but renders
+plain after a save-and-reload. The label text itself round-
+trips fine; only the bold mark is lost. Fixing it requires
+extending the cell HTML emitter to recurse into inline marks
+— deferred to a separate ship.
+
+Filtering: `/sup`, `/kunde`, `/customer`, `/ticket`, and
+`/intake` all surface the item.
 
 ### Bubble menu
 
