@@ -4583,6 +4583,20 @@ a.nc-rss-item-title:hover {
   min-height: 180px;
 }
 
+/* Block-level edit mode cue (Ship 7).
+   When the user picks "Edit links" from the gear menu, the block
+   should visibly signal that it's now editable so accidental row
+   clicks don't surprise. Accent border + soft accent shadow is
+   loud enough to read at a glance and quiet enough not to dominate
+   a dashboard with other blocks. The 2px border replaces the 1px
+   base with no layout shift (border-box sizing on the block).
+   --nc-accent-bg-soft is the existing soft-tint var that swaps
+   light/dark automatically. */
+.nc-links-block-editing {
+  border-color: var(--nc-accent, #2563eb);
+  box-shadow: 0 2px 12px var(--nc-accent-bg-soft, rgba(37, 99, 235, 0.18));
+}
+
 .nc-links-block-header {
   /* Same header band as RSS / task-area for visual consistency. */
   display: flex;

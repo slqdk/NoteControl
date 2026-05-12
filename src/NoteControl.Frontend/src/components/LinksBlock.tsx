@@ -59,6 +59,17 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Block-level edit mode (Ship 7). Toggled from the gear menu.
+  // When false: rows are read-only, clicking a row opens its URL,
+  //   no per-row delete buttons, no "+ Add link" affordance.
+  // When true:  rows behave click-to-edit as before, URL blur
+  //   auto-fetches a preview, trash icons appear on hover,
+  //   "+ Add link" is visible.
+  // Not persisted — page reload returns to view mode. Persisting
+  // would surprise a user who came back and didn't realise the
+  // block was still "open."
+  const [editMode, setEditMode] = useState(false);
+
   // Click-outside / Escape to close the gear menu. Same pattern
   // TaskArea + RssBlock use.
   useEffect(() => {
@@ -247,7 +258,10 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
   return (
     <div
       ref={blockRef}
-      className="nc-links-block"
+      className={[
+        'nc-links-block',
+        editMode ? 'nc-links-block-editing' : '',
+      ].filter(Boolean).join(' ')}
       style={{
         left: `${effX}px`,
         top: `${effY}px`,
@@ -292,6 +306,22 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
                 className="nc-account-item"
                 role="menuitem"
                 onClick={() => {
+                  // Toggle block-level edit mode. On exit, also clear
+                  // any in-progress per-row edit so the user doesn't
+                  // come back to a half-edited state next time they
+                  // open edit mode again.
+                  setMenuOpen(false);
+                  if (editMode) setEditingId(null);
+                  setEditMode((v) => !v);
+                }}
+              >
+                {editMode ? 'Done editing' : 'Edit links'}
+              </button>
+              <button
+                type="button"
+                className="nc-account-item"
+                role="menuitem"
+                onClick={() => {
                   if (window.confirm('Delete this links block?')) {
                     setMenuOpen(false);
                     onDelete();
@@ -309,13 +339,19 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
       <div className="nc-links-block-body">
         {block.items.length === 0 && (
           <p className="nc-links-block-empty">
-            No links yet. Click <strong>+ Add link</strong> below.
+            {editMode ? (
+              <>No links yet. Click <strong>+ Add link</strong> below.</>
+            ) : (
+              <>No links yet. Open the <strong>⚙</strong> menu and pick
+                <strong> Edit links</strong> to add some.</>
+            )}
           </p>
         )}
         {block.items.map((item) => (
           <LinkRow
             key={item.id}
             vaultId={vaultId}
+            blockEditMode={editMode}
             item={item}
             editing={editingId === item.id}
             onStartEdit={() => setEditingId(item.id)}
@@ -324,7 +360,13 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
             onDelete={() => deleteItem(item.id)}
           />
         ))}
-        {block.items.length < MAX_ITEMS && (
+        {/*
+          +Add link only appears in block-level edit mode. Adding a
+          link in view mode would be a contract violation — view
+          mode is read-only. The empty-state hint above tells the
+          user how to reach edit mode so a fresh block isn't stuck.
+        */}
+        {editMode && block.items.length < MAX_ITEMS && (
           <button
             type="button"
             className="nc-links-block-add"
@@ -356,6 +398,17 @@ export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockPro
 interface LinkRowProps {
   /** Vault id needed for the link-preview API call. */
   vaultId: string;
+  /**
+   * Whether the parent block is in edit mode. When false (view mode):
+   *   - Clicking the row opens the URL in a new tab.
+   *   - The hover-trash button is hidden.
+   *   - The row never enters per-row edit mode regardless of clicks.
+   * When true (edit mode):
+   *   - Clicking the row enters per-row edit mode (the existing flow).
+   *   - The hover-trash button appears on hover/focus.
+   *   - URL blur auto-fetches a preview as before.
+   */
+  blockEditMode: boolean;
   item: LinkItemDto;
   editing: boolean;
   onStartEdit: () => void;
@@ -367,20 +420,23 @@ interface LinkRowProps {
 /**
  * One row inside a LinksBlock. Two-line stacked layout in display
  * mode (title bold, description muted underneath), with an optional
- * thumbnail on the left when `item.imageUrl` is set. In edit mode,
- * three inputs: title / description / url, plus a small delete
- * button. The URL field's onBlur triggers an auto-fill from the
- * /startpage/link-preview endpoint when the title is empty.
+ * thumbnail on the left when `item.imageUrl` is set.
  *
- * Click anywhere on the row in display mode to enter edit mode.
- * Click the title (in display mode, while NOT editing) → opens the
- * URL in a new tab. We use a small visual cue (cursor: pointer
- * + hover background) to communicate "this is clickable."
+ * Behaviour depends on the parent block's `blockEditMode`:
+ *
+ * View mode (blockEditMode = false):
+ *   Clicking the row opens its URL in a new tab. No per-row edit,
+ *   no trash icon. Rows read as static link entries.
+ *
+ * Edit mode (blockEditMode = true):
+ *   Clicking the row enters per-row edit (title / description / url
+ *   inputs + delete button). URL blur auto-fills empty fields from
+ *   the /startpage/link-preview endpoint. Hover-trash icon visible.
  *
  * Implementation note: we DON'T use an <a> tag because that would
- * conflict with the parent's drag detection and with click-to-edit
- * semantics. Plain div + onClick + middle-click handler covers the
- * common cases without the styling fight an <a> would bring.
+ * conflict with the parent's drag detection. Plain div + onClick +
+ * window.open covers the common cases without the styling fight an
+ * <a> would bring.
  *
  * Auto-fill rules (URL field blur in edit mode):
  *   - Only triggers when title is empty AND url looks like a real
@@ -397,6 +453,7 @@ interface LinkRowProps {
  */
 function LinkRow({
   vaultId,
+  blockEditMode,
   item,
   editing,
   onStartEdit,
@@ -549,13 +606,27 @@ function LinkRow({
     );
   }
 
-  // Display mode. Click anywhere → edit. Title click (with no
-  // modifiers) → open. We disambiguate with a small handler that
-  // checks whether the click landed on the title element.
+  // Display mode. Behaviour forks on blockEditMode:
+  //   View (blockEditMode=false): row click opens URL, no trash.
+  //   Edit (blockEditMode=true):  row click enters per-row edit,
+  //                                hover-trash visible.
   const openUrl = (e: React.MouseEvent) => {
     if (!item.url) return;
     e.stopPropagation();
     window.open(item.url, '_blank', 'noopener,noreferrer');
+  };
+
+  /**
+   * Row click handler. In view mode, opens the URL. In edit mode,
+   * promotes the row to per-row edit. The trash button has its own
+   * stopPropagation so it doesn't trigger either path.
+   */
+  const onRowClick = (e: React.MouseEvent) => {
+    if (blockEditMode) {
+      onStartEdit();
+    } else {
+      openUrl(e);
+    }
   };
 
   // Friendly placeholder text when title or url is empty — better
@@ -567,13 +638,23 @@ function LinkRow({
   // collapses entirely (no empty box) when there's nothing to show.
   const showThumb = item.imageUrl && !imgFailed;
 
+  // Accessible label depends on what the click actually does in
+  // the current mode — screen readers shouldn't say "Edit link" if
+  // the row will open the URL.
+  const ariaLabel = blockEditMode
+    ? `Edit link: ${displayTitle}`
+    : item.url
+      ? `Open ${displayTitle}`
+      : displayTitle;
+
   return (
     <div
       className={[
         'nc-links-row',
         showThumb ? 'nc-links-row-with-thumb' : '',
+        blockEditMode ? '' : 'nc-links-row-view',
       ].filter(Boolean).join(' ')}
-      onClick={onStartEdit}
+      onClick={onRowClick}
       // Make the whole row not bubble pointerdown to the header
       // drag handler. Even though it's outside the header, our
       // header wrapper currently catches via document-level
@@ -582,7 +663,20 @@ function LinkRow({
       data-no-drag
       tabIndex={0}
       role="button"
-      aria-label={`Edit link: ${displayTitle}`}
+      aria-label={ariaLabel}
+      // Keyboard parity with click: Enter / Space invokes the same
+      // mode-dependent action. Without this, keyboard users
+      // couldn't open links in view mode.
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (blockEditMode) {
+            onStartEdit();
+          } else if (item.url) {
+            window.open(item.url, '_blank', 'noopener,noreferrer');
+          }
+        }
+      }}
     >
       {showThumb && (
         <img
@@ -598,8 +692,7 @@ function LinkRow({
       <div className="nc-links-row-text">
         <div
           className="nc-links-row-title"
-          onClick={openUrl}
-          title={item.url ? `Open ${item.url}` : 'Click to add a URL'}
+          title={item.url ? `Open ${item.url}` : 'No URL set'}
         >
           {displayTitle}
         </div>
@@ -608,40 +701,39 @@ function LinkRow({
         )}
       </div>
       {/*
-        Hover-visible delete on display rows. Without this the only
-        way to delete a single link was to click into edit mode and
-        find the small × next to the URL field — discoverability was
-        poor. The button is hidden by default (opacity: 0) and fades
-        in on row hover, same pattern the assignments cards use.
+        Hover-visible delete — only rendered in block-level edit
+        mode. View mode rows are read-only, so a trash icon there
+        would be a contract violation.
 
         stopPropagation on the click is required: the row's outer
-        onClick triggers edit mode, and we don't want the row to
-        flip into edit mode at the same moment the user is deleting
-        it (would briefly flash the editor before the row is gone).
-        For rows with any content (title or url), we confirm first
-        — accidental clicks on a hover-only button would otherwise
-        be very easy. Empty rows skip the confirm; they're cheap to
-        re-add.
+        onClick (in edit mode) triggers per-row edit, and we don't
+        want the row to flip into edit mode at the same moment the
+        user is deleting it. For rows with any content (title or
+        url), we confirm first — accidental clicks on a hover-only
+        button would otherwise be very easy. Empty rows skip the
+        confirm; they're cheap to re-add.
       */}
-      <button
-        type="button"
-        className="nc-links-row-display-delete"
-        title="Delete this link"
-        aria-label="Delete this link"
-        onClick={(e) => {
-          e.stopPropagation();
-          const hasContent =
-            item.title.trim().length > 0 || item.url.trim().length > 0;
-          if (hasContent) {
-            const label = item.title.trim() || item.url.trim();
-            // eslint-disable-next-line no-alert
-            if (!window.confirm(`Delete link "${label}"?`)) return;
-          }
-          onDelete();
-        }}
-      >
-        🗑
-      </button>
+      {blockEditMode && (
+        <button
+          type="button"
+          className="nc-links-row-display-delete"
+          title="Delete this link"
+          aria-label="Delete this link"
+          onClick={(e) => {
+            e.stopPropagation();
+            const hasContent =
+              item.title.trim().length > 0 || item.url.trim().length > 0;
+            if (hasContent) {
+              const label = item.title.trim() || item.url.trim();
+              // eslint-disable-next-line no-alert
+              if (!window.confirm(`Delete link "${label}"?`)) return;
+            }
+            onDelete();
+          }}
+        >
+          🗑
+        </button>
+      )}
     </div>
   );
 }
