@@ -1,0 +1,63 @@
+<!--
+  NoteControl logo — SMALL SIZE variant.
+
+  Designed to be legible at 16x16 / 24x24 / 32x32 in a Windows tray
+  or browser favicon. The large variant (template.svg) does not
+  survive downscaling to these sizes — the "NC" lettering and the
+  framing brackets both collapse into noise. This file is the
+  hand-tuned alternative the renderer picks for size <= 32.
+
+  Differences from the large variant:
+    - Brackets DROPPED. At 16px each bracket arm is one pixel and
+      reads as visual noise. The folder silhouette + color carries
+      the identity on its own.
+    - Folder fills more of the canvas (~85% of width vs ~70% on
+      the large variant). At 16px every pixel of folder body
+      counts toward recognition.
+    - Lettering REDUCED to a single bold "N". "NC" at 16px renders
+      as two illegible blobs; one letter is recognizable and still
+      brands the icon. The C is implied by context (paired with
+      the brand SVG / app name).
+    - Stroke widths thicker proportional to canvas so outlines
+      remain visible after downscaling rather than antialiasing
+      into the background.
+
+  Same placeholder substitution scheme as template.svg:
+    #D97706 #92400E #FFFFFF
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"
+     width="64" height="64">
+  <!-- Folder body — chunkier than the large variant.
+
+       Tab and main rectangle drawn as one closed path. The whole
+       folder spans x:6..58 horizontally and y:14..52 vertically,
+       leaving a tiny 6px margin so the silhouette has breathing
+       room from any taskbar edge. -->
+  <path d="M 6 18
+           L 24 18
+           L 28 22
+           L 58 22
+           L 58 52
+           L 6 52
+           Z"
+        fill="#D97706"
+        stroke="#92400E"
+        stroke-width="3"
+        stroke-linejoin="round"/>
+
+  <!-- "N" — single letter, large, centered on the folder face.
+       font-size 30 (vs 14 on the large variant) so the glyph
+       fills the folder vertically. At 16x16 this renders as a
+       4-5px tall N which is the smallest legible size for a
+       sans-serif capital.
+
+       Vertical position 44 puts the baseline of the glyph
+       slightly below the folder body center — accounts for the
+       tab eating the top of the visual space. -->
+  <text x="32" y="44"
+        text-anchor="middle"
+        font-family="Arial Black, Helvetica, sans-serif"
+        font-weight="900"
+        font-size="30"
+        fill="#FFFFFF">N</text>
+</svg>
