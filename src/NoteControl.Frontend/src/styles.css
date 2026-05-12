@@ -732,6 +732,53 @@ body.nc-dragging * {
   color: var(--nc-fg);
 }
 
+/* ----------------------------------------------------------------
+   Daily Note pill — the labelled variant of the rail-header
+   button.
+
+   The Daily Note action is the most-used button in the rail-
+   header strip, so it gets promoted from a flat text button to
+   a bordered pill with an explicit icon + label. The shape
+   (taller, padded, visible border) makes it the visual anchor
+   of the row; the sibling icon-only buttons (🏠+, 📄+, 📁+)
+   keep their compact 22px form.
+
+   Border uses the same colour token as the rail's own borders
+   (--nc-border) so the pill reads as a UI control rather than
+   a free-floating decoration. On hover the border deepens to
+   the muted-foreground token for the same affordance the
+   icon-only buttons get from their background fill.
+
+   The icon + label are inline-flex with a small gap so the
+   calendar glyph hugs the text without the wide gap that emoji
+   often render with on Windows. font-size on the icon is
+   pinned so it doesn't inherit any oddity from parent
+   contexts.
+   ---------------------------------------------------------------- */
+.nc-rail-header-button--daily {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.nc-rail-header-button--daily:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-fg-muted);
+  color: var(--nc-fg);
+}
+.nc-rail-header-button--daily .nc-rail-header-button__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.nc-rail-header-button--daily .nc-rail-header-button__label {
+  line-height: 1;
+}
+
 /* Container for multiple action buttons in the rail header. */
 .nc-rail-header-actions {
   display: inline-flex;
@@ -5087,15 +5134,19 @@ a.nc-rss-item-title:hover {
   }
 
   /* ---- Rail-header buttons: thumbable Daily+/📄+/📁+ ---------- */
-  /* The desktop rail-header buttons (Daily+, 📄+, 📁+) are 22px
-     tall — way too small for a thumb. On mobile they only appear
-     when the tree strip is expanded, so we have full freedom to
-     resize them without breaking the desktop layout.
+  /* The desktop rail-header buttons (Daily Note +, 📄+, 📁+) are
+     22px / 28px tall — way too small for a thumb. On mobile they
+     only appear when the tree strip is expanded, so we have full
+     freedom to resize them without breaking the desktop layout.
 
      Use the same .nc-rail-header-button base; just override
      height + padding on mobile. The "Tree" caption gets a touch
      more breathing room too — the .nc-rail-header padding bumps
-     so the caption sits centered against the taller buttons. */
+     so the caption sits centered against the taller buttons.
+
+     The Daily Note pill keeps its modifier styling (border,
+     icon+label gap) and only needs its height pulled up to
+     match the other touch targets. */
   .nc-rail-mobile .nc-rail-header {
     padding: 10px 12px;
   }
@@ -5104,9 +5155,14 @@ a.nc-rss-item-title:hover {
     padding: 0 10px;
     font-size: 14px;
   }
-  /* Daily+ has a longer label than 📄+/📁+; let it breathe. */
-  .nc-rail-mobile .nc-rail-header-button:first-child {
-    padding: 0 12px;
+  /* Daily Note pill — already wider than its icon-only siblings,
+     but on mobile we want it noticeably tappable. Match the 36px
+     touch height of the other buttons and give the icon+label
+     extra breathing room. */
+  .nc-rail-mobile .nc-rail-header-button--daily {
+    height: 36px;
+    padding: 0 14px;
+    font-size: 14px;
   }
 
   /* ---- Slash menu: bigger tap targets on mobile -------------- */

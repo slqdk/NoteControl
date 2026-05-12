@@ -1055,18 +1055,36 @@ export function VaultLayout() {
         opens) today's daily note. Idempotent server-side,
         so spamming this is harmless. Title shows the local
         date so the user can verify they're about to land
-        on today's, not yesterday's. Ship 78: text "Daily+"
-        to match the sibling 📄+ / 📁+ pattern (icon-or-
-        word + plus glyph) — pre-Ship-78 the lone 📅 emoji
-        read inconsistent with the other two buttons.
+        on today's, not yesterday's.
+
+        Ship 78: text "Daily+" to match the sibling 📄+ /
+        📁+ pattern (icon-or-word + plus glyph) — pre-Ship-
+        78 the lone 📅 emoji read inconsistent with the
+        other two buttons.
+
+        Ship: promoted to a labelled pill — calendar glyph
+        + "Daily Note +". The Daily Note action is by far
+        the most-used button in this row, and the new shape
+        (bordered, wider, explicit text) makes it the visual
+        anchor of the strip rather than a peer of the small
+        icon-only siblings. The 📅 glyph matches the
+        Daily Notes folder icon in the tree below (see
+        TreeView's isDailyNotesRoot branch), keeping the
+        button and its target row visually paired.
+
+        Modifier class --daily applies the pill styling on
+        top of the shared rail-header-button base, so
+        sibling 📄+/📁+ keep their current 22px compact
+        form.
       */}
       <button
         type="button"
-        className="nc-rail-header-button"
+        className="nc-rail-header-button nc-rail-header-button--daily"
         title={`Today's daily note (${formatLocalDate(new Date())})`}
         onClick={() => void onOpenDailyNote()}
       >
-        Daily+
+        <span className="nc-rail-header-button__icon" aria-hidden="true">📅</span>
+        <span className="nc-rail-header-button__label">Daily Note +</span>
       </button>
       <button
         type="button"
