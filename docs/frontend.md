@@ -136,6 +136,44 @@ Layout: **3 panes**.
   inline. Includes a Move button that toggles the layout into
   "move mode" (clicking a folder in the tree completes the move).
 
+### Tree rail action buttons
+
+A strip of action buttons sits at the top of the tree rail, just
+above the tree itself. The buttons act on the **current
+toolbar-target folder** — either the selected folder in the
+tree, or the parent of the selected note. Order, left to right:
+
+1. **🏠+** — add a new dashboard. Disabled until the dashboards
+  config has loaded. **Desktop only** (dashboards are a desktop
+  workflow; see [Dashboards](#dashboards)).
+2. **📅 Daily Note +** — labelled pill, bordered. Opens (or
+  creates and opens) today's daily note. Idempotent server-side.
+  The button's tooltip shows the local date so the user can
+  verify which day they're about to land on. The 📅 glyph
+  matches the Daily Notes folder icon used in the tree below,
+  visually pairing the button with its target row.
+3. **📄+** — new note under the toolbar-target folder.
+4. **⌄** (import) — import-dropdown chevron. Sits tight against
+  📄+ so the pair reads as one widget. Opens a small menu with
+  the available import sources for the toolbar-target folder.
+  **Desktop only**.
+5. **📁+** — new folder under the toolbar-target folder.
+
+The Daily Note button is rendered as a labelled pill rather than
+an icon-only button because it's the most-used action in this
+strip; the explicit text makes it the visual anchor of the row.
+The other four are icon-only by design — they sit in known
+positions and the +/glyph pattern is enough once the user has
+learned the row.
+
+On **mobile** (≤ 768 px) the strip is hidden by default along
+with the rest of the tree rail. Expanding the tree (via the
+topbar's tree toggle) reveals the same strip with two
+omissions: 🏠+ and the ⌄ import chevron are not shown, since
+both target desktop workflows. The remaining three buttons
+(📅 Daily Note +, 📄+, 📁+) grow to a 36 px touch-target
+height for thumb use.
+
 ## Editor view
 
 The editor opens when a note is selected. The layout still has
