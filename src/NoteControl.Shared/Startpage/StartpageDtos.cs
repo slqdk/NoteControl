@@ -343,7 +343,7 @@ public sealed record LinkBlockDto(
 /// One link entry inside a LinkBlock. Two-line visual:
 /// title (bold), description (smaller, muted) below it. Clicking
 /// anywhere on the entry navigates to <see cref="Url"/> in a new
-/// tab.
+/// tab. May carry a thumbnail image — see <see cref="ImageUrl"/>.
 /// </summary>
 public sealed record LinkItemDto(
     /// <summary>Stable id, generated client-side.</summary>
@@ -369,7 +369,23 @@ public sealed record LinkItemDto(
     /// Empty is allowed for newly-added entries before the user
     /// types a value.
     /// </summary>
-    string Url);
+    string Url,
+
+    /// <summary>
+    /// Optional hotlinked thumbnail image URL, sourced from the
+    /// page's og:image / twitter:image / favicon via the
+    /// /startpage/link-preview endpoint. Empty (default) means the
+    /// row renders without a thumbnail. Hand-edits to this field
+    /// are honoured — server treats it as opaque.
+    ///
+    /// Positional-parameter default value (<c>= ""</c>) is the
+    /// backward-compat mechanism: existing <c>startpage.json</c>
+    /// files predate this field, so on read the missing property
+    /// deserialises to empty rather than throwing. On write, the
+    /// field is always serialised (even when empty) — that's fine
+    /// because it's a tiny string and stable for future readers.
+    /// </summary>
+    string ImageUrl = "");
 
 /// <summary>
 /// One Motion-profile calculator block on a dashboard. Renders a

@@ -269,6 +269,15 @@ export interface LinkItemDto {
   description: string;
   /** Where the entry navigates to. Opened in a new tab. */
   url: string;
+  /**
+   * Optional hotlinked thumbnail (og:image / twitter:image / favicon),
+   * sourced from the /startpage/link-preview endpoint at edit time.
+   * Empty means no thumbnail — the row renders without an image column.
+   * Optional in TS for backward compat with `startpage.json` files
+   * written before this field existed; the server's positional-record
+   * default ("") means newly-saved entries always include it.
+   */
+  imageUrl?: string;
 }
 
 /**
@@ -335,6 +344,25 @@ export interface FeedDto {
   title: string;
   link: string | null;
   items: FeedItemDto[];
+}
+
+/**
+ * OG / Twitter Card / fallback metadata payload from
+ * GET /api/vaults/{id}/startpage/link-preview?url=...
+ *
+ * Used by the Links-block auto-fill flow: on URL blur in edit mode,
+ * if the title is empty, the client fetches this and fills the
+ * row's title / description / imageUrl from whatever's populated.
+ *
+ * Empty strings are valid for any field — they mean "the page
+ * didn't expose this." The endpoint itself only errors on
+ * unreachable / SSRF-blocked / timed-out fetches.
+ */
+export interface LinkPreviewDto {
+  url: string;         // post-redirect canonical URL
+  title: string;
+  description: string;
+  imageUrl: string;    // absolute http(s) URL, or empty
 }
 
 // --------------------------------------------------------------- Assignments

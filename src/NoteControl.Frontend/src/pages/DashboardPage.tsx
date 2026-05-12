@@ -369,6 +369,7 @@ export function DashboardPage() {
           {current.links.map((linkBlock) => (
             <LinksBlock
               key={linkBlock.id}
+              vaultId={vaultId}
               block={linkBlock}
               onChange={(patch) => updateLinkBlock(linkBlock.id, patch)}
               onDelete={() => deleteLinkBlock(linkBlock.id)}

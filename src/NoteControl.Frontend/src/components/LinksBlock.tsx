@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { LinkBlockDto, LinkItemDto } from '../api/types';
+import { startpageApi } from '../api/client';
 import { newId } from '../util/id';
 
 /**
@@ -43,12 +44,18 @@ function clamp(n: number, lo: number, hi: number) {
 }
 
 export interface LinksBlockProps {
+  /**
+   * Vault id, forwarded to LinkRow for the link-preview API call.
+   * The preview endpoint is per-vault (auth gating), so we need
+   * the id at the call site. Sourced from useParams in DashboardPage.
+   */
+  vaultId: string;
   block: LinkBlockDto;
   onChange: (patch: Partial<LinkBlockDto>) => void;
   onDelete: () => void;
 }
 
-export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
+export function LinksBlock({ vaultId, block, onChange, onDelete }: LinksBlockProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -205,6 +212,7 @@ export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
       title: '',
       description: '',
       url: '',
+      imageUrl: '',
     };
     onChange({ items: [...block.items, newItem] });
     // Tell the new row to start in edit mode. We track this in
@@ -307,6 +315,7 @@ export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
         {block.items.map((item) => (
           <LinkRow
             key={item.id}
+            vaultId={vaultId}
             item={item}
             editing={editingId === item.id}
             onStartEdit={() => setEditingId(item.id)}
@@ -345,6 +354,8 @@ export function LinksBlock({ block, onChange, onDelete }: LinksBlockProps) {
 /* ============================================================== */
 
 interface LinkRowProps {
+  /** Vault id needed for the link-preview API call. */
+  vaultId: string;
   item: LinkItemDto;
   editing: boolean;
   onStartEdit: () => void;
@@ -355,9 +366,11 @@ interface LinkRowProps {
 
 /**
  * One row inside a LinksBlock. Two-line stacked layout in display
- * mode (title bold, description muted underneath). In edit mode,
+ * mode (title bold, description muted underneath), with an optional
+ * thumbnail on the left when `item.imageUrl` is set. In edit mode,
  * three inputs: title / description / url, plus a small delete
- * button.
+ * button. The URL field's onBlur triggers an auto-fill from the
+ * /startpage/link-preview endpoint when the title is empty.
  *
  * Click anywhere on the row in display mode to enter edit mode.
  * Click the title (in display mode, while NOT editing) → opens the
@@ -368,8 +381,22 @@ interface LinkRowProps {
  * conflict with the parent's drag detection and with click-to-edit
  * semantics. Plain div + onClick + middle-click handler covers the
  * common cases without the styling fight an <a> would bring.
+ *
+ * Auto-fill rules (URL field blur in edit mode):
+ *   - Only triggers when title is empty AND url looks like a real
+ *     URL (starts with http:// or https://). This means a user
+ *     editing an existing row to change just the URL doesn't lose
+ *     their hand-typed title.
+ *   - Silent: a spinner shows next to the URL field while fetching,
+ *     but failures fall through to "user types manually" with no
+ *     error banner. Network blips and Cloudflare 403s are common
+ *     enough that a banner would feel naggy.
+ *   - The fetched imageUrl is hotlinked — see the server-side
+ *     LinkPreviewFetcher for the trade-off discussion. If the
+ *     image later 404s, the <img> onError handler hides it.
  */
 function LinkRow({
+  vaultId,
   item,
   editing,
   onStartEdit,
@@ -377,6 +404,62 @@ function LinkRow({
   onChange,
   onDelete,
 }: LinkRowProps) {
+  // Auto-fill loading state. Scoped per-row because each row's
+  // URL blur is independent; multiple rows could theoretically be
+  // fetching at once if the user is tab-blurring through them fast.
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  // Track which URL we've already auto-filled from so a re-blur on
+  // the same URL doesn't re-trigger the fetch. The /link-preview
+  // endpoint is server-cached for 1h, but skipping the network
+  // round-trip entirely is cheaper and avoids the brief spinner
+  // flash. Re-fetches happen only if the URL string actually changes.
+  const lastFetchedUrlRef = useRef<string | null>(null);
+
+  // Track the imageUrl that failed to load so we can hide a broken
+  // thumbnail without losing the stored value (user might want it
+  // back if the source recovers, or to hand-edit it). Re-rendering
+  // with a fresh imageUrl resets the failure state.
+  const [imgFailedFor, setImgFailedFor] = useState<string | null>(null);
+  const imgFailed = imgFailedFor !== null && imgFailedFor === item.imageUrl;
+
+  /**
+   * Try to auto-fill empty fields from the link-preview endpoint.
+   * Triggered on URL blur in edit mode. Strict guard: only fires
+   * when title is empty AND we haven't already fetched this URL
+   * AND the URL looks plausible. Failures are swallowed silently.
+   */
+  const tryAutoFill = useCallback(async () => {
+    const trimmedUrl = item.url.trim();
+    if (!trimmedUrl) return;
+    if (item.title.trim().length > 0) return; // user typed a title — don't overwrite
+    if (!/^https?:\/\//i.test(trimmedUrl)) return; // not a real URL yet
+    if (lastFetchedUrlRef.current === trimmedUrl) return; // already tried
+
+    lastFetchedUrlRef.current = trimmedUrl;
+    setLoadingPreview(true);
+    try {
+      const preview = await startpageApi.fetchLinkPreview(vaultId, trimmedUrl);
+      // Patch only the fields the preview filled, and only when
+      // they're still empty on the item. A user typing into the
+      // description field while the fetch is in flight shouldn't
+      // get their text clobbered when the preview arrives.
+      const patch: Partial<LinkItemDto> = {};
+      if (preview.title && !item.title.trim()) patch.title = preview.title;
+      if (preview.description && !item.description.trim()) {
+        patch.description = preview.description;
+      }
+      if (preview.imageUrl && !item.imageUrl) patch.imageUrl = preview.imageUrl;
+      if (Object.keys(patch).length > 0) onChange(patch);
+    } catch {
+      // Silent — preview failures are common (Cloudflare, paywalls,
+      // pages without OG tags). Falling through to manual entry is
+      // the right UX. Don't even log: most users won't care.
+    } finally {
+      setLoadingPreview(false);
+    }
+  }, [item.url, item.title, item.description, item.imageUrl, onChange, vaultId]);
+
   if (editing) {
     return (
       <div className="nc-links-row nc-links-row-editing" data-no-drag>
@@ -410,11 +493,25 @@ function LinkRow({
             placeholder="https://example.com"
             value={item.url}
             onChange={(e) => onChange({ url: e.target.value })}
+            onBlur={tryAutoFill}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onCommitEdit();
+              if (e.key === 'Enter') {
+                // Fire the auto-fill before commit so the Enter
+                // user gets the fill too (otherwise blur wouldn't
+                // fire before commit closes the input).
+                tryAutoFill();
+                onCommitEdit();
+              }
               if (e.key === 'Escape') onCommitEdit();
             }}
           />
+          {loadingPreview && (
+            <span
+              className="nc-links-row-spinner"
+              title="Fetching preview…"
+              aria-label="Fetching preview"
+            />
+          )}
           <button
             type="button"
             className="nc-links-row-delete"
@@ -424,6 +521,30 @@ function LinkRow({
             ×
           </button>
         </div>
+        {/*
+          Show the fetched thumbnail in edit mode too, so the user
+          sees what the preview gave them before clicking out. Small
+          and below the URL row to keep the edit form compact.
+        */}
+        {item.imageUrl && !imgFailed && (
+          <div className="nc-links-row-edit-thumb-wrap">
+            <img
+              className="nc-links-row-edit-thumb"
+              src={item.imageUrl}
+              alt=""
+              onError={() => setImgFailedFor(item.imageUrl ?? '')}
+            />
+            <button
+              type="button"
+              className="nc-links-row-thumb-clear"
+              onClick={() => onChange({ imageUrl: '' })}
+              title="Remove this thumbnail"
+              aria-label="Remove thumbnail"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -441,9 +562,17 @@ function LinkRow({
   // than rendering blank rows that look like glitches.
   const displayTitle = item.title || item.url || '(untitled link)';
 
+  // Show the thumbnail only when we have a URL AND it hasn't been
+  // marked as failed-to-load this render cycle. The image column
+  // collapses entirely (no empty box) when there's nothing to show.
+  const showThumb = item.imageUrl && !imgFailed;
+
   return (
     <div
-      className="nc-links-row"
+      className={[
+        'nc-links-row',
+        showThumb ? 'nc-links-row-with-thumb' : '',
+      ].filter(Boolean).join(' ')}
       onClick={onStartEdit}
       // Make the whole row not bubble pointerdown to the header
       // drag handler. Even though it's outside the header, our
@@ -455,16 +584,29 @@ function LinkRow({
       role="button"
       aria-label={`Edit link: ${displayTitle}`}
     >
-      <div
-        className="nc-links-row-title"
-        onClick={openUrl}
-        title={item.url ? `Open ${item.url}` : 'Click to add a URL'}
-      >
-        {displayTitle}
-      </div>
-      {item.description && (
-        <div className="nc-links-row-desc">{item.description}</div>
+      {showThumb && (
+        <img
+          className="nc-links-row-thumb"
+          src={item.imageUrl}
+          alt=""
+          // The image is decorative; the title carries the link
+          // semantics. Empty alt + aria-hidden via the parent's
+          // role="button" keeps SR's focused on the title.
+          onError={() => setImgFailedFor(item.imageUrl ?? '')}
+        />
       )}
+      <div className="nc-links-row-text">
+        <div
+          className="nc-links-row-title"
+          onClick={openUrl}
+          title={item.url ? `Open ${item.url}` : 'Click to add a URL'}
+        >
+          {displayTitle}
+        </div>
+        {item.description && (
+          <div className="nc-links-row-desc">{item.description}</div>
+        )}
+      </div>
     </div>
   );
 }

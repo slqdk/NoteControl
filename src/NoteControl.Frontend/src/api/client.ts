@@ -7,6 +7,7 @@ import type {
   CreateNoteRequest,
   FeedDto,
   FolderListingDto,
+  LinkPreviewDto,
   NoteDto,
   NoteSummaryDto,
   ProblemDetails,
@@ -752,6 +753,25 @@ export const startpageApi = {
   fetchFeed: (vaultId: string, url: string) =>
     request<FeedDto>(
       `/api/vaults/${vaultId}/startpage/feed?url=${encodeURIComponent(url)}`,
+    ),
+
+  /**
+   * GET /api/vaults/{id}/startpage/link-preview?url=...
+   *
+   * Server-side proxy that fetches a page and extracts OG /
+   * Twitter Card / fallback metadata. Used by the Links block's
+   * auto-fill flow when the user types a URL into a new entry.
+   *
+   * Returns mostly-empty fields for pages without metadata —
+   * that's a successful response, not an error. Errors mean
+   * the page was actually unreachable (timeout, SSRF block,
+   * 4xx/5xx, DNS failure).
+   *
+   * Cached server-side for 1 hour per URL.
+   */
+  fetchLinkPreview: (vaultId: string, url: string) =>
+    request<LinkPreviewDto>(
+      `/api/vaults/${vaultId}/startpage/link-preview?url=${encodeURIComponent(url)}`,
     ),
 };
 
