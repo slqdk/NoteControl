@@ -155,9 +155,17 @@ position; the order is fixed:
    generates a Caddyfile for these and asks Caddy to reload.
    Requires `setup-https.ps1` to have been run once to install
    Caddy.
-4. **Authentication** — session timeouts, password rules,
-   rate-limiting knobs, bootstrap admin section
-   (display-only after first start).
+4. **Authentication** — password rules, rate-limiting knobs,
+   bootstrap admin section (display-only after first start),
+   and the two session timeouts. The timeouts use sliders
+   rather than minute textboxes: **idle timeout** in hours
+   (range 1 hour — 30 days, matching the server's 43200-min
+   cap); **absolute lifetime** in days (range 1 — 365 days,
+   matching the server's 525600-min cap). Each slider shows
+   the friendly value (e.g. "30 days") and the minute count
+   it resolves to side-by-side, so the wire unit is visible.
+   The on-disk shape in `config.json` is unchanged — still
+   `IdleTimeoutMinutes` and `AbsoluteTimeoutMinutes`.
 5. **Email (SMTP)** — SMTP enable + host/port/security/credentials
    + From address. A "Send test email" button POSTs to
    `/api/admin/server/smtp/test`.
@@ -203,8 +211,8 @@ runs the same flow as the tray menu's "Check for updates…".
 
 ## In-app updater
 
-The tray polls a configured GitHub release feed for newer
-versions. On finding one:
+The tray can check the configured GitHub release feed for
+newer versions. On finding one:
 - The "Check for updates…" menu item changes to
   **"Update available: vX.Y.Z"**.
 - Clicking it opens an UpdateWindow with release notes and an
@@ -221,9 +229,22 @@ done by `installer/install.ps1`. See [installer.md](installer.md)
 for what the installer guarantees about robustness during this
 hand-off.
 
-Periodic polling cadence is roughly daily; the first check
-fires a couple of seconds after tray startup so the menu is
-ready quickly.
+**Automatic background polling is off by default**, gated by
+the compile-time `UpdateConfig.AutoCheckEnabled` constant in
+`src/NoteControl.Tray/Updates/UpdateConfig.cs`. With it off
+(the current default), the tray never makes a GitHub API call
+on its own — the user runs a check explicitly via the
+"Check for updates…" menu item (and the equivalent button in
+the About window). With it on, the tray fires a first check a
+couple of seconds after startup and then re-checks every
+`UpdateConfig.PollInterval` (default 24 h) for the lifetime
+of the tray.
+
+Re-enabling auto-checks today is a code change (flip the
+constant, rebuild) — there's no runtime toggle. The
+single-operator deployment didn't justify a tray-prefs file
+just for this one knob; if multi-operator ever becomes a
+concern, that's the place to move it.
 
 ## Settings persistence
 
