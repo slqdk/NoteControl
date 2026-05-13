@@ -83,7 +83,7 @@ note path with `.md` extension.
 | GET | `/folder/recursive?path=` | vault:viewer | Same as above but recursive — returns the whole subtree. |
 | GET | `/note?path=` | vault:viewer | Get one note's body + frontmatter + metadata. |
 | POST | `/note` | vault:editor | Create a new note. Body has path + initial content. |
-| PUT | `/note?path=` | vault:editor | Update note body and/or frontmatter. Refused if `locked: true`. |
+| PUT | `/note?path=` | vault:editor | Update a note. Body fields are all optional: any combination of `body`, `tags`, `locked`, `font`, `fontSize`, `width`, `version` can be sent. Omitted fields are left alone — in particular, omitting `body` preserves the on-disk body byte-for-byte and the server only rewrites the frontmatter. This is the path the Properties panel uses for property-only edits (Locked, Tags, Version, appearance) so that a stale body snapshot in the panel cannot clobber newer content from the editor. The editor's own save sends `body` + `etag`; `etag` mismatch returns 412. `locked: true` in the frontmatter is a UI hint — the frontend renders such notes read-only and refrains from saving — but the server itself does not refuse writes to a locked note. |
 | DELETE | `/note?path=` | vault:editor | Move note to `.notesapp/trash/`. |
 | PUT | `/note/move` | vault:editor | Move/rename a note. Old + new paths in body. |
 | GET | `/note/export?path=&format=` | vault:viewer | Export a note. `format` is one of: `docx` (default — Word document via the rich-conversion pipeline) or `md` (zip containing the note's `.md` plus its `.assets/` folder if any, suitable for round-trip via `/import`). `format=pdf` returns 501 (placeholder; not surfaced in the UI). |

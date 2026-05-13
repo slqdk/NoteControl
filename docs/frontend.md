@@ -208,6 +208,27 @@ Right-rail panel. Shape depends on what the URL is on:
 - **Buttons**: Move (toggles move-mode), Delete (with
   confirmation). Rename happens by editing the name inline.
 
+#### Save semantics — property edits never send body
+
+Each inline edit (Tags, Locked, Version, Font, FontSize, Width)
+sends a `PUT /api/vaults/{id}/note?path=…` carrying **only the
+field that changed**. The request body is omitted entirely.
+The server treats a missing `body` as "leave the on-disk body
+alone" and only rewrites the frontmatter.
+
+This contract exists because property edits can race with the
+editor's autosave. The panel only refetches the note when its
+own save bumps `refreshTick`; meanwhile, the editor may have
+autosaved newer content the panel hasn't seen. If the panel's
+property save carried `body: note.body`, that stale snapshot
+would overwrite the newer on-disk content on the server. So:
+property saves never send `body`. The editor's own save is the
+only path that sends `body`, paired with an `etag` for
+optimistic concurrency.
+
+The mobile equivalent (`MobileNoteProperties`) follows the same
+rule.
+
 ### For a selected folder
 
 Name, full path, contents count, created/updated timestamps.
