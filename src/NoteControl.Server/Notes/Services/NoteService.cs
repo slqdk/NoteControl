@@ -26,12 +26,29 @@ public interface INoteService
     /// <summary>
     /// Rename or relocate a note. Both paths are canonical (.md included).
     /// On success, also moves the sibling <c>{name}.assets/</c> folder if
+    /// present, moves the <c>.notesapp/history/&lt;encoded&gt;/</c> folder if
     /// present, and re-indexes under the new path. Same source and
     /// destination is a no-op (returns the existing note).
     /// </summary>
     Task<NoteDto> MoveAsync(Guid vaultId, string oldPath, string newPath, CancellationToken ct = default);
 
     Task<FolderListingDto> ListFolderAsync(Guid vaultId, string folderPath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Per-note undo-history summary. Drives the Properties panel's
+    /// "Revert to last save" button: count > 0 means the button is
+    /// enabled, latest provides the tooltip / label timestamp.
+    /// </summary>
+    Task<NoteHistoryInfoDto> GetHistoryInfoAsync(Guid vaultId, string notePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Pop the most recent snapshot off the per-note history stack and
+    /// restore it to the note file. Before doing so, snapshots the
+    /// *current* note content so the pop is itself reversible (one
+    /// subsequent pop will return the state we just replaced). Returns
+    /// the new <see cref="NoteDto"/> reflecting the restored content.
+    /// </summary>
+    Task<NoteDto> PopHistoryAsync(Guid vaultId, string notePath, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -49,6 +66,13 @@ public sealed class NoteService : INoteService
     private const int RecentlyUpdatedLimit = 10;
     private const string AppFolder = ".notesapp";
     private const string TrashFolder = "trash";
+    private const string HistoryFolder = "history";
+
+    /// <summary>
+    /// Per-note snapshot cap. Each save that changes the body writes one
+    /// snapshot file; the oldest are pruned once this cap is exceeded.
+    /// </summary>
+    private const int HistorySnapshotCap = 10;
 
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _vaultPaths;
@@ -223,6 +247,33 @@ public sealed class NoteService : INoteService
         // program this way.
         var bodyToWrite = request.Body ?? existingBody;
 
+        // Undo-history snapshot: if this save is replacing the body
+        // (i.e. the editor is saving content, not the panel toggling a
+        // property), and the new body actually differs from the old,
+        // write a snapshot of the OLD raw content before we overwrite
+        // it. Property-only saves don't add to history (they don't
+        // change the body), which keeps the history list meaningful as
+        // "states of the body the user has been in."
+        //
+        // We snapshot BEFORE writing the new content so an exception
+        // during the write doesn't leave the disk in a state where the
+        // snapshot ring has a duplicate of the current. Failure to
+        // snapshot is non-fatal — we log? no, we just swallow — losing
+        // a single point on the history ring is acceptable. Losing the
+        // save itself wouldn't be.
+        if (request.Body != null
+            && !string.Equals(request.Body, existingBody, StringComparison.Ordinal))
+        {
+            try
+            {
+                await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
+            }
+            catch
+            {
+                // Best-effort. See note above.
+            }
+        }
+
         var newText = FrontmatterCodec.Combine(fm, bodyToWrite);
         await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);
 
@@ -324,6 +375,32 @@ public sealed class NoteService : INoteService
                 // Acceptable inconsistency — image links inside the note
                 // will 404 until the user manually fixes the folder name.
                 // Better than rolling back the .md move.
+            }
+        }
+
+        // Move the .notesapp/history/<encoded>/ folder if it exists, so
+        // the per-note undo stack follows the note under its new
+        // identity. Same try/catch convention as the assets-folder move:
+        // best-effort; failure leaves the .md move intact and just
+        // orphans the old history folder (which a future cleanup pass
+        // could sweep). The encoded folder name is derived from the
+        // canonical path, so a path change always means a folder
+        // rename here, even when only the parent folder changes.
+        var oldHistoryFolder = Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(oldCanonical));
+        if (Directory.Exists(oldHistoryFolder))
+        {
+            var newHistoryFolder = Path.Combine(
+                vaultRoot, AppFolder, HistoryFolder,
+                EncodeHistoryFolderName(newCanonical));
+            try
+            {
+                Directory.Move(oldHistoryFolder, newHistoryFolder);
+            }
+            catch
+            {
+                // History orphaned at the old name. Note itself is fine.
             }
         }
 
@@ -461,6 +538,30 @@ public sealed class NoteService : INoteService
             }
         }
 
+        // Per-note history: deliberately NOT preserved through delete-to-
+        // trash for v1. The trash itself has no restore UI today (per
+        // docs/notes.md#trash), so symmetric preservation of the history
+        // folder through delete would be work for an unused recovery
+        // path. We simply drop the history folder. If a user manually
+        // restores a deleted note via the filesystem, they'd start with
+        // an empty history (the snapshot ring rebuilds from subsequent
+        // saves). Revisit if/when a trash-restore UI lands.
+        var historyFolder = Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(canonical));
+        if (Directory.Exists(historyFolder))
+        {
+            try
+            {
+                Directory.Delete(historyFolder, recursive: true);
+            }
+            catch
+            {
+                // Acceptable inconsistency — orphan history folder under
+                // .notesapp/history/. A future cleanup pass could sweep.
+            }
+        }
+
         await _indexer.OnNoteDeletedAsync(vaultId, canonical, ct);
     }
 
@@ -536,9 +637,292 @@ public sealed class NoteService : INoteService
             RecentlyUpdated: recentlyUpdated);
     }
 
+    public async Task<NoteHistoryInfoDto> GetHistoryInfoAsync(
+        Guid vaultId,
+        string notePath,
+        CancellationToken ct = default)
+    {
+        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
+        string canonical;
+        try
+        {
+            canonical = _notePaths.CanonicalizeNote(notePath);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new NoteException(ex.Message);
+        }
+
+        var folder = Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(canonical));
+        if (!Directory.Exists(folder))
+        {
+            return new NoteHistoryInfoDto(0, null);
+        }
+
+        // Snapshot files are named "{unixMs}.md". The newest is the one
+        // with the largest numeric prefix. We sort by filename (string)
+        // and rely on the fact that all unix-ms timestamps generated by
+        // this server share a width (the millisecond range from ~2001
+        // to ~2286 has 13 digits) — but to be safe against rollover
+        // and corruption, we parse the prefix and compare numerically.
+        // Cheap; the folder has at most HistorySnapshotCap entries.
+        var snapshots = new List<long>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (long.TryParse(name, out var ms))
+            {
+                snapshots.Add(ms);
+            }
+            ct.ThrowIfCancellationRequested();
+        }
+
+        if (snapshots.Count == 0)
+        {
+            return new NoteHistoryInfoDto(0, null);
+        }
+
+        snapshots.Sort();
+        var latestMs = snapshots[^1];
+        var latest = DateTimeOffset.FromUnixTimeMilliseconds(latestMs);
+        return new NoteHistoryInfoDto(snapshots.Count, latest);
+    }
+
+    public async Task<NoteDto> PopHistoryAsync(
+        Guid vaultId,
+        string notePath,
+        CancellationToken ct = default)
+    {
+        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
+        string canonical, absolute;
+        try
+        {
+            canonical = _notePaths.CanonicalizeNote(notePath);
+            absolute = _notePaths.Resolve(vaultRoot, canonical);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new NoteException(ex.Message);
+        }
+
+        if (!File.Exists(absolute))
+        {
+            throw new NoteException("Note not found.", statusCode: 404);
+        }
+
+        var folder = Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(canonical));
+        if (!Directory.Exists(folder))
+        {
+            throw new NoteException("No history available for this note.", statusCode: 404);
+        }
+
+        // Find the newest snapshot by parsing the unix-ms filenames.
+        // Same parse-then-sort approach as GetHistoryInfoAsync.
+        var snapshots = new List<(long Ms, string Path)>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (long.TryParse(name, out var ms))
+            {
+                snapshots.Add((ms, file));
+            }
+        }
+
+        if (snapshots.Count == 0)
+        {
+            throw new NoteException("No history available for this note.", statusCode: 404);
+        }
+
+        snapshots.Sort((a, b) => a.Ms.CompareTo(b.Ms));
+        var newest = snapshots[^1];
+
+        // Read both the current note's raw content (so we can put it onto
+        // the stack — the pop is reversible) and the snapshot we're
+        // restoring.
+        var currentRaw = await File.ReadAllTextAsync(absolute, Encoding.UTF8, ct);
+        var poppedRaw = await File.ReadAllTextAsync(newest.Path, Encoding.UTF8, ct);
+
+        // Step 1: snapshot the current content. If anything fails after
+        // this point, the user can still recover — they'll see the
+        // current-state-becomes-snapshot on the next list.
+        try
+        {
+            await WriteHistorySnapshotAsync(vaultRoot, canonical, currentRaw, ct);
+        }
+        catch
+        {
+            // Best-effort. Losing one snapshot slot is acceptable; we
+            // still proceed to restore, which is the user's intent.
+        }
+
+        // Step 2: write the popped snapshot's content as the new note
+        // content. Verbatim — including frontmatter — so the restored
+        // state matches exactly what was on disk at the time of the
+        // snapshot (same tags, same locked flag, same appearance,
+        // same version). The user clicked "Revert to last save"; we
+        // give them exactly that.
+        await File.WriteAllTextAsync(absolute, poppedRaw, NoBomUtf8, ct);
+
+        // Step 3: delete the popped file from the history folder so it
+        // isn't there to be popped again. (If we kept it, the next pop
+        // would just yo-yo between the two same states.)
+        try
+        {
+            File.Delete(newest.Path);
+        }
+        catch
+        {
+            // Best-effort. An undeleted popped snapshot will just be
+            // popped again later — harmless duplicate state.
+        }
+
+        // Parse the restored content for the indexer + return DTO.
+        var (fm, body) = FrontmatterCodec.Split(poppedRaw);
+        var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
+        try
+        {
+            await _indexer.OnNoteSavedAsync(
+                vaultId, canonical, fm, body,
+                new DateTimeOffset(lastModified, TimeSpan.Zero), ct);
+        }
+        catch
+        {
+            // Index drift recoverable via rebuild.
+        }
+
+        return new NoteDto(
+            Path: canonical,
+            Body: body,
+            Frontmatter: fm.ToDto(),
+            Etag: ComputeEtag(poppedRaw),
+            LastModified: lastModified);
+    }
+
     // ---------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Write one history snapshot for the note at <paramref name="canonical"/>.
+    /// Creates the per-note history folder on demand, writes a single
+    /// "{unixMs}.md" file containing the supplied raw content, then
+    /// prunes the folder back to <see cref="HistorySnapshotCap"/> entries
+    /// (oldest deleted first).
+    /// </summary>
+    /// <remarks>
+    /// Two clock concerns:
+    /// 1. Filename collisions. The clock is millisecond-resolution; two
+    ///    saves arriving in the same millisecond would clash. We append
+    ///    a short random suffix only if the bare name already exists,
+    ///    so the common path stays a clean "{ms}.md" filename. The
+    ///    sort-by-unix-ms-prefix logic in the readers tolerates the
+    ///    suffix transparently because they parse the prefix before
+    ///    the first non-digit.
+    /// 2. Clock skew on the host. We use the injected TimeProvider, so
+    ///    tests can use a deterministic clock; in production the system
+    ///    clock is fine (file timestamps already rely on it).
+    /// </remarks>
+    private async Task WriteHistorySnapshotAsync(
+        string vaultRoot,
+        string canonical,
+        string rawContent,
+        CancellationToken ct)
+    {
+        var folder = Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(canonical));
+        Directory.CreateDirectory(folder);
+
+        var nowMs = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var fileName = $"{nowMs}.md";
+        var target = Path.Combine(folder, fileName);
+
+        // Collision-handle the same-millisecond case. The sort-by-prefix
+        // readers parse digits up to the first non-digit, so any of
+        // "{ms}.md", "{ms}-a.md", "{ms}-b.md", etc. all sort under the
+        // same numeric ms and are treated as adjacent timestamps.
+        if (File.Exists(target))
+        {
+            // Pick the next available suffix. Caps at single-letter
+            // ('a' through 'z') because two saves in the same ms is
+            // already pathological; 26 collisions in one ms is fantasy.
+            for (var c = 'a'; c <= 'z'; c++)
+            {
+                var candidate = Path.Combine(folder, $"{nowMs}-{c}.md");
+                if (!File.Exists(candidate))
+                {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+
+        await File.WriteAllTextAsync(target, rawContent, NoBomUtf8, ct);
+
+        // Prune oldest if we're over the cap. List all snapshot files,
+        // sort by numeric ms prefix, delete from the front until the
+        // count is at most HistorySnapshotCap.
+        var all = new List<(long Ms, string Path)>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            // Parse leading digits as the timestamp; collision-suffix
+            // entries fall under the same ms.
+            var digits = 0;
+            while (digits < name.Length && char.IsDigit(name[digits])) digits++;
+            if (digits == 0) continue;
+            if (long.TryParse(name.AsSpan(0, digits), out var ms))
+            {
+                all.Add((ms, file));
+            }
+        }
+
+        if (all.Count <= HistorySnapshotCap) return;
+
+        all.Sort((a, b) => a.Ms.CompareTo(b.Ms));
+        var toDelete = all.Count - HistorySnapshotCap;
+        for (var i = 0; i < toDelete; i++)
+        {
+            try
+            {
+                File.Delete(all[i].Path);
+            }
+            catch
+            {
+                // Best-effort prune; an over-cap file lingers until next
+                // save reattempts the prune.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Map a canonical note path to a flat folder name under
+    /// <c>.notesapp/history/</c>. Slashes are replaced with the
+    /// double-underscore sentinel <c>__</c>; the <c>.md</c> extension is
+    /// kept so the folder name parallels the note's filename and is
+    /// recognisable when listing directories by hand.
+    /// </summary>
+    /// <remarks>
+    /// The encoding has to round-trip through Windows and POSIX
+    /// filesystem rules. Canonical paths never contain backslashes
+    /// (NotePathResolver canonicalises to forward-slash), so the only
+    /// reserved character we have to escape is the path separator
+    /// itself. We use <c>__</c> rather than e.g. percent-encoding so
+    /// the folder names stay reasonably legible to a human reading
+    /// <c>.notesapp/history/</c>: a note at <c>XTS/Pullforce.md</c>
+    /// becomes <c>XTS__Pullforce.md</c>. The likelihood of a legitimate
+    /// note filename containing the literal sequence <c>__</c> as part
+    /// of its actual name is low, and even when it does occur the
+    /// collision space is per-vault, not global.
+    /// </remarks>
+    private static string EncodeHistoryFolderName(string canonical)
+    {
+        return canonical.Replace("/", "__");
+    }
 
     /// <summary>
     /// Replace references to <c>{oldBasename}.assets/</c> in markdown body

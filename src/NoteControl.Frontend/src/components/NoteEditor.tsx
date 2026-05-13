@@ -234,6 +234,17 @@ export function NoteEditor({
         etagRef.current = updated.etag;
         lastSavedMarkdownRef.current = markdown;
         setSaveState({ kind: 'saved' });
+        // Notify the Properties panel that the body just changed on
+        // disk. The panel listens so it can refetch the history count
+        // and keep its "Revert to last save (N)" label fresh. Without
+        // this, the count would only refresh on selection-change or
+        // a property save, which leaves the button stale or even
+        // wrongly-disabled on a brand-new note.
+        window.dispatchEvent(
+          new CustomEvent('nc:note-body-saved', {
+            detail: { path: initialNote.path },
+          }),
+        );
         outcome = 'ok';
       } catch (e) {
         // Surface the failure loudly. The small badge in the breadcrumb
@@ -840,6 +851,85 @@ export function NoteEditor({
       window.removeEventListener('nc:note-appearance-changed', onChange);
     };
   }, [initialNote.path]);
+
+  // Undo/Redo bridge to the Properties panel.
+  //
+  // The panel and the editor are siblings in the React tree, with no
+  // shared parent that holds an editor ref. To keep them decoupled we
+  // use the same window-event pattern the appearance and view-mode
+  // wiring uses:
+  //
+  //   - Panel → editor: nc:note-tiptap-undo / nc:note-tiptap-redo.
+  //     Editor receives, calls editor.commands.undo()/redo().
+  //   - Editor → panel: nc:note-undo-state with { canUndo, canRedo }.
+  //     Dispatched on every transaction (so the panel's buttons
+  //     enable/disable correctly) and once on mount (so the initial
+  //     state is known before the user types).
+  //
+  // The path is included in every event detail so multi-tab and
+  // multi-instance setups don't cross-fire. The path check is the
+  // same idea as the appearance listener above.
+  useEffect(() => {
+    if (!editor) return;
+    const dispatchState = () => {
+      window.dispatchEvent(
+        new CustomEvent('nc:note-undo-state', {
+          detail: {
+            path: initialNote.path,
+            canUndo: editor.can().undo(),
+            canRedo: editor.can().redo(),
+          },
+        }),
+      );
+    };
+    // Initial state, so the panel knows where it stands before the
+    // first transaction fires.
+    dispatchState();
+    editor.on('transaction', dispatchState);
+    return () => {
+      editor.off('transaction', dispatchState);
+    };
+  }, [editor, initialNote.path]);
+
+  useEffect(() => {
+    if (!editor) return;
+    function onUndoRequest(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (ce.detail?.path !== initialNote.path) return;
+      editor!.commands.undo();
+    }
+    function onRedoRequest(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (ce.detail?.path !== initialNote.path) return;
+      editor!.commands.redo();
+    }
+    // "Revert to last save" handler: the panel has just POSTed to the
+    // history/pop endpoint and got back a fresh NoteDto. It dispatches
+    // this event so the open editor adopts the restored body.
+    //
+    // We deliberately let setContent go into TipTap's history stack
+    // (i.e. don't suppress it) — so a user who clicks Revert by
+    // mistake can press Ctrl+Z to bring back what they had. The body
+    // we set is the body the server now has, so we also pre-set
+    // lastSavedMarkdownRef + etagRef + saveState to 'saved' to keep
+    // the autosave from immediately re-saving the same content.
+    function onReload(e: Event) {
+      const ce = e as CustomEvent<{ path: string; body: string; etag: string }>;
+      if (ce.detail?.path !== initialNote.path) return;
+      editor!.commands.setContent(ce.detail.body, false);
+      lastSavedMarkdownRef.current = ce.detail.body;
+      etagRef.current = ce.detail.etag;
+      setSaveState({ kind: 'saved' });
+    }
+    window.addEventListener('nc:note-tiptap-undo', onUndoRequest);
+    window.addEventListener('nc:note-tiptap-redo', onRedoRequest);
+    window.addEventListener('nc:note-reload-body', onReload);
+    return () => {
+      window.removeEventListener('nc:note-tiptap-undo', onUndoRequest);
+      window.removeEventListener('nc:note-tiptap-redo', onRedoRequest);
+      window.removeEventListener('nc:note-reload-body', onReload);
+    };
+  }, [editor, initialNote.path]);
 
   // Ship 54: global note defaults. Resolution order at render time:
   //   per-note frontmatter → global default → CSS baseline.

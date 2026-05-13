@@ -126,3 +126,19 @@ public sealed record FolderListingDto(
     IReadOnlyList<FolderSummaryDto> Subfolders,
     IReadOnlyList<NoteSummaryDto> Notes,
     IReadOnlyList<NoteSummaryDto> RecentlyUpdated);
+
+/// <summary>
+/// GET /api/vaults/{id}/note/history?path= — a summary of how much
+/// undo-history is available for one note. Drives the Properties
+/// panel's "Revert to last save" button (enable/disable + tooltip).
+///
+/// <see cref="Count"/> is the number of snapshots on disk for this
+/// note, 0..10 (capped server-side). <see cref="Latest"/> is the
+/// timestamp of the most-recently-written snapshot, or null when
+/// there are none. The endpoint deliberately does NOT return the
+/// full snapshot list — the UI only ever pops the most recent, so
+/// any listing would be busy work.
+/// </summary>
+public sealed record NoteHistoryInfoDto(
+    int Count,
+    DateTimeOffset? Latest);

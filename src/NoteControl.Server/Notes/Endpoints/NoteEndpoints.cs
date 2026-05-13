@@ -36,6 +36,18 @@ public static class NoteEndpoints
         app.MapPut("/api/vaults/{vaultId:guid}/note/move", MoveNoteAsync)
             .RequireVault(VaultService.RoleEditor);
 
+        // Per-note undo history. GET is a summary; POST pops the most
+        // recent snapshot. Editor role on both — the GET is technically
+        // read-only but is paired with a write affordance, and gating
+        // the listing behind viewer would let a viewer infer activity
+        // (count + timestamps) that they can't act on, which adds
+        // surface area without a use case. If a real read-only consumer
+        // appears, this can be relaxed.
+        app.MapGet("/api/vaults/{vaultId:guid}/note/history", GetNoteHistoryAsync)
+            .RequireVault(VaultService.RoleEditor);
+        app.MapPost("/api/vaults/{vaultId:guid}/note/history/pop", PopNoteHistoryAsync)
+            .RequireVault(VaultService.RoleEditor);
+
         return app;
     }
 
@@ -197,6 +209,48 @@ public static class NoteEndpoints
         catch (InvalidNotePathException ex)
         {
             return Results.Problem(statusCode: 400, title: ex.Message);
+        }
+        catch (NoteException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+    }
+
+    private static async Task<IResult> GetNoteHistoryAsync(
+        Guid vaultId,
+        string path,
+        INoteService notes,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Results.Problem(statusCode: 400, title: "?path= is required.");
+        }
+        try
+        {
+            var info = await notes.GetHistoryInfoAsync(vaultId, path, ct);
+            return Results.Ok(info);
+        }
+        catch (NoteException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+    }
+
+    private static async Task<IResult> PopNoteHistoryAsync(
+        Guid vaultId,
+        string path,
+        INoteService notes,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Results.Problem(statusCode: 400, title: "?path= is required.");
+        }
+        try
+        {
+            var note = await notes.PopHistoryAsync(vaultId, path, ct);
+            return Results.Ok(note);
         }
         catch (NoteException ex)
         {

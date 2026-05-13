@@ -9,6 +9,7 @@ import type {
   FolderListingDto,
   LinkPreviewDto,
   NoteDto,
+  NoteHistoryInfo,
   NoteSummaryDto,
   ProblemDetails,
   SearchResponseDto,
@@ -266,6 +267,35 @@ export const notesApi = {
       method: 'PUT',
       body: { oldPath, newPath },
     }),
+
+  /**
+   * GET /api/vaults/{id}/note/history?path=...
+   * Summary of available undo history for one note. The Properties
+   * panel calls this on mount + after each save-that-changes-body
+   * to decide whether the "Revert to last save" button is enabled
+   * and to label the timestamp tooltip.
+   */
+  getHistory: (vaultId: string, notePath: string) =>
+    request<NoteHistoryInfo>(
+      `/api/vaults/${vaultId}/note/history?path=${encodeURIComponent(notePath)}`,
+    ),
+
+  /**
+   * POST /api/vaults/{id}/note/history/pop?path=...
+   * Pop the most recent snapshot off the per-note history ring and
+   * restore it as the note's content. The server first snapshots the
+   * CURRENT content (so the pop is reversible — a subsequent pop will
+   * bring back the state we just replaced), then deletes the popped
+   * snapshot file. Returns the restored NoteDto, including a fresh
+   * etag the editor should adopt before its next autosave.
+   *
+   * 404 when there are no snapshots to pop.
+   */
+  popHistory: (vaultId: string, notePath: string) =>
+    request<NoteDto>(
+      `/api/vaults/${vaultId}/note/history/pop?path=${encodeURIComponent(notePath)}`,
+      { method: 'POST' },
+    ),
 
   /** GET /api/vaults/{id}/folder?path=... — list one folder. */
   listFolder: (vaultId: string, folderPath = '') =>

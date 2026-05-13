@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, foldersApi, notesApi } from '../api/client';
-import type { FolderListingDto, NoteDto } from '../api/types';
+import type { FolderListingDto, NoteDto, NoteHistoryInfo } from '../api/types';
 import type { TreeSelection } from './TreeView';
 import { formatNoteTimestamp } from '../utils/time';
 import type { TreeVariant } from '../tree/treeStyles';
@@ -52,6 +52,20 @@ import { EditableVersion } from './EditableVersion';
  * frontmatter. The body is only written by the editor's own save
  * flow, which sources it from live editor state and pairs it with
  * an ETag.
+ *
+ * Undo / Revert (two distinct affordances):
+ *   - Undo / Redo buttons drive TipTap's in-memory history through
+ *     nc:note-tiptap-undo / nc:note-tiptap-redo events. State
+ *     (canUndo / canRedo) is mirrored from nc:note-undo-state
+ *     events the editor dispatches on every transaction.
+ *   - Revert to last save button drives the server-side snapshot
+ *     ring: POSTs to /history/pop, gets the restored NoteDto, then
+ *     dispatches nc:note-reload-body so the open editor adopts the
+ *     restored content + fresh etag without remount.
+ *   The two are deliberately separate buttons (not one smart Undo)
+ *   because their costs and effects differ wildly — one moves a
+ *   keystroke, the other replaces the whole document with an older
+ *   save. A combined affordance would surprise users.
  */
 export interface PropertiesPanelProps {
   vaultId: string;
@@ -170,6 +184,26 @@ export function PropertiesPanel({
   // editor page picks up to actually swap its surface.
   const [viewMode, setViewMode] = useState<NoteViewMode>('rendered');
 
+  // Editor undo/redo state, mirrored from nc:note-undo-state events
+  // dispatched by NoteEditor on every transaction. The panel doesn't
+  // hold a direct editor reference — they're siblings in the React
+  // tree — so this is the only path the panel has to know whether
+  // its Undo / Redo buttons should be enabled.
+  //
+  // Defaults to false on selection change: a fresh editor has no
+  // history yet, and we want the buttons to start disabled until the
+  // editor's first dispatch arrives (which happens on mount). Avoids
+  // a one-frame flash of "enabled but actually nothing to undo."
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  // Per-note undo history (server-side snapshot ring). Fetched on
+  // selection change + after every refreshTick bump so the Revert
+  // button label stays current. Null while loading or when no note
+  // is selected; a zero count means snapshots exist but the count is
+  // legitimately 0 (a brand-new note with no body changes yet).
+  const [historyInfo, setHistoryInfo] = useState<NoteHistoryInfo | null>(null);
+
   useEffect(() => {
     setNote(null);
     setFolder(null);
@@ -179,6 +213,13 @@ export function PropertiesPanel({
     // its own notePath change; this keeps the panel button label in
     // sync without a cross-component handshake.
     setViewMode('rendered');
+    // Reset editor-history mirror — the editor will dispatch a fresh
+    // nc:note-undo-state on its own mount once the new note loads.
+    // Reset server-history info — we'll refetch below if this is a
+    // note selection.
+    setCanUndo(false);
+    setCanRedo(false);
+    setHistoryInfo(null);
     if (!selection) return;
 
     let cancelled = false;
@@ -190,6 +231,18 @@ export function PropertiesPanel({
           if (!cancelled) {
             if (n === null) setError('Note not found.');
             else setNote(n);
+          }
+          // History info is a separate, cheap fetch — runs even if the
+          // note GET above errors, since the count tells the user
+          // "snapshots exist on disk" independently of whether the
+          // note itself is currently loadable.
+          try {
+            const info = await notesApi.getHistory(vaultId, selection.path);
+            if (!cancelled) setHistoryInfo(info);
+          } catch {
+            // Best-effort. A failure here just leaves the Revert
+            // button disabled, which is the safe default.
+            if (!cancelled) setHistoryInfo({ count: 0, latest: null });
           }
         } else {
           const f = await notesApi.listFolder(vaultId, selection.path);
@@ -333,6 +386,139 @@ export function PropertiesPanel({
       );
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
+    }
+  }
+
+  // ------------------------------------------------- undo / revert
+
+  // Mirror the editor's undo state into local React state by listening
+  // for the nc:note-undo-state events NoteEditor dispatches on every
+  // transaction. The detail.path check filters events for other notes
+  // (multi-tab safety) — same pattern as the appearance listener in
+  // the editor.
+  //
+  // Also listens for nc:note-body-saved (dispatched by NoteEditor
+  // after every successful body save) so the panel's history count
+  // stays current as the user types-and-autosaves. Without this, the
+  // Revert button would be stuck at the count we fetched when the
+  // panel first loaded — wrong (and sometimes disabled-when-shouldn't-
+  // be) the moment any autosave creates a new snapshot.
+  useEffect(() => {
+    if (!selection || selection.kind !== 'note') return;
+    function onUndoState(e: Event) {
+      const ce = e as CustomEvent<{
+        path: string;
+        canUndo: boolean;
+        canRedo: boolean;
+      }>;
+      if (!ce.detail || ce.detail.path !== selection!.path) return;
+      setCanUndo(ce.detail.canUndo);
+      setCanRedo(ce.detail.canRedo);
+    }
+    let cancelled = false;
+    async function onBodySaved(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (!ce.detail || ce.detail.path !== selection!.path) return;
+      try {
+        const info = await notesApi.getHistory(vaultId, selection!.path);
+        if (!cancelled) setHistoryInfo(info);
+      } catch {
+        // Best-effort. The next save will retry.
+      }
+    }
+    window.addEventListener('nc:note-undo-state', onUndoState);
+    window.addEventListener('nc:note-body-saved', onBodySaved);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nc:note-undo-state', onUndoState);
+      window.removeEventListener('nc:note-body-saved', onBodySaved);
+    };
+  }, [selection, vaultId]);
+
+  // Request handlers for the editor's in-memory undo/redo. The editor
+  // owns the actual TipTap command; the panel just signals intent via
+  // the matching window events. NoteEditor's listener dispatches
+  // editor.commands.undo()/redo() and the next transaction fires a
+  // fresh nc:note-undo-state that updates canUndo/canRedo above.
+  function requestUndo() {
+    if (!selection || selection.kind !== 'note') return;
+    window.dispatchEvent(
+      new CustomEvent('nc:note-tiptap-undo', {
+        detail: { path: selection.path },
+      }),
+    );
+  }
+
+  function requestRedo() {
+    if (!selection || selection.kind !== 'note') return;
+    window.dispatchEvent(
+      new CustomEvent('nc:note-tiptap-redo', {
+        detail: { path: selection.path },
+      }),
+    );
+  }
+
+  /**
+   * Revert to the last server-side snapshot.
+   *
+   * Distinct from Undo (in-memory TipTap history): this goes through
+   * the server, replacing the on-disk body with the most recent
+   * snapshot from `.notesapp/history/<encoded>/`. The server snapshots
+   * the *current* content before popping, so a subsequent Revert
+   * brings the just-replaced content back — undo-of-undo works.
+   *
+   * Flow:
+   *   1. Confirm with the user. The Revert button is a much bigger
+   *      action than Undo (jumps back to a save boundary, not one
+   *      transaction), so a confirm dialog is part of the contract.
+   *   2. POST /history/pop → get the restored NoteDto.
+   *   3. Dispatch nc:note-reload-body so the open editor adopts the
+   *      restored body + etag without a remount.
+   *   4. Bump refreshTick so the panel refetches the note (gets fresh
+   *      frontmatter) and re-reads the history count.
+   *
+   * Errors surface in the panel's existing `error` state. The most
+   * common failure is 404 (no snapshots), which the button-disabled
+   * state should prevent in practice but we handle defensively for
+   * the rare race.
+   */
+  async function confirmAndRevert() {
+    if (!selection || selection.kind !== 'note' || !note) return;
+    if (!historyInfo || historyInfo.count === 0) return;
+
+    const latestLabel = historyInfo.latest
+      ? formatNoteTimestamp(historyInfo.latest)
+      : 'the previous save';
+    const ok = window.confirm(
+      `Revert this note to the version saved at ${latestLabel}?\n\n` +
+        `Your current content will be saved as a snapshot first, so this ` +
+        `action is reversible (click Revert again to bring back what you ` +
+        `have now).`,
+    );
+    if (!ok) return;
+
+    try {
+      const restored = await notesApi.popHistory(vaultId, selection.path);
+      // Tell the open editor to adopt the restored body + fresh etag.
+      // We pass etag along so the editor's autosave doesn't 412 the
+      // very next time it fires.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-reload-body', {
+          detail: {
+            path: selection.path,
+            body: restored.body,
+            etag: restored.etag,
+          },
+        }),
+      );
+      // Refetch panel data (note + history count). The history count
+      // stays roughly the same after a pop: we added 1 (snapshot of
+      // current) and removed 1 (the popped one), net zero — unless
+      // the ring was at cap, in which case the prune dropped the
+      // oldest and net is -1. The new fetch sorts it either way.
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Revert failed.');
     }
   }
 
@@ -485,6 +671,81 @@ export function PropertiesPanel({
               onSaveFontSize={(size) => saveAppearance('fontSize', size)}
               onSaveWidth={(w) => saveAppearance('width', w)}
             />
+
+            {/*
+              Undo / Redo — calls TipTap's in-memory history via a
+              window event the editor listens for. Buttons are
+              enabled/disabled based on the editor's current state,
+              mirrored here through nc:note-undo-state events.
+
+              Same keyboard shortcuts work in the editor itself
+              (Ctrl+Z / Ctrl+Y) — these buttons are the discoverable
+              affordance for users who don't know the shortcuts and
+              for sessions where the editor is unfocused.
+            */}
+            <dt>Undo</dt>
+            <dd>
+              <button
+                type="button"
+                className="nc-btn"
+                onClick={requestUndo}
+                disabled={!canUndo}
+                title={
+                  canUndo
+                    ? 'Undo the last edit in the editor (Ctrl+Z)'
+                    : 'Nothing to undo in this editor session yet'
+                }
+              >
+                ↶ Undo
+              </button>
+              <button
+                type="button"
+                className="nc-btn"
+                onClick={requestRedo}
+                disabled={!canRedo}
+                style={{ marginLeft: '0.5em' }}
+                title={
+                  canRedo
+                    ? 'Redo the last undone edit (Ctrl+Y)'
+                    : 'Nothing to redo'
+                }
+              >
+                ↷ Redo
+              </button>
+            </dd>
+
+            {/*
+              Revert to last save — server-side snapshot pop. Bigger
+              hammer than Undo: jumps back to a save boundary, not a
+              single transaction. Confirmation prompt is part of the
+              contract since the action replaces editor content; the
+              prompt also reassures the user the pop is reversible
+              (current content is snapshotted server-side before the
+              swap).
+
+              Disabled when no snapshots exist on disk. Label includes
+              the count so the user knows how many saves they can
+              walk back.
+            */}
+            <dt>Revert</dt>
+            <dd>
+              <button
+                type="button"
+                className="nc-btn"
+                onClick={confirmAndRevert}
+                disabled={!historyInfo || historyInfo.count === 0}
+                title={
+                  historyInfo && historyInfo.count > 0 && historyInfo.latest
+                    ? `Replace the current note content with the version saved at ${formatNoteTimestamp(historyInfo.latest)}. Reversible.`
+                    : 'No saved snapshots available to revert to'
+                }
+              >
+                ⏮ Revert to last save
+                {historyInfo && historyInfo.count > 0
+                  ? ` (${historyInfo.count})`
+                  : ''}
+              </button>
+            </dd>
 
             {/*
               View toggle. Lives at the bottom of the editable rows

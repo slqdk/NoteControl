@@ -115,6 +115,21 @@ export interface UpdateNoteRequest {
   version?: string | null;
 }
 
+/**
+ * Summary of how much undo-history is available for a single note.
+ * Mirrors NoteHistoryInfoDto in the C# server.
+ *
+ * `count` is 0..10 (server caps the per-note history ring at 10
+ * snapshots). The Properties panel uses count > 0 to enable its
+ * "Revert to last save" button. `latest` is the ISO timestamp of
+ * the newest snapshot, suitable for a relative-time tooltip
+ * ("12 minutes ago"). When count is 0, latest is null.
+ */
+export interface NoteHistoryInfo {
+  count: number;
+  latest: string | null;
+}
+
 export interface NoteSummaryDto {
   path: string;
   name: string;
