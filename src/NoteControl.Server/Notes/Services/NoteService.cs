@@ -184,7 +184,7 @@ public sealed class NoteService : INoteService
             }
         }
 
-        var (fm, _) = FrontmatterCodec.Split(existingRaw);
+        var (fm, existingBody) = FrontmatterCodec.Split(existingRaw);
         FrontmatterCodec.ApplyUpdate(
             fm,
             _clock.GetUtcNow(),
@@ -202,17 +202,38 @@ public sealed class NoteService : INoteService
             // pass in here.
             request.Version);
 
-        var newText = FrontmatterCodec.Combine(fm, request.Body ?? string.Empty);
+        // Body resolution (the property-save data-loss fix):
+        //
+        //   request.Body == null  → "leave body alone". We keep the body
+        //                           we just parsed off disk verbatim.
+        //                           This is the path the Properties panel
+        //                           uses for Locked / Tags / Version /
+        //                           appearance saves — none of which
+        //                           should touch the body.
+        //
+        //   request.Body != null  → "this is the new body". The editor's
+        //                           own save flow takes this path,
+        //                           paired with an ETag.
+        //
+        // The bug this fixes: the panel used to send `body: note.body`
+        // where `note.body` was the panel's last-fetched snapshot. If the
+        // editor had autosaved newer content since then (or had unsaved
+        // changes in memory), the property save would silently truncate
+        // the file to the panel's stale view. A real user lost a whole
+        // program this way.
+        var bodyToWrite = request.Body ?? existingBody;
+
+        var newText = FrontmatterCodec.Combine(fm, bodyToWrite);
         await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);
 
         var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
         await _indexer.OnNoteSavedAsync(
-            vaultId, canonical, fm, request.Body ?? string.Empty,
+            vaultId, canonical, fm, bodyToWrite,
             new DateTimeOffset(lastModified, TimeSpan.Zero), ct);
 
         return new NoteDto(
             Path: canonical,
-            Body: request.Body ?? string.Empty,
+            Body: bodyToWrite,
             Frontmatter: fm.ToDto(),
             Etag: ComputeEtag(newText),
             LastModified: lastModified);

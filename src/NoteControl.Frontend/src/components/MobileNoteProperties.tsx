@@ -36,16 +36,19 @@ import { EditableNoteAppearance } from './EditableNoteAppearance';
  *
  * Save semantics — same as PropertiesPanel:
  *   - We GET the note on mount and on refreshTick bumps.
- *   - Saves call notesApi.update with the body we last fetched +
- *     the field being changed.
- *   - This races with the editor's autosave: if the user has
- *     unsaved typing in the editor and changes a tag here, our PUT
- *     ships the older body alongside the new tag, clobbering
- *     unsaved typing. The desktop PropertiesPanel has the SAME race
- *     by design (see the comment in saveTags there). Mobile follows
- *     the same pattern for consistency. In practice users don't
- *     edit metadata mid-keystroke, and the editor's debounced save
- *     usually finishes within a second.
+ *   - Property saves call notesApi.update sending ONLY the field
+ *     being changed. They MUST NOT send `body`. The server treats
+ *     a missing body as "leave it alone" and only rewrites
+ *     frontmatter.
+ *
+ * The "don't send body" rule fixes a data-loss bug: this view used
+ * to send `body: note.body` along with the changed property, where
+ * note.body was the panel's last-fetched snapshot. If the editor
+ * had autosaved newer content (or held unsaved edits) since the
+ * panel last refetched, the property save would silently overwrite
+ * the on-disk body with the panel's stale view. A real user lost a
+ * whole program to this on the desktop panel; the mobile panel had
+ * the same race documented as "acceptable in practice". It is not.
  *
  * Tree refresh after rename / delete:
  *   The desktop panel calls onAfterRename / onDelete callbacks
@@ -140,8 +143,9 @@ export function MobileNoteProperties({
 
   async function saveTags(newTags: string[]) {
     try {
+      // No `body` field — see header doc. The server treats a
+      // missing body as "leave the body alone".
       await notesApi.update(vaultId, notePath, {
-        body: note.body,
         tags: newTags,
       });
       setRefreshTick((t) => t + 1);
@@ -153,7 +157,6 @@ export function MobileNoteProperties({
   async function saveLocked(locked: boolean) {
     try {
       await notesApi.update(vaultId, notePath, {
-        body: note.body,
         locked,
       });
       setRefreshTick((t) => t + 1);
@@ -165,7 +168,6 @@ export function MobileNoteProperties({
   async function saveVersion(version: string) {
     try {
       await notesApi.update(vaultId, notePath, {
-        body: note.body,
         version,
       });
       setRefreshTick((t) => t + 1);
@@ -178,13 +180,12 @@ export function MobileNoteProperties({
     field: 'font' | 'fontSize' | 'width',
     value: string | number,
   ) {
-    const body = note.body;
     const patch =
       field === 'font'
-        ? { body, font: value as string }
+        ? { font: value as string }
         : field === 'fontSize'
-          ? { body, fontSize: value as number }
-          : { body, width: value as number };
+          ? { fontSize: value as number }
+          : { width: value as number };
     try {
       await notesApi.update(vaultId, notePath, patch);
       setRefreshTick((t) => t + 1);

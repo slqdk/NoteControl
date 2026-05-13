@@ -51,11 +51,32 @@ public sealed record CreateNoteRequest(
     IReadOnlyList<string>? Tags = null);
 
 /// <summary>
-/// PUT /api/vaults/{id}/note — overwrite an existing note. Body is plain
-/// markdown without frontmatter; the server merges with existing frontmatter
-/// (bumping `updated`, replacing fields the request supplied non-null,
-/// preserving Extra). If <see cref="Etag"/> is supplied and does not match
-/// the current on-disk hash, the write is rejected with 412.
+/// PUT /api/vaults/{id}/note — overwrite an existing note. The server merges
+/// with existing frontmatter (bumping `updated`, replacing fields the request
+/// supplied non-null, preserving Extra). If <see cref="Etag"/> is supplied and
+/// does not match the current on-disk hash, the write is rejected with 412.
+///
+/// Body semantics:
+/// <list type="bullet">
+///   <item><description><c>null</c> (the default) — "leave the body alone".
+///     The server reads the existing body from disk, keeps it byte-for-byte,
+///     and only rewrites the frontmatter. This is the path the Properties
+///     panel uses when toggling Locked, editing Tags, changing the per-note
+///     Version, or adjusting per-note appearance — none of those should
+///     touch the body, and they MUST NOT overwrite it with a stale snapshot
+///     the panel happens to be holding.</description></item>
+///   <item><description>Non-null (including empty string) — "this is the
+///     new body". The server replaces the body verbatim. This is the path
+///     the editor itself uses on every save, paired with an <see cref="Etag"/>
+///     to detect concurrent writes.</description></item>
+/// </list>
+///
+/// The nullable Body was introduced after a real data-loss bug: the panel
+/// sent a stale <c>body</c> alongside the field it actually wanted to
+/// change, and the server unconditionally overwrote the on-disk body with
+/// it. With Body nullable and defaulting to null, "I'm only updating a
+/// property" becomes the literal shape of the request, and the server
+/// enforces "no body field → don't touch the body" as the only safe path.
 ///
 /// Step 14: Font / FontSize / Width are nullable for the same reason as
 /// Tags/Locked — null means "leave alone", non-null replaces. To clear a
@@ -69,7 +90,7 @@ public sealed record CreateNoteRequest(
 /// any save persists v0.0 to a previously-unversioned note).
 /// </summary>
 public sealed record UpdateNoteRequest(
-    string Body,
+    string? Body = null,
     IReadOnlyList<string>? Tags = null,
     bool? Locked = null,
     string? Etag = null,

@@ -85,7 +85,17 @@ export interface CreateNoteRequest {
 }
 
 export interface UpdateNoteRequest {
-  body: string;
+  /**
+   * The new note body, or null/undefined to leave the on-disk body
+   * alone (the server only rewrites frontmatter in that case).
+   *
+   * Property saves from the Properties panel (Locked, Tags, Version,
+   * Font, FontSize, Width) MUST send no body — otherwise a stale
+   * snapshot held by the panel can overwrite newer content the
+   * editor has just autosaved. The editor's own save flow is the
+   * only path that should send body, paired with an etag.
+   */
+  body?: string | null;
   tags?: string[] | null;
   locked?: boolean | null;
   etag?: string | null;

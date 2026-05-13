@@ -39,6 +39,19 @@ import { EditableVersion } from './EditableVersion';
  * changes, so opening a different note always starts in rendered
  * mode — matching the user's "toggle back when the note loads"
  * requirement.
+ *
+ * Data-loss fix (property saves never send body):
+ * Every save handler below previously sent `body: note.body` along
+ * with the property it was actually updating. `note.body` was the
+ * panel's last-fetched snapshot. If the editor had autosaved newer
+ * content (or held unsaved edits) since the panel last refetched,
+ * the property save would silently overwrite the on-disk body with
+ * the panel's stale view — a real user lost a whole program to this.
+ * The fix: NONE of the property handlers below send `body`. The
+ * server treats a missing body as "leave it alone" and only rewrites
+ * frontmatter. The body is only written by the editor's own save
+ * flow, which sources it from live editor state and pairs it with
+ * an ETag.
  */
 export interface PropertiesPanelProps {
   vaultId: string;
@@ -232,12 +245,13 @@ export function PropertiesPanel({
   async function saveTags(newTags: string[]) {
     if (!selection || selection.kind !== 'note' || !note) return;
     try {
+      // No `body` field — the server treats a missing body as
+      // "leave the body alone" and only rewrites frontmatter.
+      // Also no `etag` — tag changes from this panel are user-
+      // driven, immediate, and infrequent enough that ETag
+      // conflict UX would be more annoying than helpful here.
       await notesApi.update(vaultId, selection.path, {
-        body: note.body,
         tags: newTags,
-        // omit etag deliberately: tag changes from this panel are
-        // user-driven, immediate, and infrequent enough that ETag
-        // conflict UX would be more annoying than helpful here.
       });
       setRefreshTick((t) => t + 1);
     } catch (e) {
@@ -248,8 +262,10 @@ export function PropertiesPanel({
   async function saveLocked(locked: boolean) {
     if (!selection || selection.kind !== 'note' || !note) return;
     try {
+      // See header doc: property saves never send `body`. The
+      // server's update endpoint treats a missing body as
+      // "leave it alone" and only rewrites frontmatter.
       await notesApi.update(vaultId, selection.path, {
-        body: note.body,
         locked,
       });
       setRefreshTick((t) => t + 1);
@@ -268,8 +284,8 @@ export function PropertiesPanel({
   async function saveVersion(version: string) {
     if (!selection || selection.kind !== 'note' || !note) return;
     try {
+      // See header doc: property saves never send `body`.
       await notesApi.update(vaultId, selection.path, {
-        body: note.body,
         version,
       });
       setRefreshTick((t) => t + 1);
@@ -280,8 +296,7 @@ export function PropertiesPanel({
 
   /**
    * Per-note appearance saves. Each one sends ONLY the field being
-   * changed (plus the body, which the server requires). After the
-   * save we:
+   * changed — no `body`. After the save we:
    *   1. bump refreshTick to refetch — gets us a fresh ETag.
    *   2. dispatch a window event so the live editor (if mounted on
    *      this same note) updates its inline style without needing a
@@ -290,19 +305,22 @@ export function PropertiesPanel({
    *
    * The empty-string / 0 sentinel is what tells the server "clear
    * this field". See FrontmatterCodec.ApplyUpdate on the server.
+   *
+   * Body is deliberately absent from the request — the server
+   * treats a missing body as "leave it alone". See the header doc
+   * for the data-loss bug this prevents.
    */
   async function saveAppearance(
     field: 'font' | 'fontSize' | 'width',
     value: string | number,
   ) {
     if (!selection || selection.kind !== 'note' || !note) return;
-    const body = note.body;
     const patch =
       field === 'font'
-        ? { body, font: value as string }
+        ? { font: value as string }
         : field === 'fontSize'
-        ? { body, fontSize: value as number }
-        : { body, width: value as number };
+        ? { fontSize: value as number }
+        : { width: value as number };
     try {
       await notesApi.update(vaultId, selection.path, patch);
       setRefreshTick((t) => t + 1);
