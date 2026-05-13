@@ -250,23 +250,39 @@ public sealed class NoteService : INoteService
         // Undo-history snapshot: if this save is replacing the body
         // (i.e. the editor is saving content, not the panel toggling a
         // property), and the new body actually differs from the old,
-        // write a snapshot of the OLD raw content before we overwrite
-        // it. Property-only saves don't add to history (they don't
-        // change the body), which keeps the history list meaningful as
-        // "states of the body the user has been in."
+        // update the history ring with cursor-truncate semantics:
         //
-        // We snapshot BEFORE writing the new content so an exception
-        // during the write doesn't leave the disk in a state where the
-        // snapshot ring has a duplicate of the current. Failure to
-        // snapshot is non-fatal — we log? no, we just swallow — losing
-        // a single point on the history ring is acceptable. Losing the
+        //   - If the existing on-disk content matches a snapshot
+        //     already in the ring (i.e. the user is editing from a
+        //     reverted state), DELETE every snapshot above that one
+        //     and don't add a new entry. This is the standard "edit
+        //     truncates the redo branch" behaviour the user knows
+        //     from every other undo system.
+        //
+        //   - If the existing content matches no snapshot (the
+        //     normal case: user typed, autosaved), snapshot the
+        //     existing content as a new entry and prune the ring
+        //     back to the cap. Same as the original snapshot-on-save
+        //     behaviour.
+        //
+        // We snapshot/truncate BEFORE writing the new content so an
+        // exception during the write doesn't leave the disk in a
+        // half-truncated state where some future snapshots have been
+        // deleted but the note still holds the old content. Failure
+        // to update the ring is non-fatal — we swallow — losing a
+        // single point on the history ring is acceptable. Losing the
         // save itself wouldn't be.
+        //
+        // Property-only saves (request.Body == null) don't reach this
+        // branch — they don't change the body, so the cursor doesn't
+        // move and the ring is left alone.
         if (request.Body != null
             && !string.Equals(request.Body, existingBody, StringComparison.Ordinal))
         {
             try
             {
-                await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
+                await UpdateHistoryForBodyChangeAsync(
+                    vaultRoot, canonical, existingRaw, ct);
             }
             catch
             {
@@ -386,14 +402,10 @@ public sealed class NoteService : INoteService
         // could sweep). The encoded folder name is derived from the
         // canonical path, so a path change always means a folder
         // rename here, even when only the parent folder changes.
-        var oldHistoryFolder = Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(oldCanonical));
+        var oldHistoryFolder = HistoryFolderFor(vaultRoot, oldCanonical);
         if (Directory.Exists(oldHistoryFolder))
         {
-            var newHistoryFolder = Path.Combine(
-                vaultRoot, AppFolder, HistoryFolder,
-                EncodeHistoryFolderName(newCanonical));
+            var newHistoryFolder = HistoryFolderFor(vaultRoot, newCanonical);
             try
             {
                 Directory.Move(oldHistoryFolder, newHistoryFolder);
@@ -546,9 +558,7 @@ public sealed class NoteService : INoteService
         // restores a deleted note via the filesystem, they'd start with
         // an empty history (the snapshot ring rebuilds from subsequent
         // saves). Revisit if/when a trash-restore UI lands.
-        var historyFolder = Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(canonical));
+        var historyFolder = HistoryFolderFor(vaultRoot, canonical);
         if (Directory.Exists(historyFolder))
         {
             try
@@ -643,51 +653,60 @@ public sealed class NoteService : INoteService
         CancellationToken ct = default)
     {
         var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
-        string canonical;
+        string canonical, absolute;
         try
         {
             canonical = _notePaths.CanonicalizeNote(notePath);
+            absolute = _notePaths.Resolve(vaultRoot, canonical);
         }
         catch (InvalidNotePathException ex)
         {
             throw new NoteException(ex.Message);
         }
 
-        var folder = Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(canonical));
-        if (!Directory.Exists(folder))
+        var folder = HistoryFolderFor(vaultRoot, canonical);
+        if (!Directory.Exists(folder) || !File.Exists(absolute))
         {
             return new NoteHistoryInfoDto(0, null);
         }
 
-        // Snapshot files are named "{unixMs}.md". The newest is the one
-        // with the largest numeric prefix. We sort by filename (string)
-        // and rely on the fact that all unix-ms timestamps generated by
-        // this server share a width (the millisecond range from ~2001
-        // to ~2286 has 13 digits) — but to be safe against rollover
-        // and corruption, we parse the prefix and compare numerically.
-        // Cheap; the folder has at most HistorySnapshotCap entries.
-        var snapshots = new List<long>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
-        {
-            var name = Path.GetFileNameWithoutExtension(file);
-            if (long.TryParse(name, out var ms))
-            {
-                snapshots.Add(ms);
-            }
-            ct.ThrowIfCancellationRequested();
-        }
+        // The "count" the panel cares about is "how many steps backward
+        // can the user still Revert" — i.e. the cursor position. With
+        // cursor-truncate semantics, this is:
+        //
+        //   - All N snapshots, if the live note has fresh content not
+        //     matching any snapshot ("above the stack").
+        //   - i, if the live note matches the snapshot at index i (0
+        //     = oldest, N-1 = newest). The user has already walked
+        //     past N-i snapshots and can walk i more.
+        //   - 0, if the live note matches the oldest snapshot.
+        //
+        // We compare by content hash (ComputeEtag = SHA-256). The
+        // current note's etag against each snapshot's etag.
+        var currentRaw = await File.ReadAllTextAsync(absolute, Encoding.UTF8, ct);
+        var currentEtag = ComputeEtag(currentRaw);
 
+        var snapshots = await LoadSnapshotsAsync(folder, ct);
         if (snapshots.Count == 0)
         {
             return new NoteHistoryInfoDto(0, null);
         }
 
-        snapshots.Sort();
-        var latestMs = snapshots[^1];
-        var latest = DateTimeOffset.FromUnixTimeMilliseconds(latestMs);
-        return new NoteHistoryInfoDto(snapshots.Count, latest);
+        var cursor = FindCursor(snapshots, currentEtag);
+        if (cursor == 0)
+        {
+            // Live note matches the oldest snapshot — no more steps
+            // back. Latest timestamp returns null because there's no
+            // snapshot to walk *to*.
+            return new NoteHistoryInfoDto(0, null);
+        }
+
+        // Cursor > 0: stepping back lands on snapshots[cursor - 1].
+        // That snapshot's timestamp is what the panel's tooltip uses
+        // ("Revert to the version saved at ...").
+        var targetMs = snapshots[cursor - 1].Ms;
+        var target = DateTimeOffset.FromUnixTimeMilliseconds(targetMs);
+        return new NoteHistoryInfoDto(cursor, target);
     }
 
     public async Task<NoteDto> PopHistoryAsync(
@@ -712,73 +731,55 @@ public sealed class NoteService : INoteService
             throw new NoteException("Note not found.", statusCode: 404);
         }
 
-        var folder = Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(canonical));
+        var folder = HistoryFolderFor(vaultRoot, canonical);
         if (!Directory.Exists(folder))
         {
             throw new NoteException("No history available for this note.", statusCode: 404);
         }
 
-        // Find the newest snapshot by parsing the unix-ms filenames.
-        // Same parse-then-sort approach as GetHistoryInfoAsync.
-        var snapshots = new List<(long Ms, string Path)>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
-        {
-            var name = Path.GetFileNameWithoutExtension(file);
-            if (long.TryParse(name, out var ms))
-            {
-                snapshots.Add((ms, file));
-            }
-        }
-
+        var snapshots = await LoadSnapshotsAsync(folder, ct);
         if (snapshots.Count == 0)
         {
             throw new NoteException("No history available for this note.", statusCode: 404);
         }
 
-        snapshots.Sort((a, b) => a.Ms.CompareTo(b.Ms));
-        var newest = snapshots[^1];
-
-        // Read both the current note's raw content (so we can put it onto
-        // the stack — the pop is reversible) and the snapshot we're
-        // restoring.
+        // Cursor walk: read the live note, find its position in the
+        // ring, step one back. The ring itself is NOT modified by a
+        // pop — we don't delete the target, don't snapshot the
+        // current. This means a sequence of pops walks the user all
+        // the way down the ring (which was the whole reason for the
+        // cursor redesign — the old "snapshot current, delete popped"
+        // version ping-ponged between two states).
+        //
+        // The cursor is "above the stack" (= snapshots.Count) when
+        // the live note has fresh content not matching any snapshot.
+        // After a pop, the cursor moves down by 1; after another pop
+        // it moves down again; and so on until it hits 0, at which
+        // point Revert returns 404 and the panel disables the button.
+        //
+        // Forward motion (server-side Redo) is intentionally not
+        // implemented in v1. The user gets forward motion via
+        // TipTap's in-memory Undo (setContent on Revert adds to
+        // TipTap's history stack), which covers single-session
+        // recovery from a mistaken Revert. Cross-session forward
+        // motion is a v2 feature if it ever earns the UI surface.
         var currentRaw = await File.ReadAllTextAsync(absolute, Encoding.UTF8, ct);
-        var poppedRaw = await File.ReadAllTextAsync(newest.Path, Encoding.UTF8, ct);
-
-        // Step 1: snapshot the current content. If anything fails after
-        // this point, the user can still recover — they'll see the
-        // current-state-becomes-snapshot on the next list.
-        try
+        var currentEtag = ComputeEtag(currentRaw);
+        var cursor = FindCursor(snapshots, currentEtag);
+        if (cursor == 0)
         {
-            await WriteHistorySnapshotAsync(vaultRoot, canonical, currentRaw, ct);
-        }
-        catch
-        {
-            // Best-effort. Losing one snapshot slot is acceptable; we
-            // still proceed to restore, which is the user's intent.
+            // Already at the oldest snapshot, or somehow below the
+            // ring. Nothing further to revert to.
+            throw new NoteException("No more history to revert.", statusCode: 404);
         }
 
-        // Step 2: write the popped snapshot's content as the new note
-        // content. Verbatim — including frontmatter — so the restored
-        // state matches exactly what was on disk at the time of the
-        // snapshot (same tags, same locked flag, same appearance,
-        // same version). The user clicked "Revert to last save"; we
-        // give them exactly that.
+        // The snapshot we're walking the cursor onto.
+        var target = snapshots[cursor - 1];
+        var poppedRaw = await File.ReadAllTextAsync(target.Path, Encoding.UTF8, ct);
+
+        // Single write to the note file. No snapshot writes, no
+        // deletes — the ring is intentionally untouched.
         await File.WriteAllTextAsync(absolute, poppedRaw, NoBomUtf8, ct);
-
-        // Step 3: delete the popped file from the history folder so it
-        // isn't there to be popped again. (If we kept it, the next pop
-        // would just yo-yo between the two same states.)
-        try
-        {
-            File.Delete(newest.Path);
-        }
-        catch
-        {
-            // Best-effort. An undeleted popped snapshot will just be
-            // popped again later — harmless duplicate state.
-        }
 
         // Parse the restored content for the indexer + return DTO.
         var (fm, body) = FrontmatterCodec.Split(poppedRaw);
@@ -807,6 +808,196 @@ public sealed class NoteService : INoteService
     // ---------------------------------------------------------------
 
     /// <summary>
+    /// Apply the history-ring side effects for an editor save that is
+    /// about to overwrite <paramref name="canonical"/>'s body with new
+    /// content. The previous on-disk raw content (frontmatter + body)
+    /// is supplied in <paramref name="existingRaw"/>.
+    ///
+    /// Two paths, picked by where the existing content sits in the ring:
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>No cursor match</b> — the existing
+    ///     content is fresh ("above the stack"). Take the standard
+    ///     snapshot: write <paramref name="existingRaw"/> as a new
+    ///     entry, then prune to <see cref="HistorySnapshotCap"/>.
+    ///     This is the common path for a user typing-and-autosaving.
+    ///     </description></item>
+    ///   <item><description><b>Cursor hit at index i</b> — the existing
+    ///     content matches a snapshot already in the ring (the user is
+    ///     editing from a reverted state). Delete every snapshot above
+    ///     index i (the "redo branch" the user is abandoning) and add
+    ///     no new entry. The ring shrinks to i+1 entries; the live
+    ///     note's content is about to become fresh again ("above the
+    ///     stack"). This is the cursor-truncate semantics every
+    ///     undo/redo system the user has used elsewhere.</description></item>
+    /// </list>
+    /// </summary>
+    private async Task UpdateHistoryForBodyChangeAsync(
+        string vaultRoot,
+        string canonical,
+        string existingRaw,
+        CancellationToken ct)
+    {
+        var folder = HistoryFolderFor(vaultRoot, canonical);
+        // Fast path: no folder yet → no ring to consult, just append.
+        // (Directory will be created inside WriteHistorySnapshotAsync.)
+        if (!Directory.Exists(folder))
+        {
+            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
+            return;
+        }
+
+        var snapshots = await LoadSnapshotsAsync(folder, ct);
+        if (snapshots.Count == 0)
+        {
+            // Folder exists but is empty (e.g. all snapshots pruned).
+            // Treat as "above the stack" — append.
+            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
+            return;
+        }
+
+        var existingEtag = ComputeEtag(existingRaw);
+        var cursor = FindCursor(snapshots, existingEtag);
+
+        if (cursor == snapshots.Count)
+        {
+            // No match — existing content is above the stack. Standard
+            // snapshot + prune behaviour.
+            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
+            return;
+        }
+
+        // Match at index `cursor`. Truncate the redo branch: delete
+        // every snapshot with index > cursor. Best-effort per file —
+        // a stuck file lingers but isn't fatal.
+        for (var i = cursor + 1; i < snapshots.Count; i++)
+        {
+            try
+            {
+                File.Delete(snapshots[i].Path);
+            }
+            catch
+            {
+                // Lingering forward-branch entry. The next save will
+                // find it again and try to delete it again.
+            }
+        }
+    }
+
+    /// <summary>
+    /// One snapshot, parsed from disk. <see cref="Etag"/> is computed
+    /// lazily by <see cref="LoadSnapshotsAsync"/> — it's only needed
+    /// for cursor lookup, not for ordering.
+    /// </summary>
+    private readonly record struct SnapshotEntry(long Ms, string Path, string Etag);
+
+    /// <summary>
+    /// Read the per-note history folder, parse all snapshot files,
+    /// compute their content hashes, and return them in chronological
+    /// order (oldest first, newest last).
+    /// </summary>
+    /// <remarks>
+    /// Filenames are <c>{unixMs}.md</c> with an optional collision
+    /// suffix (<c>{unixMs}-a.md</c>, etc.). We parse the leading digits
+    /// as the timestamp; suffixes group under the same numeric ms.
+    /// Each snapshot's raw file content is hashed via
+    /// <see cref="ComputeEtag"/> for cursor lookup; this is at most
+    /// <see cref="HistorySnapshotCap"/> small reads per call (~50 KB
+    /// worst case for 10 × 5 KB notes), which is fine even on a
+    /// slow disk.
+    /// </remarks>
+    private static async Task<List<SnapshotEntry>> LoadSnapshotsAsync(
+        string folder,
+        CancellationToken ct)
+    {
+        var raw = new List<(long Ms, string Path)>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            var digits = 0;
+            while (digits < name.Length && char.IsDigit(name[digits])) digits++;
+            if (digits == 0) continue;
+            if (long.TryParse(name.AsSpan(0, digits), out var ms))
+            {
+                raw.Add((ms, file));
+            }
+            ct.ThrowIfCancellationRequested();
+        }
+
+        // Sort oldest-first by ms. Ties (collision-suffix entries)
+        // break by filename to keep the order deterministic — the
+        // cursor logic doesn't care about a within-ms ordering as
+        // long as it's stable.
+        raw.Sort((a, b) =>
+        {
+            var byMs = a.Ms.CompareTo(b.Ms);
+            return byMs != 0 ? byMs : string.CompareOrdinal(a.Path, b.Path);
+        });
+
+        // Read + hash each. We only need the etag; the body itself is
+        // re-read by PopHistoryAsync directly for the chosen target.
+        var result = new List<SnapshotEntry>(raw.Count);
+        foreach (var (ms, path) in raw)
+        {
+            string content;
+            try
+            {
+                content = await File.ReadAllTextAsync(path, Encoding.UTF8, ct);
+            }
+            catch
+            {
+                // Unreadable snapshot — skip. Could be a transient lock
+                // or a stale temp file. The cursor logic will treat it
+                // as "doesn't exist" which is the safe choice.
+                continue;
+            }
+            result.Add(new SnapshotEntry(ms, path, ComputeEtag(content)));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Find the position of <paramref name="currentEtag"/> within the
+    /// chronologically-ordered <paramref name="snapshots"/>. Returns
+    /// the index of the first match if one exists, otherwise
+    /// <c>snapshots.Count</c> (= "above the stack", fresh content).
+    /// </summary>
+    /// <remarks>
+    /// "First match" handles the corner case where two distinct
+    /// snapshots happen to have identical content (e.g. the user
+    /// returned to an earlier state and saved again). In that case,
+    /// the earlier matching snapshot wins — which means a Revert will
+    /// skip the intermediate snapshots and walk further back than
+    /// strict timestamp order would suggest. This is acceptable and
+    /// arguably what the user wants: they're at content X; the
+    /// "previous distinct state" is whatever came before the first X.
+    /// </remarks>
+    private static int FindCursor(IReadOnlyList<SnapshotEntry> snapshots, string currentEtag)
+    {
+        for (var i = 0; i < snapshots.Count; i++)
+        {
+            if (string.Equals(snapshots[i].Etag, currentEtag, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+        return snapshots.Count;
+    }
+
+    /// <summary>
+    /// Convenience wrapper around <c>Path.Combine(vaultRoot,
+    /// .notesapp, history, encoded(canonical))</c>. The encoded folder
+    /// name is derived from the canonical path; see
+    /// <see cref="EncodeHistoryFolderName"/> for the encoding choice.
+    /// </summary>
+    private static string HistoryFolderFor(string vaultRoot, string canonical)
+    {
+        return Path.Combine(
+            vaultRoot, AppFolder, HistoryFolder,
+            EncodeHistoryFolderName(canonical));
+    }
+
+    /// <summary>
     /// Write one history snapshot for the note at <paramref name="canonical"/>.
     /// Creates the per-note history folder on demand, writes a single
     /// "{unixMs}.md" file containing the supplied raw content, then
@@ -817,14 +1008,20 @@ public sealed class NoteService : INoteService
     /// Two clock concerns:
     /// 1. Filename collisions. The clock is millisecond-resolution; two
     ///    saves arriving in the same millisecond would clash. We append
-    ///    a short random suffix only if the bare name already exists,
-    ///    so the common path stays a clean "{ms}.md" filename. The
+    ///    a short suffix only if the bare name already exists, so the
+    ///    common path stays a clean "{ms}.md" filename. The
     ///    sort-by-unix-ms-prefix logic in the readers tolerates the
     ///    suffix transparently because they parse the prefix before
     ///    the first non-digit.
     /// 2. Clock skew on the host. We use the injected TimeProvider, so
     ///    tests can use a deterministic clock; in production the system
     ///    clock is fine (file timestamps already rely on it).
+    ///
+    /// This helper is called only from
+    /// <see cref="UpdateHistoryForBodyChangeAsync"/> in the "no cursor
+    /// match" path. The pop endpoint deliberately does NOT call it —
+    /// pop is read-only with respect to the ring (the cursor walks
+    /// down; entries are not added).
     /// </remarks>
     private async Task WriteHistorySnapshotAsync(
         string vaultRoot,
@@ -832,9 +1029,7 @@ public sealed class NoteService : INoteService
         string rawContent,
         CancellationToken ct)
     {
-        var folder = Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(canonical));
+        var folder = HistoryFolderFor(vaultRoot, canonical);
         Directory.CreateDirectory(folder);
 
         var nowMs = _clock.GetUtcNow().ToUnixTimeMilliseconds();
