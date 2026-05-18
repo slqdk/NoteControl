@@ -50,15 +50,21 @@ interface TopBarProps {
   onVaultUpdated?: (updated: VaultDto) => void;
   /**
    * Slot rendered between the search box and the Templates link.
-   * Used by VaultLayout to inject the rail toggle buttons (📁 ℹ️).
-   * Optional — pages without a vault layout (vault list) leave it
-   * unset.
+   * Used by VaultLayout to inject the properties-panel toggle (ℹ️).
+   * The folder-tree toggle that used to live here has been removed
+   * — the tree is now always visible on desktop. Optional — pages
+   * without a vault layout (vault list) leave it unset.
    */
   rightExtras?: ReactNode;
   /**
-   * Rightmost slot, rendered AFTER the account menu. Used by
-   * VaultLayout to inject the settings cog. Kept separate from
-   * rightExtras because the account menu sits between the two.
+   * Slot for the settings cog, rendered BEFORE the account menu so
+   * that the account menu sits at the far-right edge of the topbar.
+   * Kept separate from rightExtras because Templates lives between
+   * the rail-toggle slot and this one.
+   *
+   * Earlier (Ship 70) the cog sat AFTER the account menu; that
+   * order was reverted so the account menu — the only piece tied to
+   * the signed-in user — anchors the topbar's right edge.
    */
   rightSettings?: ReactNode;
 }
@@ -67,7 +73,11 @@ interface TopBarProps {
  * Top navigation bar.
  *
  * Layout right-to-left:
- *   ⚙️ (rightSettings)  [Account ▾]  [Templates]  [Widgets+ ▾]?  [📁 ℹ️] (rightExtras)
+ *   [Account ▾]  ⚙️ (rightSettings)  [Templates]  [Widgets+ ▾]?  [ℹ️] (rightExtras)
+ *
+ * The account menu anchors the right edge — it's the only piece
+ * tied to the signed-in user, so it stays in a stable, predictable
+ * spot. The settings cog sits to its left.
  *
  * The Widgets+ button only renders when the current route is a
  * vault's startpage. It hosts the "add a block" dropdown that
@@ -366,8 +376,8 @@ export function TopBar({
             Templates
           </Link>
         )}
-        <AccountMenu />
         {rightSettings}
+        <AccountMenu />
       </div>
     </header>
   );

@@ -328,9 +328,17 @@ export function VaultLayout() {
 
   // Mobile redesign: the tree rail is no longer rendered on mobile
   // (the MobileNavBar above the main content owns navigation now).
-  // Desktop respects the user's persisted treeVisible preference
-  // exactly as before.
-  const effectiveTreeVisible = isMobile ? false : layout.treeVisible;
+  //
+  // Desktop: the tree is now ALWAYS visible. The user-facing 📁
+  // toggle that flipped layout.treeVisible has been removed, and
+  // this derivation hard-forces the effective value to true so
+  // that anyone with a stale "treeVisible = false" still persisted
+  // in localStorage from before the toggle was removed gets
+  // unstuck automatically. layout.treeVisible itself is left
+  // untouched (the persistence machinery in tree/treeState.ts
+  // stays in place) — only the effective value used by render
+  // gates is overridden here.
+  const effectiveTreeVisible = isMobile ? false : true;
 
   /**
    * Unified rail-toggle handler for the props panel. Routes to the
@@ -1266,37 +1274,38 @@ export function VaultLayout() {
           }
         }}
         rightExtras={
-          // Ship 81: hide the rail-toggle buttons (📁 ℹ️) on mobile.
+          // Ship 81: hide the rail-toggle button (ℹ️) on mobile.
           // The mobile layout forces tree-on-top and props-hidden;
-          // toggling them would have no effect, so the buttons are
+          // toggling props would have no effect, so the button is
           // pointless clutter. Pass null on mobile to render an
-          // empty slot instead.
+          // empty slot instead. The 📁 folder-tree toggle that
+          // used to share this slot was removed app-wide — the
+          // tree is always visible on desktop now.
           isMobile ? null : (
             <ToggleRailButtons
               slot="toggles"
-              treeVisible={layout.treeVisible}
               propsVisible={effectivePropsVisible}
-              onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
               onToggleProps={onTogglePropsPanel}
               treeAppearance={treeAppearance}
             />
           )
         }
         rightSettings={
-          // Ship 70: settings cog moved to the right of the account
-          // menu. Same component instance, just rendering its
-          // "settings" slot. Ship 80: variant + onVariantChange
-          // dropped from the props since the Win7/Win11 picker is
-          // gone (compact-only). Ship 81: hidden on mobile — the
-          // user has finished configuring on desktop and doesn't
-          // need the cog cluttering a narrow topbar. Templates is
-          // hidden via CSS (the link is hardcoded inside TopBar).
+          // Settings cog. Now renders BEFORE the account menu —
+          // Ship 70 put it after, but the account menu has been
+          // moved back to the right edge so it anchors the
+          // topbar's rightmost slot. Same ToggleRailButtons
+          // instance, just rendering its "settings" slot. Ship 80:
+          // variant + onVariantChange dropped from the props since
+          // the Win7/Win11 picker is gone (compact-only). Ship 81:
+          // hidden on mobile — the user has finished configuring
+          // on desktop and doesn't need the cog cluttering a
+          // narrow topbar. Templates is hidden via CSS (the link
+          // is hardcoded inside TopBar).
           isMobile ? null : (
             <ToggleRailButtons
               slot="settings"
-              treeVisible={layout.treeVisible}
               propsVisible={effectivePropsVisible}
-              onToggleTree={() => layout.setTreeVisible(!layout.treeVisible)}
               onToggleProps={onTogglePropsPanel}
               treeAppearance={treeAppearance}
             />

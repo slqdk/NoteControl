@@ -28,9 +28,7 @@ import {
 import { useTreeBehaviour } from '../settings/treeBehaviour';
 
 export interface ToggleRailButtonsProps {
-  treeVisible: boolean;
   propsVisible: boolean;
-  onToggleTree: () => void;
   onToggleProps: () => void;
   /**
    * Ship 53: tree font + font-size controls. Owned by VaultLayout
@@ -39,9 +37,12 @@ export interface ToggleRailButtonsProps {
   treeAppearance: TreeAppearance;
   /**
    * Ship 70: which subset of buttons this instance renders.
-   *   - "toggles" → 📁 ℹ️ pair only (default; lives next to search)
+   *   - "toggles" → ℹ️ properties-panel toggle (default; lives next
+   *      to search). The 📁 folder-tree toggle that used to share
+   *      this slot has been removed — the tree is now always
+   *      visible on desktop.
    *   - "settings" → ⚙️ button + popover (lives at the right edge,
-   *      next to the account menu, after Ship 70)
+   *      before the account menu)
    *
    * Ship 80: variant + onVariantChange dropped from this interface.
    * The Win7/Win11 picker is gone — compact is the only style now.
@@ -55,8 +56,11 @@ export interface ToggleRailButtonsProps {
 
 /**
  * View-control buttons that live in the TopBar:
- *   - slot="toggles":  📁 toggle tree rail, ℹ️ toggle properties rail
+ *   - slot="toggles":  ℹ️ toggle properties rail
  *   - slot="settings": ⚙️ open settings popover
+ *
+ * The folder-tree toggle (📁) that used to share the toggles slot
+ * has been removed — the tree is now always visible on desktop.
  *
  * The settings popover hosts:
  *   - tree style picker (compact / comfortable)
@@ -80,9 +84,7 @@ export interface ToggleRailButtonsProps {
  * spot, like Notion or VS Code's settings dropdown.
  */
 export function ToggleRailButtons({
-  treeVisible,
   propsVisible,
-  onToggleTree,
   onToggleProps,
   treeAppearance,
   slot = 'toggles',
@@ -587,20 +589,14 @@ export function ToggleRailButtons({
     );
   }
 
-  // Default slot: 📁 + ℹ️ pair. Sits next to the search box in
-  // the topbar, separate from the settings cog (which now lives
-  // next to the account menu on the right edge).
+  // Default slot: ℹ️ properties-panel toggle only. The folder-tree
+  // toggle (📁) that used to live next to it has been removed — the
+  // tree is now always visible on desktop, so a toggle for it would
+  // do nothing useful. The .nc-toggles wrapper stays as a single-
+  // child flex container so future buttons can be added back here
+  // without touching layout CSS.
   return (
     <div className="nc-toggles">
-      <button
-        type="button"
-        className={`nc-toggle ${treeVisible ? 'nc-toggle-on' : ''}`}
-        onClick={onToggleTree}
-        title={treeVisible ? 'Hide folder tree' : 'Show folder tree'}
-        aria-pressed={treeVisible}
-      >
-        📁
-      </button>
       <button
         type="button"
         className={`nc-toggle ${propsVisible ? 'nc-toggle-on' : ''}`}
