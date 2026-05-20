@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 
 import { ApiError, searchApi } from '../api/client';
 import type { SearchResultDto, VaultDto } from '../api/types';
+import { useNoteDefaults, isFullNoteWidth } from '../settings/noteDefaults';
 import { VaultAvatar } from './VaultAvatar';
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -81,6 +82,19 @@ export function SearchBox({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // The user's global default note width. Live-updates when the user
+  // drags the note-width slider in the appearance settings (the
+  // noteDefaults hook subscribes to its own storage listener and
+  // emits new defaults). The dropdown sizes itself to match: when
+  // a note is open at 1000px wide, search results appear in the
+  // same 1000px column. When the global default is the FULL
+  // sentinel ("fill editor area"), we treat that as the numeric max
+  // (2400) and let the app-frame clamp do the final cap.
+  const noteDefaults = useNoteDefaults();
+  const noteWidthPx = isFullNoteWidth(noteDefaults.defaults.width)
+    ? 2400
+    : noteDefaults.defaults.width;
+
   // Inline-style overrides for the dropdown so it can grow beyond
   // its containing column. Anchored to the input's bounding rect via
   // position:fixed; recomputed in a layout effect below on every open
@@ -149,23 +163,25 @@ export function SearchBox({
 
   // Compute the dropdown's screen-space position whenever it might
   // need to be visible. The dropdown uses position:fixed so it can
-  // escape its parent flex column and span the full app-frame width
-  // (not just the topbar centre column).
+  // escape its parent flex column.
   //
   // Anchoring rules:
   //   - top:      directly below the input (input.bottom + small gap)
-  //   - left:     the app-frame's left edge plus a padding gutter
-  //   - width:    app-frame width minus 2× the padding gutter
+  //   - width:    the user's global default note width, so search
+  //               results appear in the same column width as the
+  //               notes themselves. Capped to the app-frame width
+  //               minus a small gutter, and floored at 280 so it
+  //               never collapses to a sliver.
+  //   - left:     centred inside the app-frame (so the dropdown sits
+  //               in the same horizontal position the notes occupy).
   //   - maxH:     viewport bottom minus the input's bottom minus a
-  //               small bottom gutter, so the dropdown always fits
-  //               on screen and uses everything below the input
+  //               small bottom gutter — always fits, uses everything
+  //               available below the input.
   //
-  // Recomputes on: open state change, window resize/scroll, app-frame
-  // width changes (the user dragged the appearance slider). The scroll
-  // listener is "true" passive — we just snap to the new position;
-  // the dropdown doesn't track scroll smoothly because the topbar
-  // itself doesn't scroll (the topbar is `position: sticky` at the
-  // top of the layout).
+  // Recomputes on: open state change, window resize/scroll, and the
+  // user's note-width setting changing while the dropdown is open
+  // (so it tracks the slider live). The scroll listener is capture-
+  // phase so ancestor-container scrolls also re-anchor the dropdown.
   useLayoutEffect(() => {
     if (!open) {
       setDropdownStyle(null);
@@ -181,28 +197,31 @@ export function SearchBox({
       // fall back to the viewport itself.
       const frame = document.querySelector('.nc-app-frame');
       const frameRect = frame?.getBoundingClientRect();
-      const padding = 16; // gutter on each side of the dropdown
+      const padding = 16; // gutter on each side, only used for the cap
       const frameLeft = frameRect ? frameRect.left : 0;
       const frameRight = frameRect ? frameRect.right : window.innerWidth;
-      const left = frameLeft + padding;
-      const width = Math.max(280, frameRight - frameLeft - 2 * padding);
+      const maxAllowedWidth = frameRight - frameLeft - 2 * padding;
+      // Clamp the note-width to what the app frame can hold, and
+      // floor it so the dropdown never goes below a usable minimum.
+      const width = Math.max(280, Math.min(noteWidthPx, maxAllowedWidth));
+      // Centre horizontally inside the app frame. This matches how
+      // .nc-editor sits inside its container — notes are centred,
+      // so search results being centred makes them feel like they
+      // belong to the same column.
+      const left = frameLeft + Math.max(padding, (frameRight - frameLeft - width) / 2);
       const top = inputRect.bottom + 4;
-      // Leave a small gutter at the bottom of the viewport so the
-      // dropdown doesn't kiss the edge.
       const bottomGutter = 12;
       const maxHeight = Math.max(160, window.innerHeight - top - bottomGutter);
       setDropdownStyle({ top, left, width, maxHeight });
     }
     recompute();
     window.addEventListener('resize', recompute);
-    // Capture-phase scroll so we catch scrolls in ancestor containers
-    // (the app shell, the page main, etc.), not just window scrolls.
     window.addEventListener('scroll', recompute, true);
     return () => {
       window.removeEventListener('resize', recompute);
       window.removeEventListener('scroll', recompute, true);
     };
-  }, [open]);
+  }, [open, noteWidthPx]);
 
   // The actual query. Debounced; cancels the in-flight result set on
   // every keystroke + vault-selection change so stale results don't
