@@ -84,25 +84,31 @@ export const MathPasteExtension = Extension.create({
           },
 
           transformPastedHTML(html) {
-            // Cheap no-op when no katex / math annotation is present.
-            // We also skip if our own data-math-* placeholders already
-            // exist (a paste of HTML that came FROM NoteControl).
-            if (
-              html.indexOf('data-math-inline') < 0 &&
-              html.indexOf('data-math-block') < 0 &&
-              html.indexOf('application/x-tex') < 0
-            ) {
-              return html;
-            }
-
-            // Use DOMParser to walk the HTML safely. textContent of
-            // the annotation element holds the LaTeX source verbatim.
+            // Two jobs in this hook, in order:
             //
-            // Why DOMParser instead of regex on the HTML string?
-            // KaTeX's MathML annotations contain HTML entities, line
-            // breaks, and other quoting noise that's painful to
-            // regex out reliably. Going through the browser parser
-            // is one short function and handles all that for free.
+            // 1. If the HTML contains KaTeX's MathML annotations
+            //    (a paste from another KaTeX-rendering app), extract
+            //    the LaTeX source from each annotation and replace
+            //    the surrounding `<span class="katex">` with our
+            //    placeholder element.
+            //
+            // 2. THEN walk the remaining text nodes and run the
+            //    math scanner on each — this covers the common
+            //    case of pasting from an AI chat where the
+            //    clipboard's HTML representation is plain HTML
+            //    with literal `$..$` / `$$..$$` in paragraph text.
+            //    (ProseMirror prefers HTML over text/plain when
+            //    both are on the clipboard, so transformPastedText
+            //    never runs in that case — we MUST do the dollar
+            //    rewrite here as well.)
+            //
+            // Step 2 used to live only on the text/plain path; the
+            // user-visible result of the previous version was that
+            // pasted LaTeX delimiters survived verbatim as literal
+            // text whenever the source app also offered text/html
+            // (most modern web apps do). Source: the actual paste
+            // bug that prompted this whole feature.
+
             let doc: Document;
             try {
               doc = new DOMParser().parseFromString(html, 'text/html');
@@ -110,11 +116,7 @@ export const MathPasteExtension = Extension.create({
               return html;     // can't parse → leave it alone
             }
 
-            // For each `<span class="katex">` element, find the
-            // annotation child and replace the outer span with our
-            // placeholder. The annotation's display mode is signalled
-            // by an ancestor class `katex-display` (block) vs. its
-            // absence (inline).
+            // --- Step 1: KaTeX MathML annotations ---------------
             const katexNodes = doc.querySelectorAll('.katex');
             katexNodes.forEach((kn) => {
               const ann = kn.querySelector(
@@ -128,23 +130,24 @@ export const MathPasteExtension = Extension.create({
                 kn.parentElement?.classList.contains('katex-display');
               const placeholder = doc.createElement(isBlock ? 'div' : 'span');
               if (isBlock) {
-                placeholder.setAttribute(
-                  'data-math-block',
-                  // Decode here is intentional: setAttribute will
-                  // entity-encode automatically; we want the raw
-                  // string in the DOM attribute.
-                  src,
-                );
+                placeholder.setAttribute('data-math-block', src);
               } else {
                 placeholder.setAttribute('data-math-inline', src);
               }
-              // Replace the outermost katex-display wrapper if
-              // present (block math) so we don't leave its
-              // surrounding chrome behind.
               const replaceTarget =
                 kn.closest('.katex-display') ?? kn;
               replaceTarget.replaceWith(placeholder);
             });
+
+            // --- Step 2: dollar / backslash delimiters in text --
+            //
+            // We walk text nodes and scan each one. Matches get
+            // replaced by a mix of text + placeholder elements in
+            // the parent. Skip text inside <code>, <pre>, <script>,
+            // <style>, and any element that's ALREADY one of our
+            // own math placeholders (idempotency: re-pasting our
+            // own HTML doesn't double-encode).
+            rewriteTextNodesInPlace(doc, doc.body);
 
             return doc.body.innerHTML;
           },
@@ -153,6 +156,125 @@ export const MathPasteExtension = Extension.create({
     ];
   },
 });
+
+/**
+ * Walk all descendant text nodes of `root` and rewrite ones that
+ * contain math delimiters. Each match becomes a placeholder
+ * element inserted in place of the matched substring.
+ *
+ * Skips text inside elements where math substitution would do
+ * harm: `<code>`, `<pre>`, `<script>`, `<style>`, and our own
+ * placeholders (so re-pasting NoteControl HTML is idempotent).
+ *
+ * Mutates the DOM tree under `root`. Uses `doc` (the document
+ * that owns `root`) for all DOM construction — DOMParser-created
+ * documents are SEPARATE from `window.document`, and node
+ * creation / TreeWalker creation MUST happen via the owning
+ * document, not the global one.
+ */
+function rewriteTextNodesInPlace(doc: Document, root: Element): void {
+  const SKIP_TAGS = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE']);
+  const walker = doc.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (n) => {
+        let p: Node | null = n.parentNode;
+        while (p && p !== root) {
+          if (p.nodeType === Node.ELEMENT_NODE) {
+            const el = p as Element;
+            if (SKIP_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+            if (
+              el.hasAttribute('data-math-inline') ||
+              el.hasAttribute('data-math-block')
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+          }
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+
+  const textNodes: Text[] = [];
+  let cur = walker.nextNode();
+  while (cur) {
+    textNodes.push(cur as Text);
+    cur = walker.nextNode();
+  }
+
+  for (const node of textNodes) {
+    const text = node.nodeValue ?? '';
+    if (
+      text.indexOf('$') < 0 &&
+      text.indexOf('\\(') < 0 &&
+      text.indexOf('\\[') < 0
+    ) {
+      continue;
+    }
+    const rewritten = rewriteMarkdownMathToHtml(text, {
+      allowFences: false,
+    });
+    if (rewritten === text) continue;
+
+    // Convert the rewritten string into a fragment via a
+    // throwaway wrapper. The non-tag gaps in `rewritten` are
+    // raw text from the source DOM (which may contain `<` /
+    // `&` already decoded), so we have to re-escape them
+    // before letting innerHTML parse the string. The
+    // placeholder tags themselves are well-formed because
+    // mathParser.ts emits them with attribute-escaped sources.
+    const wrapper = doc.createElement('span');
+    wrapper.innerHTML = escapeNonMathGaps(rewritten);
+
+    const parent = node.parentNode;
+    if (!parent) continue;
+    const frag = doc.createDocumentFragment();
+    while (wrapper.firstChild) {
+      frag.appendChild(wrapper.firstChild);
+    }
+    parent.replaceChild(frag, node);
+  }
+}
+
+/**
+ * The scanner output is a string like:
+ *   "Force Limit: <span data-math-inline=\"5,650 \\text{ N}\"></span> and more."
+ *
+ * The non-tag gaps ("Force Limit: ", " and more.") were originally
+ * plain text and may contain `<` or `&` that would mis-parse if
+ * fed directly into innerHTML. This helper splits the rewritten
+ * string at our placeholder tag boundaries, HTML-escapes the
+ * gaps, and rejoins.
+ */
+function escapeNonMathGaps(rewritten: string): string {
+  // Match either a math placeholder span/div (self-closing-shaped
+  // as the scanner emits them) OR a chunk of non-tag text.
+  // The placeholder pattern is anchored on the tag name and the
+  // self-closing `></span>` / `></div>` shape so we don't match
+  // user-provided HTML tags that happen to share a substring.
+  const placeholderRe =
+    /<(span|div)\s+data-math-(inline|block)="[^"]*"><\/\1>/g;
+  let out = '';
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = placeholderRe.exec(rewritten)) !== null) {
+    const gap = rewritten.slice(lastIdx, m.index);
+    out += escapeHtmlText(gap) + m[0];
+    lastIdx = m.index + m[0].length;
+  }
+  out += escapeHtmlText(rewritten.slice(lastIdx));
+  return out;
+}
+
+function escapeHtmlText(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 /**
  * Convenience: run the math substitution on a markdown body
