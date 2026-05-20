@@ -134,6 +134,52 @@ Layout: **3 panes**.
   inline. Includes a Move button that toggles the layout into
   "move mode" (clicking a folder in the tree completes the move).
 
+## Tree rail header
+
+A thin strip at the top of the left rail with two button-pills:
+
+- **📅 Daily Note +** on the left — opens today's daily note,
+  creating it (along with the year + month subfolders) if it
+  doesn't yet exist. Idempotent server-side; spamming the
+  button is harmless. Tooltip shows the local date so the user
+  can verify before clicking. The 📅 glyph matches the Daily
+  Notes folder icon in the tree below, keeping the button and
+  its target row visually paired.
+- **+** dropdown on the right — opens a small menu of four
+  actions, in this order:
+  1. **📄 Add Note** — opens an inline new-note prompt in the
+     tree under the resolved target folder.
+  2. **📁 Add Folder** — same, for a new folder.
+  3. **📥 Import .md or .zip…** — opens a file picker that
+     accepts both `.md` and `.zip`. The server detects which
+     was uploaded and routes accordingly (single markdown
+     file → one note; zip → tree of notes + assets). A
+     summary modal appears after with per-file outcomes
+     (created / renamed-on-conflict / skipped / failed).
+  4. **🏠 Add Dashboard** — creates a new dashboard and
+     navigates to its (empty) canvas. Disabled until the
+     dashboards config has loaded (a brief window on first
+     vault open); shows a "still loading" tooltip in the
+     meantime.
+
+The `+` menu items show their resolved **target folder** as a
+small muted hint ("in vault root", "into Projects/Q4"). The
+target follows the existing tree-selection rule used elsewhere
+in the rail: folder selection → that folder; note selection →
+its parent folder; nothing selected → vault root.
+
+Both pills appear identically on mobile, with larger touch
+targets (36 px tall vs 28 px on desktop) and a slightly larger
+menu-item padding. The mobile rail used to omit Add Dashboard
+and Import for space reasons; the dropdown reclaims that and
+exposes both on mobile too — destinations (dashboard canvas,
+import modal) aren't tuned for narrow viewports, but the
+affordance is present.
+
+The menu closes on outside click, Escape, or after picking an
+item. Picking Import suppresses the menu before the OS file
+picker pops up so the menu doesn't shadow the picker visually.
+
 ## Editor view
 
 The editor opens when a note is selected. The layout still has
