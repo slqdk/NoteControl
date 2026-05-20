@@ -515,10 +515,20 @@ export const assetsApi = {
 // ============================================================== SEARCH
 
 export const searchApi = {
-  /** GET /api/vaults/{id}/search?q=... */
-  query: (vaultId: string, q: string, folderPath = '') => {
+  /**
+   * GET /api/vaults/{id}/search?q=...
+   *
+   * Optional `folderPath` restricts the search to one folder subtree
+   * (passed through as `?path=`). Optional `limit` caps the number
+   * of results — the server clamps anything > 200 anyway, and the
+   * default (omitted) is 50. The SearchBox passes a smaller per-vault
+   * limit when fanning out across multiple vaults so a wide fan-out
+   * doesn't return hundreds of rows.
+   */
+  query: (vaultId: string, q: string, folderPath = '', limit?: number) => {
     const params = new URLSearchParams({ q });
     if (folderPath) params.set('path', folderPath);
+    if (limit && limit > 0) params.set('limit', String(limit));
     return request<SearchResponseDto>(
       `/api/vaults/${vaultId}/search?${params.toString()}`,
     );

@@ -1812,7 +1812,26 @@ body.nc-dragging * {
 }
 .nc-search-result:last-child { border-bottom: none; }
 .nc-search-result:hover { background: var(--nc-bg-elev); }
-.nc-search-result-title { font-weight: 500; margin-bottom: 2px; }
+
+/* Header row inside each result: title on the left, vault chip on
+   the right. Flex so a long title truncates rather than pushing
+   the chip out of the row. */
+.nc-search-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.nc-search-result-title {
+  font-weight: 500;
+  /* Truncate long titles so the vault chip always fits. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
 .nc-search-result-snippet { font-size: 13px; color: var(--nc-fg-muted); }
 .nc-search-result-snippet strong {
   color: var(--nc-fg);
@@ -1820,8 +1839,101 @@ body.nc-dragging * {
   padding: 0 2px; border-radius: 2px;
 }
 .nc-search-result-path { font-size: 11px; color: var(--nc-fg-muted); margin-top: 4px; }
+
+/* Per-result "from <vault>" chip. Sits at the right edge of each
+   result's header row. Uses the existing VaultAvatar component for
+   visual consistency with the topbar vault picker. */
+.nc-search-result-vault {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 999px;
+  padding: 1px 8px 1px 2px;
+}
+.nc-search-result-vault-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .nc-search-empty, .nc-search-error { padding: 12px; color: var(--nc-fg-muted); font-size: 13px; }
 .nc-search-error { color: var(--nc-error-fg); }
+
+/* Per-vault toggle row at the top of the search dropdown. Each pill
+   shows a vault avatar + name; clicking toggles whether that vault
+   is included in the search. Horizontally scrollable so a long
+   vault list doesn't push the dropdown wide. */
+.nc-search-scope {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg-elev);
+  /* Hide scrollbar gutter on Firefox; WebKit handles via ::-webkit
+     below. Keeps the row visually compact when nothing overflows. */
+  scrollbar-width: thin;
+}
+.nc-search-scope::-webkit-scrollbar { height: 6px; }
+.nc-search-scope::-webkit-scrollbar-thumb {
+  background: var(--nc-border);
+  border-radius: 3px;
+}
+.nc-search-scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px 10px 3px 4px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--nc-border);
+  background: var(--nc-bg);
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+  /* Dim "off" state visually — opacity + muted text. Matches the
+     "active vs inactive" pattern used by the VaultPicker pills. */
+  opacity: 0.55;
+  transition: opacity 90ms ease-out, background 90ms ease-out, border-color 90ms ease-out;
+}
+.nc-search-scope-pill:hover {
+  opacity: 0.85;
+}
+.nc-search-scope-pill-on {
+  opacity: 1;
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent-bg-soft);
+  color: var(--nc-fg);
+}
+.nc-search-scope-pill-on:hover {
+  border-color: var(--nc-accent);
+}
+.nc-search-scope-pill-label {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Container for per-vault error chips, shown between the toggle
+   row and the results. Quiet styling — small italic per failing
+   vault. */
+.nc-search-errors {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--nc-border);
+}
+.nc-search-errors .nc-search-error {
+  padding: 4px 4px;
+  font-size: 12px;
+  font-style: italic;
+}
 
 /* ---------- Editor ------------------------------------------------- */
 

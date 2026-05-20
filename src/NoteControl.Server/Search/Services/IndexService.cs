@@ -156,11 +156,54 @@ public sealed class IndexService : IIndexService
         // Folder-prefix filter. Empty folderPath means whole vault.
         var prefix = string.IsNullOrEmpty(folderPath) ? "" : folderPath + "/";
 
-        var results = !string.IsNullOrWhiteSpace(query)
-            ? await SearchByQueryAsync(lease.Connection, query, tag, prefix, clampedLimit, ct).ConfigureAwait(false)
-            : await SearchByTagAsync(lease.Connection, tag!, prefix, clampedLimit, ct).ConfigureAwait(false);
+        List<SearchResultDto> results;
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            // Two-pass strategy for free-text queries:
+            //   1. Strict AND across all whitespace-separated terms
+            //      (preserves the prior behaviour — phrase-like matching
+            //      where every term must appear).
+            //   2. If pass 1 returned zero hits AND the query has 2+
+            //      terms, retry with OR so any single term still
+            //      surfaces something. Single-term queries skip pass 2
+            //      because OR-of-one is the same query.
+            //
+            // This makes "ax5000 dr" find notes that contain either
+            // "ax5000" or "dr" when no note contains both, matching the
+            // user expectation of "treat word 2 as a new criterion if
+            // the strict query finds nothing".
+            //
+            // The OR retry is silent: the response shape is unchanged
+            // and the client can't tell which pass produced the hits.
+            // Ranking inside each pass is FTS5's `rank` (BM25-ish) so
+            // the most relevant hit floats to the top.
+            results = await SearchByQueryAsync(
+                lease.Connection, query, tag, prefix, clampedLimit, useOr: false, ct).ConfigureAwait(false);
+
+            if (results.Count == 0 && HasMultipleTerms(query))
+            {
+                results = await SearchByQueryAsync(
+                    lease.Connection, query, tag, prefix, clampedLimit, useOr: true, ct).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            results = await SearchByTagAsync(lease.Connection, tag!, prefix, clampedLimit, ct).ConfigureAwait(false);
+        }
 
         return new SearchResponseDto(results, _buildState.IsBuilding(vaultId));
+    }
+
+    /// <summary>
+    /// True when the raw query has at least two whitespace-separated
+    /// terms — the threshold at which the OR fallback kicks in.
+    /// Single-term queries skip the retry because OR-of-one matches
+    /// the same set as AND-of-one.
+    /// </summary>
+    private static bool HasMultipleTerms(string rawQuery)
+    {
+        var sep = new[] { ' ', '\t', '\r', '\n' };
+        return rawQuery.Split(sep, StringSplitOptions.RemoveEmptyEntries).Length >= 2;
     }
 
     private static async Task<List<SearchResultDto>> SearchByQueryAsync(
@@ -169,13 +212,16 @@ public sealed class IndexService : IIndexService
         string? tag,
         string prefix,
         int limit,
+        bool useOr,
         CancellationToken ct)
     {
-        // Build an FTS5 MATCH expression that ANDs the user's terms together.
-        // We don't expose the raw FTS5 syntax (NEAR, column filters, etc.) —
-        // user terms are quoted to make every term a phrase, which keeps
-        // characters like '-' and ':' from being interpreted as operators.
-        var match = BuildMatchExpression(rawQuery);
+        // Build an FTS5 MATCH expression from the user's terms. With
+        // useOr=false the terms are ANDed (strict match); useOr=true
+        // ORs them (any single term hits). We don't expose the raw
+        // FTS5 syntax (NEAR, column filters, etc.) — user terms are
+        // quoted to make every term a phrase, which keeps characters
+        // like '-' and ':' from being interpreted as operators.
+        var match = BuildMatchExpression(rawQuery, useOr);
         if (match.Length == 0)
         {
             return new List<SearchResultDto>();
@@ -283,10 +329,11 @@ public sealed class IndexService : IIndexService
     /// <summary>
     /// Convert a user-entered query into a safe FTS5 MATCH expression.
     /// Each whitespace-separated term is quoted (so it's treated as a
-    /// phrase literal, not parsed for operators) and ANDed together.
-    /// Returns an empty string if no usable terms remain.
+    /// phrase literal, not parsed for operators) and joined with AND
+    /// or OR depending on <paramref name="useOr"/>. Returns an empty
+    /// string if no usable terms remain.
     /// </summary>
-    private static string BuildMatchExpression(string rawQuery)
+    private static string BuildMatchExpression(string rawQuery, bool useOr)
     {
         var terms = rawQuery
             .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -298,7 +345,7 @@ public sealed class IndexService : IIndexService
             var escaped = term.Replace("\"", "\"\"");
             parts.Add($"\"{escaped}\"");
         }
-        return string.Join(" AND ", parts);
+        return string.Join(useOr ? " OR " : " AND ", parts);
     }
 
     // ----------------------------------------------------------------- Rebuild

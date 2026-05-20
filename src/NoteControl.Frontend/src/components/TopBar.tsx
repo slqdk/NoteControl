@@ -242,7 +242,15 @@ export function TopBar({
         )}
       </div>
       <div className="nc-topbar-center">
-        {vault && <SearchBox vaultId={vault.id} placeholder="Search this vault…" />}
+        {vault && (
+          <SearchBox
+            vaultId={vault.id}
+            vaults={vaults}
+            placeholder={
+              vaults && vaults.length > 1 ? 'Search notes…' : 'Search this vault…'
+            }
+          />
+        )}
       </div>
       <div className="nc-topbar-right">
         {rightExtras}
