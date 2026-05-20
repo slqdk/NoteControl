@@ -29,6 +29,11 @@ import { FontFamilyMark } from '../editor/FontFamilyMark';
 import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
 import { CodeBlockPlainPasteExtension } from '../editor/CodeBlockPlainPasteExtension';
+import {
+  MathPasteExtension,
+  preprocessMarkdownForMath,
+} from '../editor/MathPasteExtension';
+import { MathExtension } from '../editor/MathExtension';
 import { refreshTemplates } from '../editor/templateCache';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
@@ -480,6 +485,20 @@ export function NoteEditor({
         // screenshot paste still wins; that path is unrelated to
         // this fix.
         CodeBlockPlainPasteExtension,
+        // Math nodes (mathInline + mathBlock) plus the
+        // MathPasteExtension that turns LaTeX delimiters in pasted
+        // text/HTML into math nodes. Registered after the other
+        // paste interceptors so file/image paste still wins on
+        // their respective paths, and after PasteNormalizeExtension
+        // so HTML normalization (Word/Excel cruft removal) is done
+        // before we look for KaTeX MathML annotations on
+        // text/html. The MathExtension nodes register parseHTML
+        // for `[data-math-inline]` / `[data-math-block]` so the
+        // placeholders produced by the paste path become real
+        // math nodes during the slice import. See
+        // editor/MathPasteExtension.ts and editor/MathExtension.ts.
+        MathPasteExtension,
+        ...MathExtension,
         // Slash menu (Notion-style insert popup). Triggered by
         // typing "/" — shows a filterable list of insertable
         // blocks (headings, lists, code, image, etc.).
@@ -513,7 +532,18 @@ export function NoteEditor({
         // pollute markdown saves or undo history.
         TrailingParagraph,
       ],
-      content: initialNote.body,
+      // The body string is pre-processed to inline math placeholders
+      // BEFORE tiptap-markdown parses it. preprocessMarkdownForMath
+      // converts `$..$`, `$$..$$`, `\(..\)`, `\[..\]` into the
+      // `<span data-math-inline>` / `<div data-math-block>` HTML
+      // markers that the MathExtension's parseHTML rules turn into
+      // real math nodes. Without this step, math nodes would survive
+      // a save (the serializer emits `$..$` / `$$..$$`) but would
+      // NOT render on the next load — they'd come back as literal
+      // dollar-delimited text. See editor/MathPasteExtension.ts and
+      // editor/mathParser.ts for the scanner rules (Pandoc whitespace
+      // protection, currency-safe `$5 and $10`, code-fence skipping).
+      content: preprocessMarkdownForMath(initialNote.body),
       // When a note is marked locked in its frontmatter, the editor
       // becomes read-only. The user can still navigate to it, copy
       // text out, and inspect its properties, but typing has no
@@ -916,7 +946,15 @@ export function NoteEditor({
     function onReload(e: Event) {
       const ce = e as CustomEvent<{ path: string; body: string; etag: string }>;
       if (ce.detail?.path !== initialNote.path) return;
-      editor!.commands.setContent(ce.detail.body, false);
+      // Same math pre-processing as the initial-content path —
+      // setContent feeds tiptap-markdown's parser, which doesn't
+      // know `$..$` so we rewrite to HTML placeholders first.
+      // lastSavedMarkdownRef stays the RAW (un-rewritten) body so
+      // the dirty-check against the serializer output stays clean.
+      editor!.commands.setContent(
+        preprocessMarkdownForMath(ce.detail.body),
+        false,
+      );
       lastSavedMarkdownRef.current = ce.detail.body;
       etagRef.current = ce.detail.etag;
       setSaveState({ kind: 'saved' });

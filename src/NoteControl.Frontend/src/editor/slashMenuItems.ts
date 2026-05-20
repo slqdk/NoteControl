@@ -1289,6 +1289,48 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
       },
     },
 
+    // --- Math --------------------------------------------------------
+    // Two flavours:
+    //   - Block math   : centered display-style equation. Fresh insertion
+    //                    starts empty; MathNodeView auto-opens the edit
+    //                    popover on mount when it sees an empty `latex`.
+    //   - Inline math  : an inline atom that sits in a paragraph.
+    //
+    // Both honour the same Pandoc/Obsidian on-disk syntax ($..$ / $$..$$),
+    // and the editor also accepts \(..\) / \[..\] on paste and on load
+    // — output is always normalized to dollars on save. See
+    // editor/mathParser.ts for the rationale.
+    {
+      title: 'Math (block)',
+      subtitle: 'Display-style LaTeX equation',
+      icon: '∑',
+      keywords: ['math', 'latex', 'equation', 'formula', 'katex', 'block'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertMathBlock('')
+          .run();
+        // No insertTrailingParagraph: insertMathBlock already
+        // appends a paragraph after the math (see MathExtension).
+      },
+    },
+    {
+      title: 'Math (inline)',
+      subtitle: 'Inline LaTeX expression',
+      icon: '𝑥',
+      keywords: ['math', 'latex', 'equation', 'inline', 'katex'],
+      command: ({ editor, range }) => {
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertMathInline('')
+          .run();
+      },
+    },
+
     // --- Table -------------------------------------------------------
     {
       title: 'Table',

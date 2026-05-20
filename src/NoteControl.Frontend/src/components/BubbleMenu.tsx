@@ -521,6 +521,42 @@ export function BubbleMenu({
     editor.chain().focus().setLink({ href: trimmed }).run();
   };
 
+  /**
+   * "Make inline math" — turn the currently selected text into the
+   * LaTeX source of a new inline math node. The plain text of the
+   * selection is treated as raw LaTeX (no transformation), so a
+   * selection of "x^2 + 1" becomes a math node rendering x²+1.
+   *
+   * If the selection is empty, we insert an empty math node and
+   * MathNodeView's mount effect auto-opens the editor popover —
+   * functionally the same as Ctrl+Shift+M, but reachable via
+   * mouse. Marks on the selected text are NOT preserved (they
+   * wouldn't make sense as LaTeX source anyway — bold/italic in
+   * the source would mangle the LaTeX).
+   *
+   * The "containing" check returns false if the selection spans
+   * across a block boundary (e.g. paragraph → list item); in
+   * that case we still extract textBetween, which gives a
+   * newline-joined string. Most LaTeX is single-line, so cross-
+   * block selections will probably render as a broken expression;
+   * the user can edit it via the popover that opens immediately
+   * after.
+   */
+  const handleMakeInlineMath = () => {
+    const { from, to, empty } = editor.state.selection;
+    if (empty || from === to) {
+      editor.chain().focus().insertMathInline('').run();
+      return;
+    }
+    const source = editor.state.doc.textBetween(from, to, ' ').trim();
+    editor
+      .chain()
+      .focus()
+      .deleteSelection()
+      .insertMathInline(source)
+      .run();
+  };
+
   /*
    * Ship 98b: "Save selection as template".
    *
@@ -775,6 +811,15 @@ export function BubbleMenu({
           title={isLink ? 'Remove link' : 'Add link'}
         >
           🔗
+        </button>
+        <button
+          type="button"
+          className="nc-bubble-button"
+          onClick={handleMakeInlineMath}
+          title="Make inline math (LaTeX)"
+        >
+          {/* Italic-x as the math glyph — matches the slash-menu icon. */}
+          <em>𝑥</em>
         </button>
         {showSaveAsTemplate && (
           <button

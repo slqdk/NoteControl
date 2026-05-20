@@ -14,6 +14,15 @@ import './runtime.css';
 // out of the giant styles.css and makes reverting one feature a
 // single-file delete + import-line removal.
 import './motion-block.css';
+// KaTeX stylesheet — required for math nodes to render correctly.
+// Imported before our own math.css so any selectors in math.css
+// (specifically: tweaks to the .katex-display container's margin
+// inside the editor) win on cascade order. KaTeX ships its
+// .woff2 fonts adjacent to the CSS; Vite resolves them through
+// the bundled `/assets/` URL path, which is `'self'` per CSP —
+// no font-src widening needed.
+import 'katex/dist/katex.min.css';
+import './math.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

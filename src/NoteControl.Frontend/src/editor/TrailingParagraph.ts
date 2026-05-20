@@ -132,6 +132,11 @@ const TRAPPING_BLOCKS = new Set<string>([
   'horizontalRule',
   'image',
   'video',
+  // mathBlock is a block-level atom node (KaTeX-rendered display
+  // equation). Without a paragraph beneath it the cursor has
+  // nowhere to land below the last math block in a note — same
+  // trap as the other block atoms.
+  'mathBlock',
 ]);
 
 const trailingParagraphPluginKey = new PluginKey('trailingParagraph');

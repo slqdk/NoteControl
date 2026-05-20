@@ -25,6 +25,11 @@ import { FontFamilyMark } from '../editor/FontFamilyMark';
 import { FontSizeMark } from '../editor/FontSizeMark';
 import { PasteNormalizeExtension } from '../editor/PasteNormalizeExtension';
 import { CodeBlockPlainPasteExtension } from '../editor/CodeBlockPlainPasteExtension';
+import {
+  MathPasteExtension,
+  preprocessMarkdownForMath,
+} from '../editor/MathPasteExtension';
+import { MathExtension } from '../editor/MathExtension';
 import { TableToolbar } from './TableToolbar';
 import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
@@ -157,6 +162,13 @@ export function TemplateEditor({
       // destination block. See CodeBlockPlainPasteExtension.ts for
       // the rationale.
       CodeBlockPlainPasteExtension,
+      // Math nodes + paste interceptor — same as NoteEditor. Templates
+      // can contain inline / block LaTeX; instances of a template
+      // inserted into a note carry the math nodes through (the
+      // template insertion path round-trips through markdown, so
+      // math survives via the same `$..$` / `$$..$$` form).
+      MathPasteExtension,
+      ...MathExtension,
       Placeholder.configure({
         placeholder: "Write the template body. Use '/' for commands.",
       }),
@@ -215,7 +227,12 @@ export function TemplateEditor({
       // TrailingParagraph for full rationale.
       TrailingParagraph,
     ],
-    content: initialBody,
+    // Same math pre-processing the NoteEditor uses on load —
+    // rewrites LaTeX delimiters to HTML placeholders so the
+    // MathExtension's parseHTML rules pick them up as math nodes.
+    // Without this, math in a template would survive a save but
+    // not render on the next open. See MathPasteExtension.ts.
+    content: preprocessMarkdownForMath(initialBody),
     // Templates are always editable. There's no locked-mode
     // concept like notes have.
     editable: true,

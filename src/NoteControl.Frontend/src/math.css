@@ -1,0 +1,336 @@
+/*
+ * math.css — Styling for math (LaTeX) nodes and the math edit
+ * popover.
+ *
+ * Loaded after katex.min.css in main.tsx so our cascade overrides
+ * win where they overlap (notably: the .katex-display top/bottom
+ * margins are KaTeX defaults aimed at standalone docs; inside the
+ * editor we want tighter vertical rhythm).
+ *
+ * Naming convention follows the rest of NoteControl: `nc-` prefix,
+ * BEM-ish modifier suffixes.
+ */
+
+/* ============================================================
+   Inline math
+   ============================================================
+   Lives inside paragraph flow. Click target is the rendered
+   KaTeX area; cursor changes to pointer to advertise it.
+*/
+
+.nc-math-inline {
+  /* The outer NodeViewWrapper for inline math. */
+  display: inline;
+}
+
+.nc-math-inline-content {
+  display: inline-block;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  /* The dotted underline is a soft "this is an editable atom"
+     affordance — same idea as the dotted underline link convention,
+     but quieter (just two pixels). On hover we tint the background
+     so the user knows the click is a real interaction. */
+  transition: background-color 80ms ease-out;
+}
+
+.nc-math-inline-content:hover {
+  background-color: rgba(99, 102, 241, 0.10);    /* indigo tint */
+}
+
+/* When ProseMirror has the inline math node selected (e.g. the
+   user clicked it; arrow-keys into it would also flip this), give
+   it a visible outline so deletion via Backspace doesn't feel
+   like a "what just got deleted?" surprise. */
+.nc-math-inline.nc-math-selected .nc-math-inline-content {
+  background-color: rgba(99, 102, 241, 0.18);
+  outline: 1px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 0;
+}
+
+/* The render target span — KaTeX writes its output here. We
+   don't override KaTeX's font-size for inline math; it inherits
+   the surrounding paragraph's size which is what users expect. */
+.nc-math-inline .nc-math-render {
+  display: inline;
+}
+
+/* ============================================================
+   Block math
+   ============================================================
+   Standalone block, centred display-style equation. Gets a
+   tight vertical rhythm (KaTeX's defaults are too generous for
+   the editor's typical line-height).
+*/
+
+.nc-math-block {
+  margin: 0.6em 0;
+}
+
+.nc-math-block-content {
+  display: block;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: center;
+  transition: background-color 80ms ease-out;
+}
+
+.nc-math-block-content:hover {
+  background-color: rgba(99, 102, 241, 0.06);
+}
+
+.nc-math-block.nc-math-selected .nc-math-block-content {
+  background-color: rgba(99, 102, 241, 0.10);
+  outline: 1px solid rgba(99, 102, 241, 0.45);
+  outline-offset: 0;
+}
+
+/* Tighten KaTeX's display-mode default margins inside the editor
+   so block math doesn't blow up the line-height pattern of the
+   surrounding text. */
+.nc-math-block .katex-display {
+  margin: 0;
+}
+
+.nc-math-block .katex-display > .katex {
+  /* Slightly smaller than the standalone display-mode default;
+     keeps block math from dominating the visual hierarchy of a
+     mixed prose-and-math note. */
+  font-size: 1.10em;
+}
+
+/* ============================================================
+   Edit popover
+   ============================================================
+   Floats above the editor. Three regions stacked vertically:
+   header, body (textarea + preview side-by-side), palette,
+   then footer.
+*/
+
+.nc-math-popover {
+  background: var(--nc-bg, #ffffff);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22),
+              0 2px 4px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  color: var(--nc-fg, #1f2937);
+  user-select: text;
+}
+
+@media (prefers-color-scheme: dark) {
+  .nc-math-popover {
+    background: var(--nc-bg, #1f2937);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: var(--nc-fg, #e5e7eb);
+  }
+}
+
+.nc-math-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(99, 102, 241, 0.06);
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+
+.nc-math-popover-hint {
+  opacity: 0.70;
+  font-size: 11px;
+}
+
+.nc-math-popover-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.nc-math-popover-source {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  resize: vertical;
+  min-height: 56px;
+  padding: 6px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.nc-math-popover-source:focus {
+  border-color: rgba(99, 102, 241, 0.7);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.nc-math-popover-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nc-math-popover-preview-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+
+.nc-math-popover-preview {
+  flex: 1;
+  min-height: 56px;
+  padding: 6px 8px;
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+  overflow-x: auto;
+  /* Centre the rendered math vertically and horizontally. The
+     KaTeX output has its own internal layout, so we just set
+     up a flex container around it. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .nc-math-popover-preview {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  .nc-math-popover-source {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  .nc-math-popover-header {
+    border-bottom-color: rgba(255, 255, 255, 0.10);
+  }
+}
+
+/* Reset KaTeX's display margins inside the preview pane too —
+   same rationale as the in-editor block math. */
+.nc-math-popover-preview .katex-display {
+  margin: 0;
+}
+
+/* ============================================================
+   Symbol palette
+   ============================================================
+*/
+
+.nc-math-popover-palette {
+  padding: 6px 12px 0 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.nc-math-palette-group {
+  margin-bottom: 8px;
+}
+
+.nc-math-palette-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  margin-bottom: 4px;
+}
+
+.nc-math-palette-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nc-math-palette-button {
+  min-width: 30px;
+  padding: 4px 8px;
+  font-family: 'KaTeX_Main', 'Cambria Math', serif;
+  font-size: 13px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 5px;
+  cursor: pointer;
+  color: inherit;
+  transition: background-color 60ms ease-out;
+}
+
+.nc-math-palette-button:hover {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  .nc-math-palette-button {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .nc-math-popover-palette {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* ============================================================
+   Footer (Cancel + Insert)
+   ============================================================
+*/
+
+.nc-math-popover-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px 12px 10px 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .nc-math-popover-footer {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.nc-math-popover-button-primary,
+.nc-math-popover-button-secondary {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.nc-math-popover-button-primary {
+  background: rgb(99, 102, 241);
+  color: #ffffff;
+  border-color: rgb(79, 82, 221);
+}
+
+.nc-math-popover-button-primary:hover {
+  background: rgb(89, 92, 231);
+}
+
+.nc-math-popover-button-secondary {
+  background: transparent;
+  color: inherit;
+  border-color: rgba(0, 0, 0, 0.18);
+}
+
+.nc-math-popover-button-secondary:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .nc-math-popover-button-secondary {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  .nc-math-popover-button-secondary:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
