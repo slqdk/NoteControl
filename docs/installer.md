@@ -189,6 +189,78 @@ setup script (Caddy service argument); decoupling it from
 DataRoot avoids the case where someone moves DataRoot and the
 Caddy service can't find its config.
 
+## Mobile install (PWA)
+
+Once the server is reachable over HTTPS, end-users can install
+NoteControl as a home-screen app on their phone. There is no
+separate app to download — the SPA itself ships as an
+installable PWA via `manifest.webmanifest` in the frontend's
+public assets, served from the same origin as the SPA.
+
+### What the user does
+
+**Android (Chrome / Edge / Samsung Internet):** open the
+server URL in the browser, then either tap the "Install app"
+prompt that appears in the address bar or use the three-dot
+menu → "Add to Home Screen" / "Install app". An icon lands on
+the home screen; tapping it launches NoteControl in standalone
+mode with no browser chrome.
+
+**iOS (Safari):** open the server URL, tap the Share button,
+then "Add to Home Screen". Same effect — icon on home screen,
+launches in standalone mode.
+
+No App Store, no Play Store, no fees. Each installed PWA points
+at the origin it was installed from, so a self-hoster who
+installs from `https://my-server.example` ends up with an icon
+that opens THAT server. Different self-hosters can install from
+their own URLs without conflict.
+
+### HTTPS is mandatory
+
+Browsers will not offer the PWA install prompt unless the page
+is served over HTTPS with a **publicly trusted certificate**
+(Let's Encrypt via the bundled Caddy, or any other real CA).
+Self-signed certs do not satisfy the install criteria — most
+mobile browsers either hide the install option entirely or
+fail silently when the user tries.
+
+In practice: a NoteControl install becomes mobile-installable
+the moment `setup-https.ps1` has been run AND the tray's HTTPS
+tab has a public hostname configured with a working Caddy
+cert. Plain `http://...:2424` or `https://<machine-name>:2424`
+with a self-signed cert do not qualify.
+
+### What is and isn't packaged
+
+The frontend bundle in every release contains the manifest
+and the icons (192×192, 512×512, and a 512×512 maskable
+variant for Android adaptive icons). The installer does not
+need any additional steps — once the SPA is deployed,
+`/manifest.webmanifest` and the icon URLs are reachable as
+ordinary static assets. The server's static-file middleware
+explicitly registers `.webmanifest` as
+`application/manifest+json` because ASP.NET Core's default
+MIME map does not include that extension (it would otherwise
+serve as `application/octet-stream` and browsers would refuse
+the install).
+
+### What this PWA does NOT do
+
+The first PWA ship is deliberately minimal:
+
+- **No service worker.** The app requires network on launch;
+  there is no offline editing or app-shell caching. Launching
+  the icon while offline shows the browser's no-connection
+  error page.
+- **No push notifications, share-target, or background sync.**
+  Those features require a service worker and additional
+  manifest entries.
+- **No Play Store / App Store listing.** The PWA install flow
+  is browser-driven only. A Trusted Web Activity wrapper for
+  the Play Store is a possible future addition but is not
+  bundled with the server.
+
 ## Release zip layout
 
 Produced by `publish.ps1` at the repo root. Each release zip

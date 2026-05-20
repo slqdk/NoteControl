@@ -77,10 +77,11 @@ The top bar contains, left to right:
        desktop workflow.
 3. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
-4. **Rail toggle slot** — placeholder filled by VaultLayout. Has
-   two buttons (📁 toggles the tree rail, ℹ️ toggles the
-   properties panel) in vault routes. Empty on routes without a
-   shared layout.
+4. **Rail toggle slot** — placeholder filled by VaultLayout. Holds
+   the **ℹ️ properties-panel toggle** in vault routes. (The 📁
+   tree-rail toggle that used to share this slot has been removed
+   — the tree is always visible on desktop now.) Empty on routes
+   without a shared layout.
 5. **Widgets+ button** — visible on every dashboard URL
    (`/vaults/:id/dashboards/:dashboardId` and the legacy
    `/vaults/:id/startpage` redirect). Drops down "Add RSS feed
@@ -88,8 +89,12 @@ The top bar contains, left to right:
    `CustomEvent` that the dashboard page listens for.
 6. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-7. **Account menu** — current user's name, with a popover menu
-   (Account, My sessions, Settings, Sign out).
+7. **Settings cog** — opens the settings popover (tree font + font
+   size, click-to-expand, note defaults, app-width slider, theme,
+   background gradient). Rendered to the **left** of the account
+   menu so the account menu anchors the topbar's right edge.
+8. **Account menu** — current user's name, with a popover menu
+   (Account, My sessions, Settings, Sign out). Always rightmost.
 
 ## Settings (web UI, not the tray)
 
@@ -127,7 +132,8 @@ the web UI. See [tray.md](tray.md).
 
 Layout: **3 panes**.
 
-- **Left rail (tree)**: collapsible (toggle in topbar).
+- **Left rail (tree)**: always visible on desktop. (No toggle —
+  the previous 📁 topbar button was removed.)
 - **Centre**: folder listing — current folder's contents as a
   list with name + kind + updated timestamp + size. Includes
   inline rows for "new folder" and "new note" prompts.
@@ -270,6 +276,28 @@ with its own dedicated navigation surface (the **MobileNavBar**)
 in place of the desktop tree rail. Properties stay edit-able
 inline inside the editor. A few other desktop-only affordances
 are suppressed (see bullets at the bottom).
+
+### Installable as a PWA
+
+The SPA ships with a Web App Manifest (`/manifest.webmanifest`)
+so it can be installed as a home-screen app on mobile devices.
+Android Chrome surfaces an "Install app" prompt; iOS Safari
+exposes "Add to Home Screen" in the Share menu. The installed
+icon launches NoteControl in **standalone mode** — no browser
+chrome, brand-blue (`#2563EB`) status-bar tint on Android, the
+brand mark from the favicon/tray-icon family used as the
+launcher icon.
+
+Each installed PWA points at the origin it was installed from,
+so different self-hosters install separate, non-conflicting
+icons pointing at their own servers. Install requires HTTPS
+with a publicly trusted certificate — see
+[installer.md › Mobile install (PWA)](installer.md) for
+prerequisites.
+
+This first PWA ship is minimal: no service worker, no offline
+support, no push notifications. The app requires network on
+launch.
 
 ### MobileNavBar
 
