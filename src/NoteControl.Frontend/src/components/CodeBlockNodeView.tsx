@@ -6,6 +6,10 @@ import {
 } from '@tiptap/react';
 
 import { RuntimeModal } from './RuntimeModal';
+import {
+  collectActionBodies,
+  expandActions,
+} from '../editor/actionExpansion';
 
 /**
  * NodeView for code blocks with an editable title.
@@ -57,7 +61,19 @@ export function CodeBlockNodeView({
   const [draft, setDraft] = useState<string>(
     (node.attrs.title as string) ?? 'code',
   );
-  const [runtimeOpen, setRuntimeOpen] = useState(false);
+
+  // Run-button state. Ship 2 (action expansion) replaces the
+  // earlier single-boolean `runtimeOpen` with an "opened with
+  // these texts" state, because the implementation text shown in
+  // (and run by) the modal is the *post-expansion* form — actions
+  // called from the main body have been inlined into it. We hold
+  // both the declaration and implementation in state so the modal
+  // sees a consistent snapshot taken at click time, not a value
+  // that might race with editor edits during the modal session.
+  const [runtimePayload, setRuntimePayload] = useState<{
+    declarationText: string;
+    implementationText: string;
+  } | null>(null);
 
   // Sync draft when node attrs change from elsewhere (e.g. an undo
   // step). We do this with a useEffect-like pattern: just check on
@@ -81,10 +97,57 @@ export function CodeBlockNodeView({
     }
   }
 
-  // Determine whether to show the Run button.
+  // Determine whether to show the Run button — same rule as before:
+  // st-language Implementation with a Declaration sibling above.
+  // Actions don't satisfy this triplet (the slash menu emits them
+  // with prefixed titles like "ACTION Foo — Implementation"), so
+  // the Run button still appears ONLY on the POU's main body
+  // block. That's deliberate: the entire FB + its actions is the
+  // unit you run.
   const runnable = isRunnableImplementation(node, getPos, editor);
-  const declarationText = runnable ? readDeclarationSibling(getPos, editor) : null;
-  const implementationText = runnable ? (node.textContent as string) : null;
+
+  /**
+   * Run-click handler.
+   *
+   * Three steps:
+   *   1. Read the Declaration sibling (existing behaviour).
+   *   2. Walk the document for st-language code blocks whose title
+   *      matches the "ACTION <name> — Implementation" pattern,
+   *      and build a name → body map. This snapshot is taken at
+   *      click time so subsequent edits don't change what we run.
+   *   3. Expand action calls in the implementation source. On
+   *      expansion failure (recursive action cycle, primarily),
+   *      surface the error via window.alert and abort — leaves
+   *      the editor untouched, the user can investigate.
+   *
+   * Success: stash the expanded payload in state, which triggers
+   * the modal to render with the snapshot.
+   *
+   * Note: we deliberately don't memoise step (2) across renders.
+   * The walk is O(top-level-children) and happens once per click;
+   * caching would add complexity for a sub-millisecond saving.
+   */
+  function handleRunClick(): void {
+    if (typeof getPos !== 'function' || !editor) return;
+    const declarationText = readDeclarationSibling(getPos, editor) ?? '';
+    const rawImplementation = node.textContent as string;
+    const actionBodies = collectActionBodiesFromDoc(editor);
+
+    let expanded: string;
+    try {
+      expanded = expandActions(rawImplementation, actionBodies);
+    } catch (e) {
+      window.alert(
+        `Couldn't run this code block.\n\n${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    setRuntimePayload({
+      declarationText,
+      implementationText: expanded,
+    });
+  }
 
   return (
     <NodeViewWrapper className="nc-codeblock-wrap">
@@ -117,7 +180,7 @@ export function CodeBlockNodeView({
               // the click.
               e.preventDefault();
             }}
-            onClick={() => setRuntimeOpen(true)}
+            onClick={handleRunClick}
             aria-label="Run this code block"
             title="Run this code block in the ST sandbox"
           >
@@ -128,11 +191,11 @@ export function CodeBlockNodeView({
       <pre className="nc-codeblock-pre">
         <NodeViewContent as="code" />
       </pre>
-      {runtimeOpen && declarationText !== null && implementationText !== null && (
+      {runtimePayload && (
         <RuntimeModal
-          declarationText={declarationText}
-          implementationText={implementationText}
-          onClose={() => setRuntimeOpen(false)}
+          declarationText={runtimePayload.declarationText}
+          implementationText={runtimePayload.implementationText}
+          onClose={() => setRuntimePayload(null)}
         />
       )}
     </NodeViewWrapper>
@@ -197,4 +260,33 @@ function readPreviousSibling(
   } catch {
     return null;
   }
+}
+
+/**
+ * Walk top-level document children, find all st-language code
+ * blocks, and build an ActionBodies map keyed by lower-cased
+ * action name. Used by the Run handler to snapshot the action
+ * universe at click time.
+ *
+ * Top-level only: the slash menu always inserts FBs (and their
+ * member sections) flush at the document root. Nesting a code
+ * block inside a callout or a table cell is technically possible
+ * in TipTap but isn't a path the PLCOpenXML importer creates, so
+ * we don't search inside containers. If someone manually authored
+ * an action block inside a callout it just won't be picked up —
+ * a known limitation that's never going to surprise an importer
+ * user.
+ */
+function collectActionBodiesFromDoc(
+  editor: NonNullable<NodeViewProps['editor']>,
+): ReturnType<typeof collectActionBodies> {
+  const blocks: Array<{ title: string | null; language: string | null; text: string }> = [];
+  editor.state.doc.forEach((child) => {
+    if (child.type.name !== 'codeBlock') return;
+    const title = (child.attrs.title as string | null) ?? null;
+    const language = (child.attrs.language as string | null) ?? null;
+    const text = child.textContent as string;
+    blocks.push({ title, language, text });
+  });
+  return collectActionBodies(blocks);
 }
