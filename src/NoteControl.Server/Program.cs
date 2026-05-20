@@ -621,6 +621,23 @@ try
             //     over HTTPS, and we don't want to encourage
             //     unencrypted image fetches.
             "img-src 'self' data: https:; " +
+            // font-src: 'self' covers our own font files (KaTeX ships
+            // its .woff2 / .woff / .ttf files adjacent to its CSS,
+            // which Vite bundles under /assets/ at build time). The
+            // `data:` source is required because KaTeX's CSS embeds
+            // ONE font (KaTeX_Size3) as a base64 data: URI rather
+            // than a separate file — this is upstream behaviour we
+            // don't control. Without `data:` here, KaTeX rendering
+            // of large-bracket / parenthesis glyphs (anything that
+            // uses the Size3 family) falls back to the browser's
+            // default math glyphs, which collapse fractions onto a
+            // single line and look wrong.
+            //
+            // Why no full URL allowlist (e.g. cdn.jsdelivr.net)? We
+            // serve KaTeX from our own bundle, never from a CDN, so
+            // 'self' is sufficient for the file-based fonts and the
+            // data: scheme covers the inlined one.
+            "font-src 'self' data:; " +
             "media-src 'self'; " +
             "object-src 'none'; " +
             "frame-ancestors 'none'; " +
