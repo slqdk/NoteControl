@@ -2,10 +2,9 @@
 
 The browser-side React + TypeScript SPA. Read this when you're
 touching routes, the top bar, the properties panel, sticky
-notes, RSS blocks, dashboards, assignments, settings, or the
-appearance system. The editor itself, slash menu, daily-note
-formatting, and tree behaviour are documented in
-[notes.md](notes.md).
+notes, RSS blocks, the startpage, settings, or the appearance
+system. The editor itself, slash menu, daily-note formatting,
+and tree behaviour are documented in [notes.md](notes.md).
 
 ## Routes
 
@@ -17,18 +16,16 @@ The full route table:
 | `/vaults` | Vault list | required | Picks a vault. Auto-redirects to last-opened vault if one is remembered. |
 | `/vaults/:vaultId` | Folder view | required | Tree on the left, folder contents in the middle, properties on the right. |
 | `/vaults/:vaultId/note?path=…` | Editor | required | Single-note editor. The path is URL-encoded. |
-| `/vaults/:vaultId/dashboards/:dashboardId` | Dashboard | required | One dashboard's free-floating canvas. See [Dashboards](#dashboards). |
-| `/vaults/:vaultId/assignments` | Assignments | required | Per-vault list of assignments grouped by category. See [Assignments](#assignments). |
-| `/vaults/:vaultId/startpage` | (redirect) | required | Legacy alias. Loads the vault's dashboard list and replaces itself with the first dashboard's URL. Kept so existing links (the tray's "open vault" menu, the vault list page, user bookmarks) still land somewhere useful. |
+| `/vaults/:vaultId/startpage` | Startpage | required | Per-vault dashboard with movable blocks. |
 | `/vaults/:vaultId/templates` | Templates | required | Manages the vault's template files. Has its own header (no shared layout). |
 | `*` (anything else) | redirect to `/vaults` | n/a | |
 
-The folder, editor, and dashboard routes share a common
+The folder, editor, and startpage routes share a common
 **VaultLayout** that mounts once per vault session. Switching
-between a folder, a note, or a dashboard does not unmount the
-layout — the tree's cached children, expanded set, selection,
-AND the loaded dashboards config all survive navigation. The
-templates page does NOT use this layout (it's full-width).
+between a folder and a note (or between two notes) does not
+unmount the layout — the tree's cached children, expanded set,
+and selection survive navigation. The templates page does NOT
+use this layout (it's full-width).
 
 ## App frame
 
@@ -51,50 +48,24 @@ Cross-tab changes propagate via the `storage` event.
 
 The top bar contains, left to right:
 
-1. **Brand logo** — the NoteControl `[NC]` mark. Always present
-   on desktop (no click handler — purely a brand anchor). Sits
-   to the left of the vault picker. Hidden on mobile (≤ 768 px)
-   to leave horizontal room for the picker and search box; the
-   browser-tab favicon serves as the mobile brand instead.
-2. **Vault picker** — depends on context:
-   - On the vault list page (no vault open yet): nothing here.
+1. **Brand / vault picker** — depends on context:
+   - On the vault list page: just the brand text.
    - On any `/vaults/:vaultId/*` page with the full vault list
-     loaded: a **vault picker** with two layout variants:
-     - **Desktop** (> 768 px): inline pills. Pills that fit
-       render in the original vault order; whichever pills
-       don't fit fold into a "+N ▾" overflow dropdown. The
-       active vault is treated like any other pill — if it
-       doesn't fit, it ends up in the dropdown and the trigger
-       gains the active highlight. Right-click on the active
-       pill (or on the trigger when the active vault is hidden)
-       opens an **appearance popover** (12 emoji + 8 colour
-       swatches + auto fallback) for changing the vault's
-       icon/colour.
-     - **Mobile** (≤ 768 px): a single trigger pill (active
-       vault's avatar + name + caret) that opens a dropdown
-       listing every vault. No inline-pill overflow algorithm
-       and no appearance popover — vault customisation stays a
-       desktop workflow.
-3. **Search box** — searches the current vault. Submits to
+     loaded: a desktop-only **vault picker**. ≤ 3 vaults render
+     as inline pills. > 3 vaults render as the active pill +
+     dropdown for the others. Right-click on the active pill
+     opens an **appearance popover** (12 emoji + 8 colour swatches
+     + auto fallback) for changing the vault's icon/colour.
+2. **Search box** — searches the current vault. Submits to
    `/api/vaults/{id}/search`. Hits open the result in the editor.
-4. **Rail toggle slot** — placeholder filled by VaultLayout. Holds
-   the **ℹ️ properties-panel toggle** in vault routes. (The 📁
-   tree-rail toggle that used to share this slot has been removed
-   — the tree is always visible on desktop now.) Empty on routes
-   without a shared layout.
-5. **Widgets+ button** — visible on every dashboard URL
-   (`/vaults/:id/dashboards/:dashboardId` and the legacy
-   `/vaults/:id/startpage` redirect). Drops down "Add RSS feed
-   / Add Task area / Add Links"; selecting one fires a window
-   `CustomEvent` that the dashboard page listens for.
-6. **Templates link** — direct route to the templates page for
+3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
+   two buttons (📁 toggles the tree rail, ℹ️ toggles the
+   properties panel) in vault routes. Empty on routes without a
+   shared layout.
+4. **Templates link** — direct route to the templates page for
    the current vault (in vault routes).
-7. **Settings cog** — opens the settings popover (tree font + font
-   size, click-to-expand, note defaults, app-width slider, theme,
-   background gradient). Rendered to the **left** of the account
-   menu so the account menu anchors the topbar's right edge.
-8. **Account menu** — current user's name, with a popover menu
-   (Account, My sessions, Settings, Sign out). Always rightmost.
+5. **Account menu** — current user's name, with a popover menu
+   (Account, My sessions, Settings, Sign out).
 
 ## Settings (web UI, not the tray)
 
@@ -132,8 +103,7 @@ the web UI. See [tray.md](tray.md).
 
 Layout: **3 panes**.
 
-- **Left rail (tree)**: always visible on desktop. (No toggle —
-  the previous 📁 topbar button was removed.)
+- **Left rail (tree)**: collapsible (toggle in topbar).
 - **Centre**: folder listing — current folder's contents as a
   list with name + kind + updated timestamp + size. Includes
   inline rows for "new folder" and "new note" prompts.
@@ -141,44 +111,6 @@ Layout: **3 panes**.
   the selected note or folder; editable name/tags/locked/version
   inline. Includes a Move button that toggles the layout into
   "move mode" (clicking a folder in the tree completes the move).
-
-### Tree rail action buttons
-
-A strip of action buttons sits at the top of the tree rail, just
-above the tree itself. The buttons act on the **current
-toolbar-target folder** — either the selected folder in the
-tree, or the parent of the selected note. Order, left to right:
-
-1. **🏠+** — add a new dashboard. Disabled until the dashboards
-  config has loaded. **Desktop only** (dashboards are a desktop
-  workflow; see [Dashboards](#dashboards)).
-2. **📅 Daily Note +** — labelled pill, bordered. Opens (or
-  creates and opens) today's daily note. Idempotent server-side.
-  The button's tooltip shows the local date so the user can
-  verify which day they're about to land on. The 📅 glyph
-  matches the Daily Notes folder icon used in the tree below,
-  visually pairing the button with its target row.
-3. **📄+** — new note under the toolbar-target folder.
-4. **⌄** (import) — import-dropdown chevron. Sits tight against
-  📄+ so the pair reads as one widget. Opens a small menu with
-  the available import sources for the toolbar-target folder.
-  **Desktop only**.
-5. **📁+** — new folder under the toolbar-target folder.
-
-The Daily Note button is rendered as a labelled pill rather than
-an icon-only button because it's the most-used action in this
-strip; the explicit text makes it the visual anchor of the row.
-The other four are icon-only by design — they sit in known
-positions and the +/glyph pattern is enough once the user has
-learned the row.
-
-On **mobile** (≤ 768 px) the strip is hidden by default along
-with the rest of the tree rail. Expanding the tree (via the
-topbar's tree toggle) reveals the same strip with two
-omissions: 🏠+ and the ⌄ import chevron are not shown, since
-both target desktop workflows. The remaining three buttons
-(📅 Daily Note +, 📄+, 📁+) grow to a 36 px touch-target
-height for thumb use.
 
 ## Editor view
 
@@ -199,12 +131,13 @@ itself doesn't grow.
 
 The editor is **TipTap-based** with a custom extension set;
 features and shortcuts are documented in [notes.md](notes.md).
+The custom extensions include LaTeX/KaTeX math rendering
+(inline and block); see [notes.md § Math](notes.md#math) for
+delimiter rules, the edit popover, and the symbol palette.
 
 ## Properties panel
 
-Right-rail panel. Shape depends on what the URL is on:
-
-### For a selected note
+Shows the selected note or folder's metadata. For notes:
 
 - **Editable inline**: name, tags, locked toggle, version,
   per-note appearance (font / font size / page width).
@@ -214,205 +147,29 @@ Right-rail panel. Shape depends on what the URL is on:
 - **Buttons**: Move (toggles move-mode), Delete (with
   confirmation). Rename happens by editing the name inline.
 
-#### Save semantics — property edits never send body
-
-Each inline edit (Tags, Locked, Version, Font, FontSize, Width)
-sends a `PUT /api/vaults/{id}/note?path=…` carrying **only the
-field that changed**. The request body is omitted entirely.
-The server treats a missing `body` as "leave the on-disk body
-alone" and only rewrites the frontmatter.
-
-This contract exists because property edits can race with the
-editor's autosave. The panel only refetches the note when its
-own save bumps `refreshTick`; meanwhile, the editor may have
-autosaved newer content the panel hasn't seen. If the panel's
-property save carried `body: note.body`, that stale snapshot
-would overwrite the newer on-disk content on the server. So:
-property saves never send `body`. The editor's own save is the
-only path that sends `body`, paired with an `etag` for
-optimistic concurrency.
-
-The mobile equivalent (`MobileNoteProperties`) follows the same
-rule.
-
-### For a selected folder
-
-Name, full path, contents count, created/updated timestamps.
-Move/Delete buttons available.
-
-### For a dashboard
-
-The panel switches into a small dashboard-only view on any
-`/vaults/:id/dashboards/:id` URL:
-
-- **Editable inline**: name (same `EditableName` component the
-  note/folder rename UI uses; empty/slash-bearing names
-  rejected; duplicate-name attempts surface an inline error).
-- **Read-only**: type ("Dashboard").
-- **Buttons**: Delete (with confirmation), disabled when this
-  is the only dashboard in the vault.
-
-### Visibility
+For folders: name, full path, contents count, created/updated
+timestamps. Move/Delete buttons available.
 
 The panel toggles via the rail-toggle button in the topbar (or
-collapses automatically on narrow viewports). Two separate
-visibility states are tracked:
-
-- **Note/folder routes**: the persisted `propsVisible`
-  preference (per-browser localStorage).
-- **Dashboard routes**: an ephemeral "revealed" flag that
-  defaults to **hidden** on every dashboard URL change (initial
-  load, switching between dashboards, returning from a note).
-  The user reveals it on demand via the same ℹ️ rail toggle.
-
-Switching between contexts doesn't bleed state: a note-side
-"panel open" preference is left untouched while the user is on
-a dashboard, and reappears when they navigate back to a note.
+collapses automatically on narrow viewports).
 
 ## Mobile
 
-At viewports ≤ 768 px the shell flips to a single-column layout
-with its own dedicated navigation surface (the **MobileNavBar**)
-in place of the desktop tree rail. Properties stay edit-able
-inline inside the editor. A few other desktop-only affordances
-are suppressed (see bullets at the bottom).
+A few mobile-specific affordances:
 
-### Installable as a PWA
-
-The SPA ships with a Web App Manifest (`/manifest.webmanifest`)
-so it can be installed as a home-screen app on mobile devices.
-Android Chrome surfaces an "Install app" prompt; iOS Safari
-exposes "Add to Home Screen" in the Share menu. The installed
-icon launches NoteControl in **standalone mode** — no browser
-chrome, brand-blue (`#2563EB`) status-bar tint on Android, the
-brand mark from the favicon/tray-icon family used as the
-launcher icon.
-
-Each installed PWA points at the origin it was installed from,
-so different self-hosters install separate, non-conflicting
-icons pointing at their own servers. Install requires HTTPS
-with a publicly trusted certificate — see
-[installer.md › Mobile install (PWA)](installer.md) for
-prerequisites.
-
-This first PWA ship is minimal: no service worker, no offline
-support, no push notifications. The app requires network on
-launch.
-
-### MobileNavBar
-
-The MobileNavBar mounts directly under the top bar on every
-`/vaults/:vaultId/*` route and is the primary navigation surface
-on mobile — the tree rail is **not** rendered. The navbar is two
-stacked horizontally-scrolling rows of round circular buttons,
-each with an icon glyph and a label underneath. Horizontal
-overflow scrolls; scrollbars are hidden so the rows read as
-chrome rather than a list.
-
-**Row 1 — anchors.** Always visible. Fixed order:
-
-1. **Assignments** — calendar-clipboard icon (📋) on amber.
-   Navigates to `/vaults/:vaultId/assignments`. Active ring lights
-   up when the user is on the assignments page.
-2. **Daily notes** — calendar icon (📅) on teal. Pinned at this
-   position regardless of the vault's folder list. Tapping it
-   opens **today's daily note** (via the same `openToday` flow
-   used by the desktop's `Daily+` button) AND anchors row 2 to
-   the **Daily Notes folder's immediate children** (year folders)
-   — see "anchor override" below. The button always renders, even
-   when the vault has no `Daily Notes` folder yet; the server
-   creates the folder + today's file on the first tap.
-3. **Each root folder** — folder icon (📁) on a neutral-grey
-   backdrop, in the server's natural order, with the literal
-   `Daily Notes` folder filtered out (it's hoisted to position 2).
-   Tapping a folder navigates to its listing page; active ring
-   lights up when the URL's first path segment matches.
-
-All folder buttons share a single neutral-grey circle fill —
-folders are distinguishable by label. Only the fixed-identity
-anchors (Assignments amber, Daily Notes teal) and notes in row 2
-(teal) use a palette colour.
-
-**Row 2 — contextual children.** Walks with the user as they
-navigate:
-
-- **On a folder view** (`?path=A/B`) — shows the immediate
-  subfolders and notes of that folder.
-- **On the editor** (`/note?path=A/B/foo.md`) — shows the
-  immediate children of the note's parent folder, so the user
-  can hop to a sibling note in one tap.
-- **On Assignments / dashboards / vault root** — hidden.
-- **On a folder with no children** — hidden.
-
-Subfolder buttons use the same neutral-grey treatment as row 1;
-note buttons use a flat teal. Tapping a subfolder navigates into
-it (row 2 then walks down to show its children); tapping a note
-opens the editor.
-
-**Anchor override.** When the user taps Daily notes, row 2 is
-forced to show the `Daily Notes` folder's own immediate children
-even though the editor URL is now on a note nested several
-levels deeper inside it. The override is local component state
-— ephemeral, not persisted. It clears as soon as the user taps
-any other anchor button or any child in row 2; from that point
-the URL-derived "walks with you" logic resumes. A page refresh
-or deep-link starts with no override (a bookmarked URL on
-today's note doesn't pretend the user came from the Daily Notes
-anchor).
-
-The active ring on Daily Notes reflects the override — it lights
-up while the override is in effect, and goes dark the moment the
-user navigates away.
-
-### Mobile folder Add footer
-
-On folder listing pages (`/vaults/:vaultId?path=...`, also the
-vault root), the bottom of the content area renders an
-**+ Add note or folder** button (mobile only). Tapping it opens
-an inline composer with:
-
-- A **Note / Folder** pill selector.
-- A name input.
-- Cancel / Create buttons.
-
-Validation matches the desktop tree's inline new-row inputs:
-empty rejected, slashes rejected, dup names rejected
-case-insensitively against the current folder's children. On a
-successful Note create, the editor navigates to the new note;
-on a successful Folder create, the composer collapses and the
-new folder appears on the navbar (row 1 if at vault root, row 2
-otherwise) after the listing refresh.
-
-Desktop folder views deliberately skip this footer — note and
-folder creation belongs in the tree rail header buttons (📄+ /
-📁+) there.
-
-### Other mobile-specific behaviours
-
-- Properties panel content for notes is rendered inside the
-  editor itself via `MobileNoteProperties` when the right rail
-  is hidden, so edits to name/tags/etc. stay accessible. There
-  is no separate mobile properties surface for folders — folder
-  rename/move stay desktop workflows.
+- Tree and properties rails collapse by default on narrow
+  viewports.
+- Properties panel content is rendered inside the editor itself
+  via `MobileNoteProperties` when the right rail is hidden, so
+  edits to name/tags/etc. stay accessible.
 - **The topbar's Templates link is hidden** at ≤ 768 px —
   template management is a desktop workflow; the route is still
   reachable by URL, but isn't surfaced.
-- The vault picker collapses to a single-trigger dropdown
-  variant (see "Top bar" above).
-- Dashboards redirect to `/vaults/:vaultId` on mobile — the
-  free-floating canvas has no working interaction model on
-  touch. The navbar has no dashboard surface either.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
 
 This is desktop-first software. Mobile is "doesn't break,"
 not "first-class."
-
-> **Implementation note.** The legacy `.nc-mobile-tree-*`,
-> `.nc-rail-mobile`, and `[data-tree-expanded]` CSS rules in
-> `styles.css` are unused after the redesign and are kept
-> in place pending a cleanup ship. Don't add new rules under
-> those selectors; use `.nc-mobile-nav-*` instead.
 
 ## Templates page
 
@@ -515,11 +272,10 @@ The template editor's own slash menu (when editing a template
 body) hides this Templates entry — see
 [notes.md](notes.md#templates) for why.
 
-## Dashboards
+## Startpage
 
-Each vault holds one or more named **dashboards**, each owning
-its own free-floating canvas of blocks. The canvas is a 2D area
-(no grid) with four block types:
+Per-vault dashboard at `/vaults/:vaultId/startpage`. The
+canvas is a free-form 2D area (no grid) with three block types:
 
 - **RSS feed block** — fetches and displays a feed via the
   server's `/api/vaults/{id}/startpage/feed` proxy. Drag header
@@ -527,210 +283,25 @@ its own free-floating canvas of blocks. The canvas is a 2D area
   per-block settings (feed URL, title, max items).
 - **Task area** — a titled box containing draggable sticky
   notes. Each sticky has: a checkbox (done state, visual only),
-  a one-line headline, a multi-line content textarea, and a
-  gear menu. Notes have one of a fixed colour palette (yellow
-  is default).
-- **Links block** — a list of link entries (max 10 per block).
-  Has two modes toggled from the gear menu:
-  - **View mode** (default): rows are read-only. Each row shows
-    an optional thumbnail on the left, then the bold title and
-    a muted description line. Clicking a row opens the URL in
-    a new tab. The gear menu shows **Edit links** and
-    **Delete block**.
-  - **Edit mode**: the block gets an accent-coloured border as a
-    visual cue. Clicking a row opens its inline editor
-    (title / description / URL). On URL blur (or Enter) the
-    client calls `/api/vaults/{id}/startpage/link-preview` and
-    auto-fills any empty fields from the response (title,
-    description, thumbnail image URL). A hover-visible trash
-    button appears on each row for per-row deletion, and a
-    `+ Add link` button appears at the bottom of the list.
-    The gear menu shows **Done editing** and **Delete block**.
+  a one-line headline, a multi-line content textarea, and a gear
+  menu. Notes have one of a fixed colour palette (yellow is
+  default).
+- **Links block** — up to 10 link entries (title + description
+  + URL), click-to-edit, opens in new tab on click when not
+  editing.
 
-  Thumbnails are **hotlinked** — the stored `imageUrl` is the
-  original third-party URL, not a server-cached copy; the CSP
-  allows external HTTPS images. If the source image later 404s,
-  the row renders without a thumbnail (no broken-image icon)
-  but the URL is preserved in the JSON.
+Block layout (positions, sizes, contents) is stored in
+`{vault}/.notesapp/startpage.json` and saved with debounced
+~500ms cadence after the last edit.
 
-  Rows are **zebra-striped** in the active theme's tint —
-  alternating rows use a tonal cousin of the current gradient
-  preset (driven by the `--nc-stripe-bg-*` CSS vars). Hover
-  and edit-mode backgrounds override the stripe.
-
-  Edit-mode state is **per-session**: refreshing the page
-  returns the block to view mode. Adding the first link
-  requires entering edit mode first — view mode is fully
-  read-only.
-- **Motion calculator block** — a jerk-limited S-curve solver,
-  picked at insert-time from one of four sub-modes:
-  - **Calculator A** (Time → Dynamics): given travel time and
-    distance plus acc/dec ratio and S-curve sharpness sliders,
-    solves for peak velocity, acceleration, and jerk.
-  - **Calculator B** (Dynamics → Time): given dynamics limits
-    and a max velocity, solves for the resulting acc / cruise
-    / dec timings over a given distance. A "Set min. distance"
-    button fills in the smallest distance at which the system
-    can actually reach max velocity.
-  - **Calculator C** (Dynamics + Limits → Velocity): given
-    dynamics limits, a distance, and a total time, solves for
-    the highest peak velocity that fits inside both budgets.
-  - **Calculator D** (Motor / Gear + Time → Dynamics): same
-    motion math as A, plus a motor/gear panel above the form.
-    The panel has mechanical inputs (gear ratio, feed constant,
-    torque constant) and bidirectional motor↔gear conversion
-    of speed and torque (auto-syncs on every keystroke). The
-    motor side speed auto-fills from the motion profile and
-    can be manually overridden; a ↺ reset button next to the
-    motor speed re-couples it to the profile.
-  All four render the same velocity chart with optional
-  Acceleration and Jerk overlays. Inputs persist per block.
-
-Block layout (positions, sizes, contents) for ALL dashboards
-in a vault is stored in a single `{vault}/.notesapp/startpage.json`
-file (see [storage.md](storage.md#notesapp-subfolder) for the
-file schema and the legacy single-canvas read tolerance). The
-file is saved with debounced ~500ms cadence after the last
-edit.
-
-Adding a block to the current dashboard: the topbar's
-**Widgets+** dropdown lists "RSS feed", "Task area", "Links",
-and a **Motion ▸** entry. The Motion entry **swaps the popup
-in place** to a submenu with a "← Back" row plus the four
-calculators (A through D) — same in-place-swap pattern as the
-slash menu's Templates submenu. The dropdown communicates
-with the dashboard page via window `CustomEvent`s — no shared
-context.
-
-### Tree-side dashboards list
-
-The tree's left rail starts with the dashboards section: one
-row per dashboard, with the active one highlighted (matched
-against the URL's `:dashboardId`). Right-click a row for a
-small context menu:
-
-- **Rename** — swaps the row to an inline editable input
-  (Enter saves, Esc cancels, blur commits). Empty / whitespace
-  / duplicate-of-sibling names are rejected.
-- **Delete** — confirms, then removes the dashboard. Disabled
-  when this is the only dashboard left.
-
-Adding a new dashboard: the **🏠+** button in the tree's
-rail-header action row (next to `Daily+ / 📄+ / 📁+`). The
-button is desktop-only — hidden at ≤ 768 px (see
-[Mobile](#mobile)) since a dashboard's free-form canvas isn't
-usable on touch. New dashboards land at the end of the list,
-get a default name ("Dashboard", or "Dashboard 2",
-"Dashboard 3"… — the lowest unused number), and the URL
-navigates to them immediately.
-
-### State plumbing
-
-VaultLayout owns the per-vault dashboards config (the
-StartpageConfigDto for the whole vault) via the `useDashboards`
-hook — one fetch + one debounced save loop per vault session.
-Both the tree-side DashboardList and the dashboard canvas read
-from this same data, with mutations going through layout-
-provided callbacks. There is no second source of truth; adding
-a dashboard, switching to it, and editing widgets on it are
-all the same React state.
-
-### Properties panel
-
-See [Properties panel](#properties-panel) above for the
-dashboard fields. The panel is hidden by default on every
-dashboard URL change (including switches between dashboards),
-revealed on demand via the ℹ️ rail toggle.
-
-## Assignments
-
-Per-vault Assignments page at `/vaults/:vaultId/assignments`.
-Sits inside the shared `VaultLayout`, so the tree + topbar
-stay in place when the user navigates to it.
-
-The page lists the vault's assignments grouped into three
-**fixed-order** category buckets:
-
-1. **Short Term** — red accent.
-2. **Long Term** — yellow accent.
-3. **Development** — blue accent.
-
-The order is part of the contract — the UI never sorts the
-buckets at runtime. An empty bucket still renders its header
-+ a muted "No assignments here yet" hint, so the user always
-sees the same three-section structure.
-
-Inside a bucket, assignments render in stored-insertion order
-as a responsive card grid:
-
-- **Desktop**: `grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))`
-  — typically one column in a narrow rail, two on a wide one.
-- **Mobile** (≤ 768 px): forced single-column stack; the whole
-  page becomes one long scrollable list.
-
-Each card shows the assignment's **subject** (single-line
-headline) and, if non-empty, **details** (multi-line, newlines
-preserved). A trash icon in the top-right of every card
-deletes after a confirm. There is **no checkbox** and no
-strikethrough — by design; the lifecycle is add → optionally
-edit → delete, without a "done but kept around" state. (This
-is the deliberate difference from sticky notes in task areas,
-which DO have a done flag.)
-
-Clicking anywhere on a card (outside the trash icon) flips
-it into inline edit mode: a category dropdown, subject
-input, and details textarea, with **Done** and **Delete**
-buttons. Esc inside any field collapses the edit form.
-Changing the category in edit mode immediately moves the
-card to the new bucket on the next render.
-
-### Composer
-
-A persistent **+ Add assignment** button at the bottom of
-the page opens an inline composer in its place. The composer
-shows three colour-coded **category pills** (Short Term /
-Long Term / Development) selectable at first sight, a
-subject input, and a details textarea. Subject is required;
-the **Add** button stays disabled until it's non-empty.
-Enter in the subject field submits; Ctrl/Cmd+Enter in the
-details field submits; Esc cancels. Cancelling the composer
-discards the in-progress draft.
-
-### Tree-side row
-
-The tree's left rail carries a single **📋 Assignments**
-row, rendered directly below the dashboards section and
-above the folder rows. Same visual treatment as the
-dashboards section (font-weight + bottom-divider). Active
-when the URL is exactly `/vaults/:vaultId/assignments`.
-
-Unlike the dashboards section, this row is **visible on
-mobile too** — there's only ever one Assignments page per
-vault, the mobile layout (single-column stack) is fully
-usable, and the user wanted it always reachable.
-
-### Persistence
-
-Stored as a single JSON file at
-`{vault}/.notesapp/assignments.json` (see
-[storage.md](storage.md#notesapp-subfolder) for the file
-schema). Read once on initial page load; written debounced
-~500ms after the last edit. Same atomic temp-then-rename
-write pattern the startpage config uses.
-
-### Properties panel
-
-The Assignments page has no per-item selection that maps
-onto the properties panel's note/folder/dashboard surfaces,
-so the panel is **hidden by default** on this route. The
-ℹ️ rail toggle still flips visibility (reusing the same
-ephemeral "revealed" flag the dashboard routes use); when
-revealed, the panel falls back to its empty-selection
-state.
+Adding a block: the topbar's **Widgets+** dropdown (when on the
+startpage route) lists "Add RSS feed", "Add Task area", "Add
+Links". The dropdown communicates with the page via window
+`CustomEvent`s — no shared context.
 
 ## Sticky notes
 
-Sticky notes only exist inside Task areas on a dashboard.
+Sticky notes only exist inside Task areas on the startpage.
 They are not standalone documents and do not have markdown
 files. Each sticky has:
 

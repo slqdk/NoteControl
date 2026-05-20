@@ -89,6 +89,10 @@ The editor is TipTap-based. What it supports out of the box:
 - **Images**: inline, with hover controls (resize, replace,
   delete, alt-text).
 - **Videos**: inline, with hover controls (similar to images).
+- **Math** (LaTeX / KaTeX) in two flavours: inline (sits in a
+  paragraph like a word) and block (centred display equation).
+  See the **Math** section below for delimiter rules and
+  round-trip behaviour.
 
 What the editor does NOT do:
 
@@ -104,6 +108,9 @@ The editor honours TipTap defaults: Ctrl+B (bold), Ctrl+I
 (italic), Ctrl+U (underline), Ctrl+K (link), etc. Plus:
 
 - **Ctrl+S** — force-save (debounced auto-save runs anyway).
+- **Ctrl+Shift+M** — insert an empty inline math node at the
+  cursor and open its edit popover. Block math has no shortcut;
+  use `/math` for it.
 - **Tab / Shift-Tab** in lists — indent / outdent.
 - **/** at the start of a paragraph — open the slash menu.
 - **Ctrl+Backspace** in a table cell — delete the cell's row
@@ -117,267 +124,46 @@ block-insertion shortcuts. Items shown in order:
 
 1. **Templates** (only if the vault has at least one template;
    opens a submenu of the templates by name)
-2. **SupportCall** — inserts a customer-support intake skeleton
-   (see SupportCall subsection below)
-3. **Image** (only when image upload is enabled for the editor;
-   opens a file picker, uploads, inserts)
-4. **Code block** — ST runtime-ready Declaration + Implementation
-   pair (the same shape the PLCOpen XML import emits)
-5. **PLCOpen XML** — imports a TwinCAT 3 PLCopenXML export, one
-   POU at a time. Produces a Structure header (an ASCII tree of
-   the POU's contents), a Declaration + Implementation pair for
-   the POU body, and one section per contained Method, Action,
-   or Property accessor. See "PLC code blocks and the ST runtime"
-   below for what the runtime does with them.
-6. **TcPOU from GitHub** — fetches a `.TcPOU` file (single POU)
-   or a TcPOU folder (POU + sibling `.TcMethod`/`.TcAction`/
-   `.TcProperty` files, or the same names inside a same-named
-   subfolder) directly from a GitHub URL. Produces the same
-   output layout as PLCOpen XML. GitHub-only in this iteration;
-   other hosts are rejected.
-7. **Error callout**
-8. **Warning callout**
-9. **Info callout**
-10. **Tip callout**
-11. **Note callout**
-12. **Heading 1**
-13. **Heading 2**
-14. **Heading 3**
-15. **Bullet list**
-16. **Numbered list**
-17. **Quote**
-18. **Divider**
-19. **Table** (3×3 with header by default; opens a dimensions
-    dialog if the host wired one up)
-
-Ordering rationale: high-value insertable assets (SupportCall,
-Image, Code block, PLCOpen import, TcPOU from GitHub) sit at the
-top so they're one tap away. Colour-coded callouts follow.
-Structural and formatting blocks (headings, lists, quote,
-divider, table) sit at the bottom — still easy to filter to by
-typing (`/h1`, `/table`), but visually they shouldn't dominate
-the menu since markdown shortcuts (`#`, `-`, `1.`) already cover
-most of them.
+2. **Heading 1**
+3. **Heading 2**
+4. **Heading 3**
+5. **Bullet list**
+6. **Numbered list**
+7. **Code block**
+8. **Quote**
+9. **Divider**
+10. **Math (block)** — inserts an empty block math node and
+    opens the edit popover.
+11. **Math (inline)** — inserts an empty inline math node and
+    opens the edit popover.
+12. **Table** (3×3 with header)
+13. **Error callout**
+14. **Warning callout**
+15. **Info callout**
+16. **Tip callout**
+17. **Note callout**
+18. **Image** (only outside the templates editor; opens a file
+    picker, uploads, inserts)
 
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
 infix.
 
-#### SupportCall
-
-A single slash-menu item that inserts a pre-built customer
-intake skeleton: an info callout labelled "Kunde" stacked above
-a 6-row, 2-column labelled table.
-
-Layout produced by one pick:
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  Kunde                                          [i] Info │  (info callout)
-└──────────────────────────────────────────────────────────┘
-┌──────────────────────┬───────────────────────────────────┐
-│  **Project :**       │                                   │
-│  Kontakt person :    │                                   │
-│  Hardware :          │                                   │
-│  Software :          │                                   │
-│  Remote ID/Password :│                                   │
-│  Problem beskrivelse:│                                   │
-└──────────────────────┴───────────────────────────────────┘
-(empty paragraph below)
-```
-
-Defaults:
-
-- Total table width: **720 px** (180 label column + 540 value
-  column). Both column widths are set explicitly on the first
-  row's cells so the layout is deterministic on insert.
-- Label column is sized to fit the longest label
-  (`Remote ID / Password :`) without wrapping.
-- Cells have no fixed height; pressing Enter inside any value
-  cell inserts a hard break and the cell grows downward.
-
-Resize: drag the column divider between labels and values to
-shift the split, or drag the right edge of the table to widen
-or narrow the whole thing. Standard TipTap table column-resize
-behaviour — no SupportCall-specific drag handling.
-
-Markdown round-trip: because the table cells carry explicit
-`colwidth` attributes, the saved file uses HTML serialisation
-for this table rather than pipe syntax. Re-parsing on load
-works via the existing `parseHTML` rule.
-
-Known limitation: **bold marks inside cells are dropped on
-save** when the cell has a custom `colwidth`. This is a
-broader serializer limitation (applies to any table with
-column widths set), not SupportCall-specific. Visible effect:
-"Project :" is bolded immediately after insert but renders
-plain after a save-and-reload. The label text itself round-
-trips fine; only the bold mark is lost. Fixing it requires
-extending the cell HTML emitter to recurse into inline marks
-— deferred to a separate ship.
-
-Filtering: `/sup`, `/kunde`, `/customer`, `/ticket`, and
-`/intake` all surface the item.
-
-### PLC code blocks and the ST runtime
-
-Three slash items produce the same shape of inserted block:
-**Code block**, **PLCOpen XML**, and **TcPOU from GitHub**. The
-Code block item produces a hand-written skeleton; the other two
-parse a TwinCAT source artefact (a `.xml` PLCopenXML export or a
-`.TcPOU` file) and insert its contents. All three feed the same
-in-browser ST interpreter via the same Run button — documented
-below.
-
-#### Inserted layout
-
-A single import (one POU) produces, in document order:
-
-1. A bold header paragraph with the POU's name and `pouType`
-   (e.g. `XPlanarMoverControl (functionBlock)`).
-2. A **Structure** code block — a compact ASCII tree showing the
-   POU's contained Methods, Actions, Properties, and any TwinCAT
-   solution-folders that group them. Box-drawing characters
-   (`├─`, `└─`, `│`) render the hierarchy. Display-only: clicks
-   on tree rows do nothing. Language is `text` and title is
-   `Structure`, deliberately chosen so the Run button (below)
-   never triggers on this block.
-3. A **Declaration** code block (language `st`) holding the POU's
-   declaration text.
-4. An **Implementation** code block (language `st`) holding the
-   POU's body.
-5. One section per contained member, each preceded by a header
-   paragraph naming the member with a kind label:
-   - **Method**: header `METHOD <name>` + two code blocks titled
-     `METHOD <name> — Declaration` and `METHOD <name> — Implementation`.
-   - **Action**: header `ACTION <name>` + one code block titled
-     `ACTION <name> — Implementation`. Actions carry no own
-     declaration in TwinCAT — they execute in their parent FB's
-     scope.
-   - **Property Get/Set**: header `PROPERTY GET <name>` (or
-     `PROPERTY SET <name>`) + two code blocks per accessor:
-     `PROPERTY GET <name> — Declaration` / `…— Implementation`.
-
-The Code block slash item produces only steps 1, 3, and 4 — no
-Structure header, no members — with a `Program1` placeholder
-name and a starter `PROGRAM Program1 VAR ... END_VAR` declaration.
-
-#### The Run button
-
-The Run button appears in the header bar of any code block where
-all three hold:
-
-- The block's `language` is `st`.
-- The block's `title` is the bare string `Implementation` (case-
-  insensitive).
-- The immediately-preceding sibling node is a code block with
-  `language` `st` and `title` `Declaration` (case-insensitive).
-
-That triplet is what the Code block slash item and the POU-level
-output of PLCOpen XML / TcPOU imports emit. Member code blocks
-intentionally use **prefixed titles** (`METHOD <name> — Declaration`
-etc.) so they do NOT satisfy the runnable rule — the unit you
-run is the POU + its members, not an individual method body in
-isolation.
-
-Clicking Run opens the runtime modal with two panes: the
-declaration (a static source view that flips to a live watch
-table after the first scan) and the implementation (the source
-with inline value pills next to every variable reference).
-
-#### Action expansion at Run time
-
-When Run is clicked, before the implementation source goes to
-the parser, an **action expansion** pass rewrites the source:
-
-- The document is scanned for st-language code blocks whose
-  title matches `ACTION <name> — Implementation` (em-dash, en-
-  dash, and hyphen variants of the separator are all accepted —
-  in case a title was manually edited).
-- The implementation source is walked as a tiny state machine
-  (code / string / line-comment / block-comment). In code mode,
-  any identifier followed by `()` or `;` (case-insensitive name
-  match against the collected actions) is rewritten in place
-  with the action's body. Identifiers preceded by `.` (member
-  access like `fb.AbortMover()`) are NOT rewritten. Identifiers
-  inside ST string literals (`'…'`, with `$''` escapes) or
-  comments (`//…`, `(* … *)`) are NOT rewritten.
-- The rewrite is **iterative**: an action body that itself calls
-  another action expands too. Iteration is capped at 16 passes;
-  beyond that the modal opens with a recursion error naming the
-  most-recently-expanded action (the usual entry point of a
-  cycle).
-
-Expansion happens in the browser, on click, off the prosemirror
-document. The note's saved source is unaffected. What runs in
-the modal is what the modal's implementation pane shows — line
-numbers in runtime errors refer to the expanded source.
-
-What expansion does NOT do: methods and properties stay opaque.
-A call site like `myProp` or `MyMethod(x)` reaches the
-interpreter unmodified; the interpreter treats unknown
-identifiers as it normally would. Inlining methods and
-properties is out of scope.
-
-#### PLCOpen XML import
-
-Reads a `.xml` file produced by TwinCAT 3's PLCopenXML export.
-Bodies must be Structured Text; POUs in LD, FBD, or SFC are
-skipped with a summary alert listing the affected names.
-Individual members (methods / actions / property accessors)
-inside an importable POU are also skipped per-member if their
-body isn't ST — the rest of the POU still imports.
-
-Declaration text comes from the Beckhoff-flavoured
-`InterfaceAsPlainText` `addData` block when present (preserves
-original tabs / comments). When absent, a minimal declaration
-is synthesised by walking the structured `<interface>` elements;
-initial values and pragmas are NOT preserved in that fallback.
-
-The folder hierarchy shown in the Structure header comes from
-the project-level `ProjectStructure` `addData` block when
-present. When absent, members are listed flat in document order.
-
-#### TcPOU from GitHub
-
-Imports `.TcPOU` (and `.TcMethod` / `.TcAction` / `.TcProperty`)
-files from `github.com` and `raw.githubusercontent.com` over the
-network. Three URL shapes accepted:
-
-- **Blob URL**: `https://github.com/{owner}/{repo}/blob/{branch}/{path}.TcPOU`
-  — normalised to the raw equivalent and fetched.
-- **Raw URL**: `https://raw.githubusercontent.com/...` — fetched
-  as-is.
-- **Tree URL**: `https://github.com/{owner}/{repo}/tree/{branch}/{path}`
-  — pointing at a folder. The folder is listed via the GitHub
-  Contents API, the primary `.TcPOU` is identified, and sibling
-  `.TcMethod` / `.TcAction` / `.TcProperty` files in the same
-  folder OR in a same-named subfolder are fetched in parallel
-  and stitched into the POU. Folders containing more than one
-  `.TcPOU` are rejected; point at one POU's folder.
-
-CSP: the server's Content-Security-Policy includes `connect-src`
-entries for `raw.githubusercontent.com`, `api.github.com`, and
-`github.com`. Other hosts are blocked by the browser and
-rejected by the import code regardless. A server-side proxy for
-arbitrary hosts is a possible future ship.
-
-Rate limit: the GitHub Contents API allows 60 unauthenticated
-requests per hour per IP. A folder with ~20 members + listing
-calls fits comfortably; rapid repeated imports may hit the
-limit, in which case the import surfaces a 403 with a
-human-readable explanation.
-
 ### Bubble menu
 
 Selection in the editor floats a small toolbar with: bold,
-italic, link (text input), inline code. The link button uses
-the browser's `window.prompt` today (queue item: replace with a
-proper modal).
+italic, link (text input), inline code, and a **Make inline
+math** button (𝑥). The link button uses the browser's
+`window.prompt` today (queue item: replace with a proper
+modal). The math button turns the selected text into the
+LaTeX source of a new inline math node (the popover opens
+immediately so you can adjust the source); with no selection
+it inserts an empty inline math node — equivalent to
+`Ctrl+Shift+M`.
 
 ### Paste
 
-Two kinds of paste are handled specially:
+Three kinds of paste are handled specially:
 
 - **Image data on the clipboard** (e.g. screenshot from
   Snipping Tool): uploaded as an asset to the current note's
@@ -388,6 +174,16 @@ Two kinds of paste are handled specially:
   clipboard, in DOM order. Order is preserved relative to the
   surrounding text. Falls back to "drop the image" silently on
   HTTP failure or if the image count doesn't match.
+- **LaTeX delimiters in pasted text**: any of `$..$`,
+  `$$..$$`, `\(..\)`, `\[..\]` in pasted plain text OR in the
+  text content of pasted HTML (paragraphs, list items, etc.)
+  become math nodes. The substitution skips inside code fences,
+  inline code spans, and HTML tags. See the **Math** section
+  below for the exact delimiter rules. HTML pastes from
+  KaTeX-rendering apps are additionally checked for MathML
+  `<annotation encoding="application/x-tex">` blocks — when
+  present, the LaTeX source is extracted from there rather
+  than re-parsed from the visible delimiters.
 
 Asset paste requires a **secure context** (HTTPS or localhost)
 because `navigator.clipboard.read()` is gated on that. If
@@ -396,28 +192,6 @@ work; the user is told nothing — pre-existing limitation.
 
 Generated paste filenames: `paste-<unix-ms>-<index>.<ext>`.
 
-### Code blocks: copy and paste
-
-Code blocks bypass the markdown copy/paste round-trip and deal
-in plain text only:
-
-- **Copy from inside a code block**: only the raw code text
-  goes onto the clipboard (`text/plain`). The default markdown
-  copy serializer would emit the `<pre data-title="…"><code>…
-  </code></pre>` wrapper for code blocks with a non-default
-  title, which then pastes back as escaped literal text — so
-  for code-block-internal selections we override and emit just
-  the text.
-- **Paste into a code block**: the HTML payload is ignored;
-  only `text/plain` is inserted. This protects against any
-  upstream source (other browser tab, external editor, stale
-  clipboard) putting markup on the clipboard that would land
-  as escaped text inside the destination block.
-
-Outside code blocks, copy/paste continues to round-trip
-through markdown as normal — bullet lists, formatting, links,
-tables and so on are preserved.
-
 ### Drag and drop
 
 You can drag files from the OS into the editor. Image and
@@ -425,6 +199,117 @@ video drops upload as assets. Drag from the tree view onto
 folders in the tree moves notes/folders. Drag-out of the
 editor (e.g. a note onto a Slack window) gives the OS a
 default URL of the editor route — not a markdown export.
+
+## Math
+
+The editor renders LaTeX-style math via **KaTeX**. Two node
+types, both edited through a popover with live preview and a
+symbol palette:
+
+- **Inline math** — sits inside paragraph flow. Renders at the
+  surrounding line's font size.
+- **Block math** — sits at block level. Renders display-style
+  (centred, with larger operators).
+
+### Delimiters
+
+Four input forms are accepted on paste and on load from disk:
+
+| Input form | Kind |
+|---|---|
+| `$x^2$` | inline |
+| `$$\frac{a}{b}$$` | block |
+| `\(x^2\)` | inline (LaTeX style) |
+| `\[\frac{a}{b}\]` | block (LaTeX style) |
+
+On save, the editor **normalises to the dollar form** —
+`$..$` for inline and `$$\n..\n$$` for block — regardless of
+which style the source arrived in. Reasoning: a single
+canonical on-disk format means a save-then-reload never
+silently rewrites a file's delimiters mid-session, and the
+files stay portable to Obsidian, GitHub's math rendering, and
+Pandoc (all of which default to dollars).
+
+### Disambiguating `$` from currency
+
+Naively pattern-matching `$..$` would eat real text like
+"It costs $5 and $10" as if "5 and " were math. The editor
+applies the Pandoc rule for single-dollar inline math:
+
+- Opening `$` must NOT be followed by whitespace.
+- Closing `$` must NOT be preceded by whitespace.
+- The character right after the closing `$` must NOT be an
+  ASCII digit.
+
+That catches the common currency cases (`$5 and $10`, `$100`,
+`$9.99`). It won't catch every adversarial sentence —
+something like "I owe $5 to Bob and $7 to Alice" passes the
+rule but isn't math. Realistic risk in technical notes is
+low; if it bites, the workaround is to write the dollar
+amount differently (`USD 5` etc.) or wrap the math in
+`\(..\)` instead. There is no opt-out toggle.
+
+The `$$..$$` form has no currency ambiguity and no such
+restriction. The `\(..\)` and `\[..\]` forms also have no
+restriction beyond "the source between delimiters must not be
+empty or whitespace-only".
+
+### What's supported
+
+KaTeX's standard subset. Common Greek (`\alpha`, `\Sigma`,
+…), operators (`\sum`, `\int`, `\frac`, `\sqrt`, …),
+relations (`\le`, `\ne`, …), `\text{...}` for literal text
+inside math, matrices and `cases` via `\begin{pmatrix} … \end`
+and `\begin{cases} … \end`, sub/superscript with `_` and `^`,
+auto-sized delimiters via `\left( … \right)`, and so on. See
+the KaTeX docs for the full list.
+
+What's NOT supported:
+
+- `\usepackage`, `\newcommand`, custom macros — KaTeX doesn't
+  do these.
+- `\href`, `\includegraphics`, `\url` and other side-effectful
+  commands — KaTeX's `trust` flag is left at the default
+  (`false`).
+- Copy-out of a math node yields the LaTeX **source** as plain
+  text; there is no "copy as rendered image" path.
+
+Invalid LaTeX renders in red (KaTeX's built-in
+`throwOnError: false` behaviour) — the source stays on the
+node's `latex` attribute either way, so fixing a typo in the
+popover restores the rendering immediately.
+
+### Editing a math node
+
+Clicking a rendered math node opens a popover with:
+
+- **Source textarea** on the left (LaTeX source; multi-line
+  for block math, single-line for inline).
+- **Live preview** on the right (KaTeX-rendered output of
+  whatever's currently in the textarea).
+- **Symbol palette** below — ~60 common symbols grouped by
+  category (Structure, Operators, Relations, Arrows, Greek,
+  Structures). Clicking a symbol inserts at the cursor;
+  template entries like `\frac{$1}{$2}` position the caret at
+  the first slot.
+
+Commit / cancel gestures:
+
+- Ctrl+Enter (or Enter on inline math) — commit + close.
+- Esc — cancel + close.
+- Click outside the popover — commit + close.
+- Committing with an empty source deletes the math node.
+
+A freshly-inserted math node auto-opens its popover so you can
+type directly without a second click. Slash menu, bubble menu,
+and `Ctrl+Shift+M` all go through this path.
+
+### Inserting via the slash menu
+
+`/math` (block) and `/math` (inline) — see the **Slash menu**
+section. Both insert an empty node and open the popover
+immediately. The block variant also appends a trailing
+paragraph so the cursor has somewhere to land after the math.
 
 ## Folders
 
@@ -472,14 +357,12 @@ Daily Notes/
   year + month subfolder + today's file.
 - Filenames are ISO date (`YYYY-MM-DD.md`). Folder names use
   `MM-MonthName` so they sort correctly and read naturally.
-- The frontend re-formats these for display:
+- The frontend re-formats these for display in **Danish**:
   - The year stays as-is.
-  - The month folder displays as the English month name without
+  - The month folder displays as the Danish month name without
     the number prefix (`April` not `04-April`).
-  - The day file displays as English weekday + ` d. ` + day
-    number (`Monday d. 28`). The `d.` separator is a small nod
-    to local Danish convention (`den`); the weekday and month
-    names themselves are English.
+  - The day file displays as Danish weekday + day number
+    (`Mandag 28`).
 
 This is **display-only**. The on-disk filenames stay in the
 canonical format; search, links, and the index all use the
@@ -514,7 +397,7 @@ editor:
 - The slash menu has the **Templates** submenu disabled
   (avoids template-of-template recursion in the picker).
 - Otherwise behaves the same: callouts, code blocks, lists,
-  tables, and so on are all available.
+  tables, math, and so on are all available.
 
 ## Tree view
 

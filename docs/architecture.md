@@ -67,6 +67,73 @@ layer. The per-vault `.notesapp/index.db` only contains metadata
 (path, title, mtime, frontmatter, FTS-indexed body text); the
 authoritative body is the markdown file itself.
 
+## Security headers
+
+The server emits a fixed set of security headers on every
+response, set in middleware in `Program.cs`. These are part of
+the process-boundary contract: the frontend assumes them and
+will break in subtle ways if they're loosened or tightened.
+
+The Content-Security-Policy is the load-bearing one. Current
+directives, with rationale for the non-obvious ones:
+
+- `default-src 'self'` — everything not otherwise specified
+  comes from our own origin only.
+- `script-src 'self'` — no inline scripts, no third-party JS.
+  The frontend bundle is built by Vite ahead of time; the
+  app does not need eval or remote script loads.
+- `style-src 'self' 'unsafe-inline'` — `'unsafe-inline'`
+  because React inline `style={…}` attributes and the
+  TipTap-rendered editor surface emit inline `style`
+  attributes that would otherwise be blocked. Stylesheets
+  themselves are bundle files served from `/assets/`.
+- `connect-src 'self' https://raw.githubusercontent.com
+  https://api.github.com https://github.com` — `'self'`
+  for our own API. The three GitHub hosts are widened in
+  for the TcPOU-from-GitHub import (the editor's "import a
+  PLC POU from a GitHub URL" path). Without explicit
+  `connect-src`, the browser falls back to `default-src
+  'self'` and blocks the fetch before the request ever
+  leaves the browser. Tighter widening than the wildcard
+  used in `img-src`: exact hosts only, no other URLs are
+  allowed. If TcPOU import needs to support other code
+  hosts later, either add them here or route through a
+  server-side proxy and remove this widening.
+- `img-src 'self' data: https:` — `'self'` covers note assets
+  served via `/api/.../asset`. `data:` lets us inline SVG
+  icons and the favicon-data path. `https:` was opened up
+  for the link-preview feature (open-graph image URLs in
+  third-party domains); the trade-off is documented in the
+  link-preview code.
+- `font-src 'self' data:` — `'self'` covers the bundled font
+  files (Vite resolves them under `/assets/`). The `data:`
+  source is required because the KaTeX stylesheet inlines
+  ONE of its fonts (`KaTeX_Size3`, used for large delimiters
+  like big parens and the bars of multi-line fractions) as a
+  base64 `data:font/woff2;base64,…` URI in the CSS itself
+  rather than as a separate file. Without `data:` here, the
+  browser blocks that font load, falls back to the default
+  math glyphs, and KaTeX layout collapses (fractions render
+  on one line, large brackets render at character height).
+  This is upstream KaTeX behaviour we don't control; we
+  don't serve KaTeX from a CDN, so no further URL allowlist
+  is needed.
+- `media-src 'self'` — for inline video assets.
+- `object-src 'none'` — no plugins.
+- `frame-ancestors 'none'` — the app can't be iframed.
+- `base-uri 'self'` — `<base href>` can't be redirected.
+
+The server also sets `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, and
+`X-Frame-Options: DENY` (redundant with `frame-ancestors` but
+kept for older clients). HSTS is set when HTTPS is enabled.
+
+If you find yourself wanting to loosen a directive, add a
+comment in `Program.cs` next to the change explaining what
+broke and what you're letting in. The CSP block is intentionally
+verbose with inline comments so future readers know what each
+allowance is paying for.
+
 ## Layering
 
 The repo has four .NET projects:
