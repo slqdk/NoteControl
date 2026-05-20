@@ -17,6 +17,17 @@ export interface TreeNodeProps {
   isExpanded?: boolean;
   isSelected: boolean;
   isLoading?: boolean;
+  /**
+   * Folder-only: render the row in the muted "this folder has nothing
+   * inside it" style. Caller decides what counts as empty — the row
+   * is variant-agnostic, it just applies the CSS class that greys the
+   * label out. Folders that haven't been loaded yet must NOT pass
+   * this prop; "we don't know" is encoded as `undefined`/`false`,
+   * NOT as "render as empty" (otherwise the whole tree would look
+   * dead on first paint). Note rows never set this — the prop is
+   * silently ignored if hasChevron is false.
+   */
+  isEmpty?: boolean;
   /** "📁" / "📝" or whatever the variant prefers. */
   icon: ReactNode;
   /** Click on the chevron — only fires when hasChevron is true. */
@@ -88,6 +99,7 @@ export function TreeNode({
   isExpanded,
   isSelected,
   isLoading,
+  isEmpty,
   icon,
   onChevronClick,
   onRowClick,
@@ -110,10 +122,19 @@ export function TreeNode({
   // step 36's signal to CSS: "show grab cursor + dashed outline so
   // the user sees this row is in move mode." Without it, the row
   // stays in its normal default-cursor state.
+  //
+  // nc-tree-row-empty: applies only to folder rows (hasChevron) that
+  // the caller has confirmed are empty. The CSS dims the label so a
+  // glance at the tree reveals "this folder has nothing inside it"
+  // without needing to expand. Folders we haven't loaded yet stay
+  // un-dimmed because `undefined`/`false` doesn't add the class —
+  // we deliberately don't gray un-loaded folders, otherwise the
+  // whole tree would look dead at first paint.
   const rowClass = [
     'nc-tree-row',
     isSelected ? 'nc-tree-row-selected' : '',
     isLoading ? 'nc-tree-row-loading' : '',
+    hasChevron && isEmpty ? 'nc-tree-row-empty' : '',
     dragEnabled ? 'nc-tree-row-drag-enabled' : '',
     isDragSource ? 'nc-tree-row-drag-source' : '',
     dropHighlight === 'valid' ? 'nc-tree-row-drop-valid' : '',

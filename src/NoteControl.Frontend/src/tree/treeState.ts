@@ -201,6 +201,69 @@ export function useTreeData(vaultId: string): TreeData {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultId, expanded]);
 
+  // Eager one-level pre-fetch (Ship N: empty-folder gray-out).
+  //
+  // Whenever a folder's children land in `childrenByPath`, kick off
+  // listings for each of its direct subfolders. This is what enables
+  // the tree to know, BEFORE the user expands a folder, whether it's
+  // empty — so empty folders can be greyed out as a "don't bother"
+  // signal. Without this pre-fetch, emptiness is only known after a
+  // first manual expand.
+  //
+  // Scope: ONE LEVEL only. We don't recursively pre-fetch the
+  // grandchildren — that would fan out exponentially. When the user
+  // expands a folder, ITS children become "newly loaded" and this
+  // effect fires again to pre-fetch THEIR subfolders. Sequential
+  // walking through the listing keeps per-burst load to N small
+  // requests in series rather than N parallel hits.
+  //
+  // Cost model: when the root listing has K top-level folders, this
+  // effect fires K listing calls in series shortly after mount. With
+  // small folders (< 100 ms server-side each) the user sees the tree
+  // settle into its "known empty" state within a second or two on a
+  // healthy LAN. On a slow link it just takes longer; nothing breaks,
+  // the folders just look un-greyed for a bit.
+  //
+  // Idempotence is delegated to loadFolder, which short-circuits on
+  // both "already loaded" and "load in flight" — so this effect can
+  // fire as often as it likes without triggering duplicate requests.
+  //
+  // The dep list is [vaultId, childrenByPath]: every time a new
+  // listing lands the cache reference changes (we always return a
+  // new Map from setChildrenByPath), so this effect re-runs and
+  // discovers the new subfolders to peek at.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Snapshot the current listings so iteration is stable even if
+      // childrenByPath updates mid-loop (the next render will refire
+      // the effect with the new snapshot anyway).
+      const entries = Array.from(childrenByPath.values());
+      for (const listing of entries) {
+        if (cancelled) return;
+        for (const sub of listing.subfolders) {
+          if (cancelled) return;
+          if (childrenByPath.has(sub.path)) continue;
+          if (loadingByPath.has(sub.path)) continue;
+          // Sequential await so 50 top-level folders don't fire 50
+          // parallel requests. Each request is small (one folder
+          // listing), so even a 50-folder vault settles in well
+          // under a second on a reasonable connection.
+          await loadFolder(sub.path);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // loadingByPath intentionally omitted — including it would fire
+    // this effect on every loading-state flip, causing redundant
+    // sweeps of the cache while the initial burst is still going.
+    // The internal `loadFolder` guard already handles the race
+    // (concurrent calls for the same path become a single fetch).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultId, childrenByPath]);
+
   const toggle = useCallback(
     (folderPath: string) => {
       setExpanded((prev) => {

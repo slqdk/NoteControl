@@ -385,6 +385,28 @@ export function TreeView({
       } else {
         const isSelected =
           selection?.kind === 'folder' && selection.path === folderPath;
+        // Empty-folder gray-out: a folder we've loaded once and seen
+        // to contain zero subfolders + zero notes gets the muted
+        // visual treatment. The eager one-level pre-fetch in
+        // useTreeData populates these listings shortly after the
+        // parent's listing arrives, so most folders go from "we
+        // don't know" → "known empty" automatically without the
+        // user expanding anything.
+        //
+        // Folders that haven't been pre-fetched yet stay in the
+        // un-greyed default state — `undefined` listing is NOT the
+        // same as "empty", and rendering "we don't know" as
+        // grey-out would make the whole tree look dead on first
+        // paint. Once the listing lands we re-render and the row
+        // greys correctly.
+        //
+        // We read off the `listing` already pulled at the top of
+        // renderFolder rather than re-calling .get; same value, one
+        // fewer Map lookup per row.
+        const isKnownEmpty =
+          listing !== undefined
+          && listing.subfolders.length === 0
+          && listing.notes.length === 0;
         rows.push(
           <TreeNode
             key={`folder:${folderPath}`}
@@ -394,6 +416,7 @@ export function TreeView({
             isExpanded={expanded}
             isSelected={isSelected}
             isLoading={loading}
+            isEmpty={isKnownEmpty}
             icon={folderIcon(variant, expanded, folderPath)}
             onChevronClick={() => data.toggle(folderPath)}
             onRowClick={() => {

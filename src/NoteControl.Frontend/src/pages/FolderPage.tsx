@@ -6,7 +6,7 @@ import type { NoteSummaryDto } from '../api/types';
 import { SearchBox } from '../components/SearchBox';
 import type { VaultLayoutContext } from '../components/VaultLayout';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { formatNoteTimestamp } from '../utils/time';
+import { formatAbsoluteDateShort, formatNoteTimestamp } from '../utils/time';
 
 /**
  * Main view for a folder.
@@ -155,7 +155,26 @@ export function FolderPage() {
         ) : notes.length === 0 ? (
           <p className="nc-empty">No notes here yet.</p>
         ) : (
-          <ul className="nc-list">
+          /*
+            Compact row layout (Ship N): each note is a single line.
+            Name on the left (truncated with ellipsis if it overflows),
+            timestamp on the right showing BOTH relative ("1 hour ago")
+            and absolute ("May 20"). The two timestamps are separated
+            by an interpunct so they read as one unit rather than two
+            competing data points.
+
+            The .nc-list-compact modifier opts the list into the
+            denser styling: smaller font, tighter padding, zebra
+            striping using the theme's --nc-stripe-bg-* variables
+            (same source the LinksBlock zebra uses, so the stripe
+            colour follows the active gradient preset light/dark).
+
+            We deliberately keep the existing .nc-list base class so
+            the underlying list semantics (no bullets, no padding)
+            are unchanged. The compact modifier only adds visual
+            tweaks; it doesn't redefine layout primitives.
+          */
+          <ul className="nc-list nc-list-compact">
             {notes.map((note) => (
               <li key={note.path}>
                 <Link
@@ -167,6 +186,8 @@ export function FolderPage() {
                   </span>
                   <span className="nc-note-time">
                     {formatNoteTimestamp(note.lastModified)}
+                    {' · '}
+                    {formatAbsoluteDateShort(note.lastModified)}
                   </span>
                 </Link>
               </li>
