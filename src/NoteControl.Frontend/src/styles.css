@@ -779,43 +779,82 @@ body.nc-dragging * {
   line-height: 1;
 }
 
-/* Container for multiple action buttons in the rail header. */
+/* Container for the action buttons in the rail header.
+   Stretches to fill its parent (.nc-rail-header-with-action,
+   which is already a flex row) so the children — currently a
+   Daily Note pill on the left and the "+" add-menu on the
+   right — can be flex-justified to the two ends with
+   space-between. Pre-this-ship the actions span was an
+   inline-flex hugging its children to the right edge of a
+   header that also held a left-side label; that label was
+   dropped earlier so the row now ONLY contains the actions,
+   and stretching them across with space-between is the
+   layout the new pair-of-pills design needs.
+
+   On mobile this rule still applies; the parent .nc-rail-
+   header-with-action behaves the same way, and the mobile
+   merged toggle-row (which embeds these same buttons in a
+   sibling context) is unaffected because that container
+   uses its own flex layout — see the mobile rules far below. */
 .nc-rail-header-actions {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 auto;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* ----------------------------------------------------------------
-   Import dropdown (desktop only).
+   "+" add-menu in the rail header.
 
-   The wrap is a positioning anchor for the absolutely-positioned
-   menu, and groups the chevron with its (currently invisible)
-   busy/modal siblings without leaking flex gaps onto them.
+   Replaced the four separate icon-+plus buttons (🏠+, 📄+, the
+   import chevron, 📁+) that used to live next to the Daily Note
+   pill. Now there's one button: a bordered "+" styled to match
+   the Daily Note pill, opening a small dropdown menu of the
+   four actions.
 
-   The chevron itself is a sibling of the rail-header buttons but
-   sits TIGHT against the 📄+ that precedes it — the negative
-   margin pulls it back over the parent's gap so the pair reads
-   as one widget.
+   .nc-rail-add-wrap is the positioning anchor for the absolutely-
+   positioned menu, and groups the button with its (currently
+   invisible) busy/modal siblings without leaking flex gaps onto
+   them.
+
+   .nc-rail-add itself layers a tighter padding on top of the
+   .nc-rail-header-button--daily styling so the "+" reads as a
+   sibling pill but stays visually compact. We don't reuse
+   --daily directly via composition because the daily pill is
+   wider on purpose (icon + label); the + button just needs the
+   border treatment + height match.
    ---------------------------------------------------------------- */
-.nc-rail-import-wrap {
+.nc-rail-add-wrap {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
-.nc-rail-import-chev {
-  /* Pull tight against the preceding 📄+. The header-actions
-     parent has gap:2px; we counteract it here. */
-  margin-left: -2px;
-  padding: 0 4px;
-  font-size: 12px;
-  opacity: 0.7;
+
+.nc-rail-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
 }
-.nc-rail-import-chev:hover {
-  opacity: 1;
+.nc-rail-add:hover {
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-fg-muted);
+  color: var(--nc-fg);
 }
 
-.nc-rail-import-menu {
+.nc-rail-add-menu {
+  /* Anchored to the right edge of the wrap so the menu drops
+     toward the centre of the rail rather than off the right
+     side of the viewport. Z-index above the tree rows (which
+     don't set z-index, so any positive value wins). */
   position: absolute;
   top: calc(100% + 2px);
   right: 0;
@@ -827,12 +866,19 @@ body.nc-dragging * {
   border-radius: var(--nc-radius);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
 }
-.nc-rail-import-menu-item {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+
+.nc-rail-add-menu-item {
+  /* Each item is a button styled like a menu row: icon on the
+     left, primary label next to it, optional target hint at the
+     far right (smaller, muted). Display:grid with three named
+     columns gives us reliable alignment whether or not the
+     target hint is present (it's omitted for Add Dashboard). */
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px 10px;
   font: inherit;
   font-size: 13px;
   text-align: left;
@@ -841,24 +887,70 @@ body.nc-dragging * {
   border-radius: var(--nc-radius-sm);
   color: var(--nc-fg);
   cursor: pointer;
+  /* Reset the text-transform: ascendants like .nc-rail-header
+     set uppercase, which we DON'T want for menu items because
+     "Add Note" reads as a sentence-case label, not a section
+     heading. */
+  text-transform: none;
+  letter-spacing: 0;
 }
-.nc-rail-import-menu-item:hover {
+.nc-rail-add-menu-item:hover:not(:disabled) {
   background: var(--nc-accent-bg-soft);
 }
-.nc-rail-import-menu-item:disabled {
+.nc-rail-add-menu-item:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.nc-rail-import-menu-target {
-  margin-top: 2px;
+
+.nc-rail-add-menu-icon {
+  /* The emoji glyph. Fixed-width column from the grid so the
+     labels left-align across all items regardless of which
+     emoji renders wider on the user's OS. */
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+.nc-rail-add-menu-label {
+  /* Primary text of the item. Inherits font-size from the
+     menu-item; no extra rule needed beyond making sure long
+     labels (e.g. "Import .md or .zip…") don't push the
+     target-hint column awkwardly — flex 1 / overflow ellipsis
+     handles that case. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nc-rail-add-menu-target {
+  /* "in vault root" / "into Projects/Q4" — secondary cue. */
   font-size: 11px;
   color: var(--nc-fg-muted);
+  white-space: nowrap;
 }
 
-.nc-rail-import-busy {
+.nc-rail-add-busy {
+  /* Inline "Importing…" badge that surfaces while a file upload
+     is in flight. Matches the old .nc-rail-import-busy styling. */
   margin-left: 6px;
   font-size: 12px;
   color: var(--nc-fg-muted);
+}
+
+/* Mobile: the menu trigger lives in the same flex row but is
+   touch-sized like its Daily Note sibling. Same 36px height as
+   .nc-rail-header-button--daily on mobile so the two pills
+   visually match. The menu itself stays as-is — its width and
+   inner padding are already finger-friendly. */
+@media (max-width: 768px) {
+  .nc-rail-add {
+    height: 36px;
+    min-width: 36px;
+    padding: 0 12px;
+    font-size: 18px;
+  }
+  .nc-rail-add-menu-item {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
 }
 
 /* ----------------------------------------------------------------
@@ -1045,57 +1137,6 @@ body.nc-dragging * {
 .nc-tree-row-selected,
 .nc-tree-row-selected:hover {
   background: var(--nc-accent-bg-soft);
-}
-
-/* Empty-folder gray-out (Ship N).
-   A folder we've loaded once and confirmed contains nothing (no
-   subfolders, no notes) renders with muted foreground so the user
-   can see at a glance "don't bother opening this one." TreeView
-   only sets the class on folders whose listing is in the cache
-   AND empty — un-loaded folders stay un-greyed (we deliberately
-   don't grey "unknown" folders, otherwise the whole tree would
-   look dead at first paint while the eager pre-fetch is still
-   running).
-
-   Style choices:
-   - Label colour drops to --nc-fg-muted (same as the chevron and
-     the timestamp text on note rows) — that's the existing "this
-     is secondary info" colour in the design system, so we don't
-     introduce a new tone.
-   - Icon opacity drops to 0.55 so even the 📁 reads as faded. We
-     don't recolour it because the icon is an emoji glyph with no
-     foreground colour for CSS to target.
-   - The italic touch is a quiet extra cue for users who can't
-     easily distinguish text colours (e.g. mild colour-vision
-     differences). Cheap and unambiguous.
-   - The :hover override restores normal foreground because once
-     the user has decided to interact with the row, the dimmed
-     state has done its job. The selected state also wins via
-     the more-specific rule below.
-
-   :where() trick: keeps the empty rule at zero added specificity
-   so the existing :hover and selected rules still beat it without
-   any !important. The Startpage row's own border/weight isn't
-   affected because Startpage rows don't get the empty class (only
-   folder TreeNode instances do, and Startpage is a separate
-   ReactNode passed through dashboardsSlot). */
-.nc-tree-row-empty :where(.nc-tree-label) {
-  color: var(--nc-fg-muted);
-  font-style: italic;
-}
-.nc-tree-row-empty :where(.nc-tree-icon) {
-  opacity: 0.55;
-}
-.nc-tree-row-empty:hover :where(.nc-tree-label) {
-  color: var(--nc-fg);
-  font-style: italic;  /* keep italic on hover so the cue persists */
-}
-.nc-tree-row-empty.nc-tree-row-selected :where(.nc-tree-label),
-.nc-tree-row-empty.nc-tree-row-selected:hover :where(.nc-tree-label) {
-  color: var(--nc-fg);
-}
-.nc-tree-row-empty.nc-tree-row-selected :where(.nc-tree-icon) {
-  opacity: 1;
 }
 
 /* Step 39: pinned Startpage row at the very top of the tree.
@@ -1539,101 +1580,6 @@ body.nc-dragging * {
 .nc-vault-link-path, .nc-note-path-hint { color: var(--nc-fg-muted); font-size: 13px; }
 .nc-vault-link-role { font-size: 12px; color: var(--nc-fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .nc-note-time { color: var(--nc-fg-muted); font-size: 12px; white-space: nowrap; }
-
-/* ---------- Compact list variant (FolderPage) ---------------------
-   Used by FolderPage's "All notes under X" section. Differences vs
-   the base .nc-list:
-
-   1. Smaller font on both the name and the timestamp so more rows
-      fit on screen — the FolderPage list can run hundreds of entries
-      in a busy vault, and the base .nc-list's 10px row padding was
-      wasteful at that scale.
-
-   2. Zebra striping. Every even-indexed row gets a tinted background
-      from the theme's --nc-stripe-bg-light / --nc-stripe-bg-dark
-      variables — the SAME variables the LinksBlock zebra uses, so
-      the stripe colour automatically follows whichever gradient
-      preset the user has picked. The :where() wrapper keeps the
-      selector at 1-class specificity so the existing :hover rule
-      still wins without a specificity arms race.
-
-   3. The row borders that .nc-list normally draws between items
-      are suppressed in the compact variant — the zebra stripes do
-      the row-separation work and the extra horizontal line on top
-      of stripes would look noisy.
-
-   We deliberately scope all these rules to descendants of
-   .nc-list-compact rather than redefining .nc-list itself, so the
-   vault-list page (which also uses .nc-list) keeps its existing
-   look. */
-.nc-list-compact li + li { border-top: none; }
-
-.nc-list-compact .nc-note-link {
-  /* Tighter vertical padding so a row is ~28px tall vs the base
-     list's ~36px. Horizontal padding bumps slightly so the stripe
-     paint reads as a "row cell" rather than text touching the
-     stripe's edge. */
-  padding: 4px 10px;
-  /* Inherit row colour from the li (the stripe background) so the
-     link doesn't paint its own background over the zebra. */
-  background: transparent;
-  border-radius: 0;
-}
-.nc-list-compact .nc-note-name {
-  /* Slightly smaller than the base 14-ish px the inherited font
-     stack gives. 13px reads comfortably and matches what the
-     LinksBlock title uses, which is the visual reference the user
-     called out. */
-  font-size: 13px;
-  font-weight: 500;
-  /* Truncate long names so each row stays exactly one line —
-     consistent with the user's "one line, name to the left, info
-     to the right" spec. The full path is in the link's title
-     attribute so hover still surfaces it (browser-default tooltip,
-     no custom UI needed). */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.nc-list-compact .nc-note-time {
-  /* Smaller still than the name, same muted colour as before so
-     the timestamp clearly reads as secondary info. nowrap is
-     critical here because the timestamp contains a middot ·
-     separator and we never want it wrapping mid-row. */
-  font-size: 11px;
-  color: var(--nc-fg-muted);
-  white-space: nowrap;
-  /* Pull slightly off the right edge so the date doesn't crowd
-     the row's gutter — visual breathing room. */
-  padding-left: 8px;
-}
-
-/* Zebra striping using the theme's tinted stripe colour. Same
-   triple-rule pattern as LinksBlock: a default that handles
-   "no explicit theme set", plus light/dark overrides. The
-   fallback hex matches the 'slate' preset so first paint before
-   JS runs doesn't flash unstyled. */
-.nc-list-compact li:where(:nth-child(even)) {
-  background: var(--nc-stripe-bg-light, #eef2f7);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .nc-list-compact li:where(:nth-child(even)) {
-    background: var(--nc-stripe-bg-dark, #1a2638);
-  }
-}
-:root[data-theme="dark"] .nc-list-compact li:where(:nth-child(even)) {
-  background: var(--nc-stripe-bg-dark, #1a2638);
-}
-:root[data-theme="light"] .nc-list-compact li:where(:nth-child(even)) {
-  background: var(--nc-stripe-bg-light, #eef2f7);
-}
-
-/* Hover wins over the stripe — same precedence story as LinksBlock.
-   Both colours come from the theme so this still respects the
-   active gradient. */
-.nc-list-compact .nc-note-link:hover {
-  background: var(--nc-bg-elev-2);
-}
 
 .nc-breadcrumb {
   display: flex; align-items: center; gap: 8px;

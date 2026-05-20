@@ -16,7 +16,7 @@ import { DashboardList } from './DashboardList';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ResizableRail } from './ResizableRail';
 import { ToggleRailButtons } from './ToggleRailButtons';
-import { ImportNoteSplitButton } from './ImportNoteSplitButton';
+import { RailHeaderAddMenu } from './RailHeaderAddMenu';
 import { MobileNavBar, type MobileNavCurrent } from './MobileNavBar';
 import {
   useTreeData,
@@ -1031,59 +1031,20 @@ export function VaultLayout() {
   const actionButtons = (
     <span className="nc-rail-header-actions">
       {/*
-        Dashboards-add button. Lives at the very front of the row
-        because dashboards sit at the top of the tree (above the
-        Daily Notes / regular folders) — keeping the buttons in
-        rough alignment with the section they target. Disabled
-        until the dashboards config has loaded, since clicking
-        before then would no-op silently. Same nc-rail-header-button
-        styling as its siblings; the icon-+plus pattern (🏠+)
-        follows Daily+ / 📄+ / 📁+.
+        Daily-note pill on the LEFT. Always the most-used action in
+        this row — opening (or idempotently creating) today's daily
+        note. The 📅 glyph matches the Daily Notes folder icon in
+        the tree below (see TreeView's isDailyNotesRoot branch),
+        keeping the button and its target row visually paired.
 
-        Hidden on mobile — adding a dashboard means dropping
-        widgets onto a free-form 2D canvas, which is a desktop
-        workflow (the canvas itself isn't tuned for narrow
-        viewports). The mobile rail row stays tight with just
-        Daily+ / 📄+ / 📁+. Same gating pattern as the import
-        split-button below.
-      */}
-      {!isMobile && (
-        <button
-          type="button"
-          className="nc-rail-header-button"
-          title="Add a new dashboard"
-          onClick={onAddDashboard}
-          disabled={!dashboardsHook.config}
-        >
-          🏠+
-        </button>
-      )}
-      {/*
-        Daily-note button — always opens (or creates and
-        opens) today's daily note. Idempotent server-side,
-        so spamming this is harmless. Title shows the local
-        date so the user can verify they're about to land
-        on today's, not yesterday's.
-
-        Ship 78: text "Daily+" to match the sibling 📄+ /
-        📁+ pattern (icon-or-word + plus glyph) — pre-Ship-
-        78 the lone 📅 emoji read inconsistent with the
-        other two buttons.
-
-        Ship: promoted to a labelled pill — calendar glyph
-        + "Daily Note +". The Daily Note action is by far
-        the most-used button in this row, and the new shape
-        (bordered, wider, explicit text) makes it the visual
-        anchor of the strip rather than a peer of the small
-        icon-only siblings. The 📅 glyph matches the
-        Daily Notes folder icon in the tree below (see
-        TreeView's isDailyNotesRoot branch), keeping the
-        button and its target row visually paired.
-
-        Modifier class --daily applies the pill styling on
-        top of the shared rail-header-button base, so
-        sibling 📄+/📁+ keep their current 22px compact
-        form.
+        Modifier class --daily applies the pill styling on top of
+        the shared rail-header-button base. The other actions
+        (Add Note, Add Folder, Import, Add Dashboard) used to live
+        next to this button as four separate icon-+plus buttons;
+        they've been folded into the single "+" dropdown menu on
+        the RIGHT (RailHeaderAddMenu) so the rail header reads as a
+        clean pair: a labelled primary action on one end, a
+        compact add-things menu on the other.
       */}
       <button
         type="button"
@@ -1094,45 +1055,37 @@ export function VaultLayout() {
         <span className="nc-rail-header-button__icon" aria-hidden="true">📅</span>
         <span className="nc-rail-header-button__label">Daily Note +</span>
       </button>
-      <button
-        type="button"
-        className="nc-rail-header-button"
-        title={`New note in ${toolbarParentLabel}`}
-        onClick={() => onNewNoteUnder(toolbarParent)}
-      >
-        📄+
-      </button>
-      {/*
-        Ship: import dropdown lives between 📄+ and 📁+ as a small
-        chevron — same visual weight as its siblings. Renders only
-        on desktop; mobile keeps the rail-action row tight and
-        import is a desktop-first workflow.
 
-        On success the callback refreshes the tree at the target
-        folder and (if the target was collapsed) expands it so the
-        imported files are visible without further clicks.
+      {/*
+        The "+" dropdown — replaces the 🏠+ / 📄+ / import-chevron /
+        📁+ row. Items in spec order: Add Note, Add Folder, Import,
+        Add Dashboard. The dashboard add callback is gated on
+        dashboardsHook.config being loaded (mirrors the old
+        standalone button's disabled state); we pass null when not
+        ready, and the menu disables that item with a tooltip.
+
+        Mobile gets the same dropdown — gone is the desktop-only
+        gate on dashboards + import. The menu is the same width on
+        both viewports and the file picker / dashboard-canvas
+        destinations don't change behaviour with viewport size, so
+        the previous "desktop only" restrictions were really just
+        "we ran out of room in the icon row" — which no longer
+        applies.
       */}
-      {!isMobile && (
-        <ImportNoteSplitButton
-          vaultId={vaultId}
-          targetFolder={toolbarParent}
-          targetLabel={toolbarParentLabel}
-          onImported={(target) => {
-            void treeData.refresh(target);
-            if (target !== '' && !treeData.expanded.has(target)) {
-              treeData.toggle(target);
-            }
-          }}
-        />
-      )}
-      <button
-        type="button"
-        className="nc-rail-header-button"
-        title={`New folder in ${toolbarParentLabel}`}
-        onClick={() => onNewFolderUnder(toolbarParent)}
-      >
-        📁+
-      </button>
+      <RailHeaderAddMenu
+        vaultId={vaultId}
+        targetFolder={toolbarParent}
+        targetLabel={toolbarParentLabel}
+        onAddNote={() => onNewNoteUnder(toolbarParent)}
+        onAddFolder={() => onNewFolderUnder(toolbarParent)}
+        onImported={(target) => {
+          void treeData.refresh(target);
+          if (target !== '' && !treeData.expanded.has(target)) {
+            treeData.toggle(target);
+          }
+        }}
+        onAddDashboard={dashboardsHook.config ? onAddDashboard : null}
+      />
     </span>
   );
 
@@ -1606,7 +1559,8 @@ export interface VaultLayoutContext {
    * surface that to the user.
    *
    * Used by FolderPage's mobile-only Add footer; desktop's note
-   * creation goes through the tree rail header's 📄+ button.
+   * creation goes through the "+" dropdown in the tree rail header
+   * (see RailHeaderAddMenu).
    */
   onCreateNote: (parentPath: string, fileName: string) => Promise<void>;
   /**
