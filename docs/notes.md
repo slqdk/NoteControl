@@ -124,30 +124,40 @@ block-insertion shortcuts. Items shown in order:
 4. **Code block** — ST runtime-ready Declaration + Implementation
    pair (the same shape the PLCOpen XML import emits)
 5. **PLCOpen XML** — imports a TwinCAT 3 PLCopenXML export, one
-   POU at a time, as paired Declaration + Implementation code
-   blocks
-6. **Error callout**
-7. **Warning callout**
-8. **Info callout**
-9. **Tip callout**
-10. **Note callout**
-11. **Heading 1**
-12. **Heading 2**
-13. **Heading 3**
-14. **Bullet list**
-15. **Numbered list**
-16. **Quote**
-17. **Divider**
-18. **Table** (3×3 with header by default; opens a dimensions
+   POU at a time. Produces a Structure header (an ASCII tree of
+   the POU's contents), a Declaration + Implementation pair for
+   the POU body, and one section per contained Method, Action,
+   or Property accessor. See "PLC code blocks and the ST runtime"
+   below for what the runtime does with them.
+6. **TcPOU from GitHub** — fetches a `.TcPOU` file (single POU)
+   or a TcPOU folder (POU + sibling `.TcMethod`/`.TcAction`/
+   `.TcProperty` files, or the same names inside a same-named
+   subfolder) directly from a GitHub URL. Produces the same
+   output layout as PLCOpen XML. GitHub-only in this iteration;
+   other hosts are rejected.
+7. **Error callout**
+8. **Warning callout**
+9. **Info callout**
+10. **Tip callout**
+11. **Note callout**
+12. **Heading 1**
+13. **Heading 2**
+14. **Heading 3**
+15. **Bullet list**
+16. **Numbered list**
+17. **Quote**
+18. **Divider**
+19. **Table** (3×3 with header by default; opens a dimensions
     dialog if the host wired one up)
 
 Ordering rationale: high-value insertable assets (SupportCall,
-Image, Code block, PLCOpen import) sit at the top so they're
-one tap away. Colour-coded callouts follow. Structural and
-formatting blocks (headings, lists, quote, divider, table) sit
-at the bottom — still easy to filter to by typing (`/h1`,
-`/table`), but visually they shouldn't dominate the menu since
-markdown shortcuts (`#`, `-`, `1.`) already cover most of them.
+Image, Code block, PLCOpen import, TcPOU from GitHub) sit at the
+top so they're one tap away. Colour-coded callouts follow.
+Structural and formatting blocks (headings, lists, quote,
+divider, table) sit at the bottom — still easy to filter to by
+typing (`/h1`, `/table`), but visually they shouldn't dominate
+the menu since markdown shortcuts (`#`, `-`, `1.`) already cover
+most of them.
 
 The menu filters as you type. Filtering matches title prefix
 first, then title infix, then keyword prefix, then keyword
@@ -208,6 +218,155 @@ extending the cell HTML emitter to recurse into inline marks
 
 Filtering: `/sup`, `/kunde`, `/customer`, `/ticket`, and
 `/intake` all surface the item.
+
+### PLC code blocks and the ST runtime
+
+Three slash items produce the same shape of inserted block:
+**Code block**, **PLCOpen XML**, and **TcPOU from GitHub**. The
+Code block item produces a hand-written skeleton; the other two
+parse a TwinCAT source artefact (a `.xml` PLCopenXML export or a
+`.TcPOU` file) and insert its contents. All three feed the same
+in-browser ST interpreter via the same Run button — documented
+below.
+
+#### Inserted layout
+
+A single import (one POU) produces, in document order:
+
+1. A bold header paragraph with the POU's name and `pouType`
+   (e.g. `XPlanarMoverControl (functionBlock)`).
+2. A **Structure** code block — a compact ASCII tree showing the
+   POU's contained Methods, Actions, Properties, and any TwinCAT
+   solution-folders that group them. Box-drawing characters
+   (`├─`, `└─`, `│`) render the hierarchy. Display-only: clicks
+   on tree rows do nothing. Language is `text` and title is
+   `Structure`, deliberately chosen so the Run button (below)
+   never triggers on this block.
+3. A **Declaration** code block (language `st`) holding the POU's
+   declaration text.
+4. An **Implementation** code block (language `st`) holding the
+   POU's body.
+5. One section per contained member, each preceded by a header
+   paragraph naming the member with a kind label:
+   - **Method**: header `METHOD <name>` + two code blocks titled
+     `METHOD <name> — Declaration` and `METHOD <name> — Implementation`.
+   - **Action**: header `ACTION <name>` + one code block titled
+     `ACTION <name> — Implementation`. Actions carry no own
+     declaration in TwinCAT — they execute in their parent FB's
+     scope.
+   - **Property Get/Set**: header `PROPERTY GET <name>` (or
+     `PROPERTY SET <name>`) + two code blocks per accessor:
+     `PROPERTY GET <name> — Declaration` / `…— Implementation`.
+
+The Code block slash item produces only steps 1, 3, and 4 — no
+Structure header, no members — with a `Program1` placeholder
+name and a starter `PROGRAM Program1 VAR ... END_VAR` declaration.
+
+#### The Run button
+
+The Run button appears in the header bar of any code block where
+all three hold:
+
+- The block's `language` is `st`.
+- The block's `title` is the bare string `Implementation` (case-
+  insensitive).
+- The immediately-preceding sibling node is a code block with
+  `language` `st` and `title` `Declaration` (case-insensitive).
+
+That triplet is what the Code block slash item and the POU-level
+output of PLCOpen XML / TcPOU imports emit. Member code blocks
+intentionally use **prefixed titles** (`METHOD <name> — Declaration`
+etc.) so they do NOT satisfy the runnable rule — the unit you
+run is the POU + its members, not an individual method body in
+isolation.
+
+Clicking Run opens the runtime modal with two panes: the
+declaration (a static source view that flips to a live watch
+table after the first scan) and the implementation (the source
+with inline value pills next to every variable reference).
+
+#### Action expansion at Run time
+
+When Run is clicked, before the implementation source goes to
+the parser, an **action expansion** pass rewrites the source:
+
+- The document is scanned for st-language code blocks whose
+  title matches `ACTION <name> — Implementation` (em-dash, en-
+  dash, and hyphen variants of the separator are all accepted —
+  in case a title was manually edited).
+- The implementation source is walked as a tiny state machine
+  (code / string / line-comment / block-comment). In code mode,
+  any identifier followed by `()` or `;` (case-insensitive name
+  match against the collected actions) is rewritten in place
+  with the action's body. Identifiers preceded by `.` (member
+  access like `fb.AbortMover()`) are NOT rewritten. Identifiers
+  inside ST string literals (`'…'`, with `$''` escapes) or
+  comments (`//…`, `(* … *)`) are NOT rewritten.
+- The rewrite is **iterative**: an action body that itself calls
+  another action expands too. Iteration is capped at 16 passes;
+  beyond that the modal opens with a recursion error naming the
+  most-recently-expanded action (the usual entry point of a
+  cycle).
+
+Expansion happens in the browser, on click, off the prosemirror
+document. The note's saved source is unaffected. What runs in
+the modal is what the modal's implementation pane shows — line
+numbers in runtime errors refer to the expanded source.
+
+What expansion does NOT do: methods and properties stay opaque.
+A call site like `myProp` or `MyMethod(x)` reaches the
+interpreter unmodified; the interpreter treats unknown
+identifiers as it normally would. Inlining methods and
+properties is out of scope.
+
+#### PLCOpen XML import
+
+Reads a `.xml` file produced by TwinCAT 3's PLCopenXML export.
+Bodies must be Structured Text; POUs in LD, FBD, or SFC are
+skipped with a summary alert listing the affected names.
+Individual members (methods / actions / property accessors)
+inside an importable POU are also skipped per-member if their
+body isn't ST — the rest of the POU still imports.
+
+Declaration text comes from the Beckhoff-flavoured
+`InterfaceAsPlainText` `addData` block when present (preserves
+original tabs / comments). When absent, a minimal declaration
+is synthesised by walking the structured `<interface>` elements;
+initial values and pragmas are NOT preserved in that fallback.
+
+The folder hierarchy shown in the Structure header comes from
+the project-level `ProjectStructure` `addData` block when
+present. When absent, members are listed flat in document order.
+
+#### TcPOU from GitHub
+
+Imports `.TcPOU` (and `.TcMethod` / `.TcAction` / `.TcProperty`)
+files from `github.com` and `raw.githubusercontent.com` over the
+network. Three URL shapes accepted:
+
+- **Blob URL**: `https://github.com/{owner}/{repo}/blob/{branch}/{path}.TcPOU`
+  — normalised to the raw equivalent and fetched.
+- **Raw URL**: `https://raw.githubusercontent.com/...` — fetched
+  as-is.
+- **Tree URL**: `https://github.com/{owner}/{repo}/tree/{branch}/{path}`
+  — pointing at a folder. The folder is listed via the GitHub
+  Contents API, the primary `.TcPOU` is identified, and sibling
+  `.TcMethod` / `.TcAction` / `.TcProperty` files in the same
+  folder OR in a same-named subfolder are fetched in parallel
+  and stitched into the POU. Folders containing more than one
+  `.TcPOU` are rejected; point at one POU's folder.
+
+CSP: the server's Content-Security-Policy includes `connect-src`
+entries for `raw.githubusercontent.com`, `api.github.com`, and
+`github.com`. Other hosts are blocked by the browser and
+rejected by the import code regardless. A server-side proxy for
+arbitrary hosts is a possible future ship.
+
+Rate limit: the GitHub Contents API allows 60 unauthenticated
+requests per hour per IP. A folder with ~20 members + listing
+calls fits comfortably; rapid repeated imports may hit the
+limit, in which case the import surfaces a 403 with a
+human-readable explanation.
 
 ### Bubble menu
 
