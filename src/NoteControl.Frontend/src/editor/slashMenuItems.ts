@@ -3,7 +3,13 @@ import { Fragment, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi, templatesApi } from '../api/client';
-import { parsePlcopenXml, type PlcopenPou } from './plcopenImport';
+import {
+  parsePlcopenXml,
+  type PlcopenPou,
+  type PlcopenMember,
+  type PlcopenMemberKind,
+  type PlcopenTreeNode,
+} from './plcopenImport';
 import { getCachedTemplates } from './templateCache';
 
 /**
@@ -106,14 +112,64 @@ export interface SlashMenuContext {
  * Insert one or more PLCOpen POUs at the current selection.
  * Per POU we emit, in order:
  *
- *   - A paragraph header in the form **<name>** (<pouType>) — this
- *     is just a styled paragraph rather than a Heading because an
- *     imported POU is body content, not a top-level section. Users
- *     can promote it to a heading themselves if they want.
- *   - A code block with title "Declaration", language "st",
- *     containing the declaration text.
- *   - A code block with title "Implementation", language "st",
- *     containing the implementation text.
+ *   1. A paragraph header in the form **<name>** (<pouType>) — this
+ *      is just a styled paragraph rather than a Heading because an
+ *      imported POU is body content, not a top-level section. Users
+ *      can promote it to a heading themselves if they want.
+ *
+ *   2. (NEW) A tree-view header when the POU has any members or
+ *      folders: a bold "Structure" paragraph followed by a nested
+ *      bullet list showing folders + members in document order.
+ *      The bullet list is plain prosemirror — no custom node type —
+ *      so it round-trips through markdown trivially as nested
+ *      bullets. Each leaf bullet labels the member kind (METHOD,
+ *      ACTION, PROPERTY GET, PROPERTY SET). Tree-view is display-
+ *      only: clicking a bullet has no effect (no scroll-to, no
+ *      collapse), matching the spec for Ship 1.
+ *
+ *   3. A code block with title "Declaration", language "st",
+ *      containing the FB/POU declaration text.
+ *
+ *   4. A code block with title "Implementation", language "st",
+ *      containing the FB/POU implementation text.
+ *
+ *   5. For each Method / Action / Property accessor, in document
+ *      order: a small bold paragraph header naming the member
+ *      (with kind tag), followed by 1 or 2 code blocks:
+ *        - Method:   Declaration + Implementation pair (titles
+ *                    "Declaration" / "Implementation" — so users
+ *                    can see the method's signature).
+ *        - Action:   Implementation only, title "Implementation"
+ *                    of an action carries no declaration in
+ *                    TwinCAT — actions share their parent FB's
+ *                    scope. The lack of a Declaration sibling
+ *                    means the runtime Run button (which keys off
+ *                    a Declaration+Implementation triplet) does
+ *                    NOT appear next to action implementations
+ *                    in Ship 1; the runtime hookup for actions
+ *                    lands in Ship 2.
+ *        - Property: each accessor (Get / Set) gets its own
+ *                    Declaration + Implementation pair.
+ *
+ *      Member headers use "ACTION", "METHOD", "PROPERTY GET",
+ *      "PROPERTY SET" as the kind tag (uppercase, matches
+ *      TwinCAT's vocabulary). The Run button is intentionally
+ *      suppressed on every member because no member's title is
+ *      bare "Implementation" with a preceding sibling whose
+ *      title is bare "Declaration" — the sibling structure is
+ *      a paragraph header in between, breaking the triplet rule
+ *      used by CodeBlockNodeView.isRunnableImplementation.
+ *
+ *      Wait — that's wrong. The titles ARE bare "Declaration" and
+ *      "Implementation". To prevent the Run button appearing on
+ *      every method, we'd need different titles OR we'd need to
+ *      tighten the runnable rule. We do the simple thing: prefix
+ *      the member's titles with the kind+name, e.g.
+ *      "METHOD AbortMover Declaration" / "METHOD AbortMover
+ *      Implementation". That keeps them out of the runnable
+ *      triplet (which case-insensitively requires the literal
+ *      strings "Declaration" / "Implementation"), and double-duty
+ *      makes the title obvious in collapsed listings.
  *
  * Between consecutive POUs we drop an empty paragraph so they're
  * visually separated. After the last POU we also drop an empty
@@ -137,7 +193,7 @@ function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
       content.push({ type: 'paragraph' });
     }
 
-    // Header paragraph: bold POU name, optional pouType in parens.
+    // (1) Header paragraph: bold POU name, optional pouType.
     const headerInline: Json[] = [
       {
         type: 'text',
@@ -150,11 +206,50 @@ function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
     }
     content.push({ type: 'paragraph', content: headerInline });
 
-    // Declaration code block.
-    content.push(codeBlockNode('Declaration', pou.declaration));
+    // (2) Tree-view header (only if there's a tree to show).
+    // We build an objectId → memberKind map so the tree's leaves
+    // (which were parsed from ProjectStructure and don't know
+    // their own kinds) can be labelled correctly. Members whose
+    // objectId doesn't appear in the tree are appended at the
+    // root after the tree's own entries, so nothing is dropped.
+    const members = pou.members ?? [];
+    const tree = pou.tree ?? [];
+    if (members.length > 0 || tree.length > 0) {
+      const treeNodes = buildTreeViewNodes(tree, members);
+      if (treeNodes.length > 0) {
+        content.push({
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              marks: [{ type: 'bold' }],
+              text: 'Structure',
+            },
+          ],
+        });
+        content.push({
+          type: 'bulletList',
+          content: treeNodes,
+        });
+      }
+    }
 
-    // Implementation code block.
+    // (3) Declaration + (4) Implementation for the POU body.
+    // Titles are bare "Declaration" / "Implementation" so the
+    // existing runtime Run button keeps working for POU-level
+    // ST exactly as before.
+    content.push(codeBlockNode('Declaration', pou.declaration));
     content.push(codeBlockNode('Implementation', pou.implementation));
+
+    // (5) Per-member sections. Skipped silently if empty.
+    for (const m of members) {
+      // Empty separator paragraph between members so the wall of
+      // code blocks gets visible breathing room. (Inserting at
+      // document level, prosemirror collapses adjacent paragraphs
+      // visually anyway — but the header paragraph below this
+      // creates the actual gap.)
+      content.push(...buildMemberSection(m));
+    }
   });
 
   // Trailing paragraph so the cursor lands on a fresh line and
@@ -162,6 +257,186 @@ function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
   content.push({ type: 'paragraph' });
 
   editor.chain().focus().insertContent(content).run();
+}
+
+/**
+ * Convert the parsed tree (PlcopenTreeNode[]) into prosemirror
+ * bulletList children (listItem nodes). Cross-references the
+ * `members` list to resolve each leaf's actual kind — the tree
+ * parser stores a placeholder memberKind because the structural
+ * XML (<Object Name="..." ObjectId=".."/>) doesn't say what kind
+ * a leaf is; only the member parser knows.
+ *
+ * Unresolved leaves (an ObjectId in the tree that doesn't match
+ * any parsed member) are kept anyway, labelled with the leaf's
+ * name — that's better than silently dropping them, because an
+ * unmatched ObjectId is almost certainly a kind of member we
+ * didn't parse (e.g. a transition) and the user should still see
+ * its name in the overview.
+ *
+ * After the tree's own entries we append any members NOT mentioned
+ * in the tree (orphans), as flat bullets at the root. That covers
+ * the case where ProjectStructure is partial — every member still
+ * shows up in the tree-view header.
+ */
+function buildTreeViewNodes(
+  tree: PlcopenTreeNode[],
+  members: PlcopenMember[],
+): Record<string, unknown>[] {
+  // Build an objectId → kind index for the leaf-kind resolution.
+  // We dedupe by objectId because a property can produce two
+  // accessor entries with the same objectId, and the tree-view
+  // probably wants to show "Property GET/SET" once.
+  const kindByObjectId = new Map<string, PlcopenMemberKind>();
+  for (const m of members) {
+    if (m.objectId && !kindByObjectId.has(m.objectId)) {
+      kindByObjectId.set(m.objectId, m.kind);
+    }
+  }
+
+  // Track ObjectIds referenced anywhere in the tree so we can
+  // identify orphans.
+  const referenced = new Set<string>();
+  collectReferencedIds(tree, referenced);
+
+  const listItems: Record<string, unknown>[] = tree.map((node) =>
+    buildTreeListItem(node, kindByObjectId),
+  );
+
+  // Append orphan members at the root.
+  for (const m of members) {
+    if (!m.objectId || !referenced.has(m.objectId)) {
+      listItems.push(
+        buildMemberListItem(m.name, m.kind),
+      );
+    }
+  }
+
+  return listItems;
+}
+
+function collectReferencedIds(
+  tree: PlcopenTreeNode[],
+  out: Set<string>,
+): void {
+  for (const n of tree) {
+    if (n.kind === 'folder') {
+      collectReferencedIds(n.children, out);
+    } else if (n.objectId) {
+      out.add(n.objectId);
+    }
+  }
+}
+
+/** One listItem JSON node for one tree node. Folders recurse into
+ *  a nested bulletList. Member leaves render as a single paragraph
+ *  inside the listItem. */
+function buildTreeListItem(
+  node: PlcopenTreeNode,
+  kindByObjectId: Map<string, PlcopenMemberKind>,
+): Record<string, unknown> {
+  if (node.kind === 'folder') {
+    const itemContent: Record<string, unknown>[] = [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            marks: [{ type: 'italic' }],
+            text: `📁 ${node.name}`,
+          },
+        ],
+      },
+    ];
+    if (node.children.length > 0) {
+      itemContent.push({
+        type: 'bulletList',
+        content: node.children.map((c) =>
+          buildTreeListItem(c, kindByObjectId),
+        ),
+      });
+    }
+    return { type: 'listItem', content: itemContent };
+  }
+
+  // Member leaf. Resolve kind from objectId; fall back to the
+  // placeholder the parser gave us.
+  const resolvedKind = kindByObjectId.get(node.objectId) ?? node.memberKind;
+  return buildMemberListItem(node.name, resolvedKind);
+}
+
+/** One bulletList listItem for a single member entry — the leaf
+ *  shape used both by the main tree walk and by the orphan-
+ *  appending step. */
+function buildMemberListItem(
+  name: string,
+  kind: PlcopenMemberKind,
+): Record<string, unknown> {
+  return {
+    type: 'listItem',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            marks: [{ type: 'bold' }],
+            text: kindLabel(kind),
+          },
+          { type: 'text', text: `  ${name}` },
+        ],
+      },
+    ],
+  };
+}
+
+/** "METHOD" / "ACTION" / "PROPERTY GET" / "PROPERTY SET". */
+function kindLabel(kind: PlcopenMemberKind): string {
+  switch (kind) {
+    case 'method': return 'METHOD';
+    case 'action': return 'ACTION';
+    case 'property-get': return 'PROPERTY GET';
+    case 'property-set': return 'PROPERTY SET';
+  }
+}
+
+/** Build the prosemirror JSON for one member's code-block section:
+ *  a small bold header paragraph naming the member, then 1–2 code
+ *  blocks (Declaration + Implementation for methods/properties,
+ *  Implementation only for actions). Code-block titles are
+ *  prefixed with the kind + name so they don't accidentally satisfy
+ *  the runnable-triplet rule used by CodeBlockNodeView. */
+function buildMemberSection(m: PlcopenMember): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+
+  // Header: "**METHOD** AbortMover" — kind label bolded, name plain.
+  out.push({
+    type: 'paragraph',
+    content: [
+      {
+        type: 'text',
+        marks: [{ type: 'bold' }],
+        text: kindLabel(m.kind),
+      },
+      { type: 'text', text: `  ${m.name}` },
+    ],
+  });
+
+  // Action: implementation only. Method / property accessor:
+  // declaration + implementation. We use prefixed titles so the
+  // Run button only triggers on the POU's main Declaration/
+  // Implementation pair, not on every member.
+  const titlePrefix =
+    m.kind === 'method' ? `${kindLabel(m.kind)} ${m.name}` :
+    m.kind === 'action' ? `${kindLabel(m.kind)} ${m.name}` :
+    `${kindLabel(m.kind)} ${m.name}`;
+
+  if (m.kind !== 'action') {
+    out.push(codeBlockNode(`${titlePrefix} — Declaration`, m.declaration));
+  }
+  out.push(codeBlockNode(`${titlePrefix} — Implementation`, m.implementation));
+
+  return out;
 }
 
 /**
@@ -617,6 +892,15 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
             pouType: 'program',
             declaration: 'PROGRAM Program1\nVAR\n\t\nEND_VAR',
             implementation: '',
+            // No members and no tree — the Code-block slash item
+            // produces a plain POU skeleton, no method/action/
+            // property scaffolding. insertPousAtSelection's tree-
+            // view step short-circuits on the empty arrays, so the
+            // result is byte-for-byte identical to the pre-extended
+            // Code-block output: header + Declaration + Implementation
+            // + trailing paragraph.
+            members: [],
+            tree: [],
           },
         ]);
       },
@@ -685,14 +969,34 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
 
             insertPousAtSelection(editor, result.pous);
 
+            // Surface anything that was skipped — both non-ST POUs
+            // (whole POUs dropped because their main body was LD/
+            // FBD/SFC) and non-ST members (methods/actions/
+            // property accessors of an otherwise-importable POU
+            // whose body wasn't ST). The user gets one summary
+            // dialog rather than two so dismissal is one keypress.
+            // Order: non-ST POUs first (more impactful), then
+            // members (a quieter heads-up).
+            const skipNotices: string[] = [];
             if (result.skippedNonST.length > 0) {
-              // Non-fatal — the ST POUs were imported. Tell the
-              // user about the ones we couldn't handle so they're
-              // not surprised by a partial import.
+              skipNotices.push(
+                `Skipped ${result.skippedNonST.length} non-ST POU(s) ` +
+                  `(LD/FBD/SFC are not supported): ` +
+                  result.skippedNonST.join(', '),
+              );
+            }
+            if (result.skippedMembers.length > 0) {
+              skipNotices.push(
+                `Skipped ${result.skippedMembers.length} non-ST ` +
+                  `member(s) (methods / actions / property ` +
+                  `accessors with LD/FBD/SFC bodies): ` +
+                  result.skippedMembers.join(', '),
+              );
+            }
+            if (skipNotices.length > 0) {
               window.alert(
-                `Imported ${result.pous.length} POU(s). ` +
-                  `Skipped ${result.skippedNonST.length} non-ST POU(s) ` +
-                  `(LD/FBD/SFC are not supported): ${result.skippedNonST.join(', ')}`,
+                `Imported ${result.pous.length} POU(s).\n\n` +
+                  skipNotices.join('\n\n'),
               );
             }
           } finally {
