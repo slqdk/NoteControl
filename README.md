@@ -5,6 +5,11 @@ markdown files on disk, one folder per vault — open them in any
 editor, sync them with any tool, back them up by copying a folder.
 The app is just a friendly UI on top.
 
+## Try it for your self.
+http://notecontrol.dk 
+Login: NoteControl
+Password: NoteControl4321
+
 ---
 
 ## What it looks like
