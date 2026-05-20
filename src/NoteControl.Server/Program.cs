@@ -552,6 +552,49 @@ try
             "default-src 'self'; " +
             "script-src 'self'; " +
             "style-src 'self' 'unsafe-inline'; " +
+            // connect-src: explicit allowlist for fetch() / XHR /
+            // WebSocket. Without an explicit directive the browser
+            // falls back to default-src ('self'), which blocks the
+            // TcPOU-from-GitHub import (Ship 3) before the network
+            // request ever leaves the browser — symptom is a
+            // "Failed to fetch" with no HTTP status code.
+            //
+            // Three hosts:
+            //   - raw.githubusercontent.com: the actual blob storage
+            //     for file content. ACAO:* on these responses; fetch
+            //     works directly.
+            //   - api.github.com: the Contents API used by folder-
+            //     mode imports (1 listing call + N raw fetches per
+            //     folder). Also ACAO:*.
+            //   - github.com: kept on the list because GitHub
+            //     occasionally redirects blob URLs through this host
+            //     for some path shapes; CSP applies to the FINAL URL
+            //     after redirects, so we list both. Most fetches
+            //     never touch this host directly.
+            //
+            // Trade-offs accepted (mirrors the img-src widening
+            // rationale documented below):
+            //   - User-pasted GitHub URLs make the user's browser
+            //     hit GitHub's servers. GitHub sees a request
+            //     originating from the user — leaks the existence
+            //     of this NoteControl instance.
+            //   - Referrer-Policy (set above) limits leakage to
+            //     scheme+host. Combined with NoteControl being
+            //     self-hosted, the practical risk is low.
+            //   - This is a TIGHTER widening than img-src 'https:' —
+            //     we name exact hosts, not a wildcard. fetch() is a
+            //     stronger primitive than <img> (read response
+            //     bodies, custom headers), so a narrower allowlist
+            //     is the right default.
+            //
+            // If TcPOU import needs to support other hosts (GitLab,
+            // Bitbucket, self-hosted Gitea), revisit: either add
+            // those hosts here, or add a server-side proxy and
+            // remove this widening.
+            "connect-src 'self' " +
+                "https://raw.githubusercontent.com " +
+                "https://api.github.com " +
+                "https://github.com; " +
             // img-src allows 'self' (own assets), data: (inline /
             // base64), and https: (any external HTTPS image). The
             // https: source was widened from 'self' only when the
