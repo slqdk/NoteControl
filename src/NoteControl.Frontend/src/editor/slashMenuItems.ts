@@ -207,29 +207,43 @@ function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
     content.push({ type: 'paragraph', content: headerInline });
 
     // (2) Tree-view header (only if there's a tree to show).
-    // We build an objectId → memberKind map so the tree's leaves
-    // (which were parsed from ProjectStructure and don't know
-    // their own kinds) can be labelled correctly. Members whose
-    // objectId doesn't appear in the tree are appended at the
-    // root after the tree's own entries, so nothing is dropped.
+    // (2) Tree-view header (only if there's a tree to show).
+    // We render the hierarchy as plain ASCII inside a single
+    // language="text" code block titled "Structure". The big
+    // visual win over a bulletList is vertical density: a bullet
+    // listItem in TipTap defaults to ~36px tall (paragraph
+    // margins + list indent + line-height), so a POU with 17
+    // members ate ~600px of screen before the user reached any
+    // actual code. A code-block line is line-height 1.4 over a
+    // 13-14px font, roughly 20px tall — that's a 50% reduction.
+    //
+    // Layout convention used here:
+    //   - Top-level entries (folders + members directly under the
+    //     POU) are emitted flush-left with no tree connector. The
+    //     POU itself is the implicit root and isn't redrawn.
+    //   - Folder children are indented one step and decorated with
+    //     '├─' (intermediate) and '└─' (last) per the standard
+    //     box-drawing tree convention.
+    //   - Members orphaned by a partial ProjectStructure are
+    //     appended flush-left after all tree entries (same fall-
+    //     back behaviour as before — nothing dropped).
+    //
+    // language: "text" + title: "Structure" intentionally:
+    //   * "text" suppresses ST syntax highlighting (identifiers
+    //     like "AbortMover" would otherwise get coloured as
+    //     symbols), and also keeps the runtime Run button from
+    //     appearing (CodeBlockNodeView gates on language === "st").
+    //   * "Structure" as the title makes the small header bar
+    //     above the block self-documenting.
     const members = pou.members ?? [];
     const tree = pou.tree ?? [];
     if (members.length > 0 || tree.length > 0) {
-      const treeNodes = buildTreeViewNodes(tree, members);
-      if (treeNodes.length > 0) {
+      const asciiTree = buildAsciiTree(tree, members);
+      if (asciiTree.length > 0) {
         content.push({
-          type: 'paragraph',
-          content: [
-            {
-              type: 'text',
-              marks: [{ type: 'bold' }],
-              text: 'Structure',
-            },
-          ],
-        });
-        content.push({
-          type: 'bulletList',
-          content: treeNodes,
+          type: 'codeBlock',
+          attrs: { title: 'Structure', language: 'text' },
+          content: [{ type: 'text', text: asciiTree }],
         });
       }
     }
@@ -260,29 +274,42 @@ function insertPousAtSelection(editor: Editor, pous: PlcopenPou[]): void {
 }
 
 /**
- * Convert the parsed tree (PlcopenTreeNode[]) into prosemirror
- * bulletList children (listItem nodes). Cross-references the
- * `members` list to resolve each leaf's actual kind — the tree
- * parser stores a placeholder memberKind because the structural
- * XML (<Object Name="..." ObjectId=".."/>) doesn't say what kind
- * a leaf is; only the member parser knows.
+ * Render the parsed tree (PlcopenTreeNode[]) as an ASCII text
+ * block suitable for insertion into a language="text" code block.
+ *
+ * Cross-references the `members` list to resolve each leaf's
+ * actual kind — the tree parser stores a placeholder memberKind
+ * because the structural XML (<Object Name="..." ObjectId=".."/>)
+ * doesn't say what kind a leaf is; only the member parser knows.
  *
  * Unresolved leaves (an ObjectId in the tree that doesn't match
  * any parsed member) are kept anyway, labelled with the leaf's
- * name — that's better than silently dropping them, because an
- * unmatched ObjectId is almost certainly a kind of member we
+ * name only — that's better than silently dropping them, because
+ * an unmatched ObjectId is almost certainly a kind of member we
  * didn't parse (e.g. a transition) and the user should still see
  * its name in the overview.
  *
  * After the tree's own entries we append any members NOT mentioned
- * in the tree (orphans), as flat bullets at the root. That covers
- * the case where ProjectStructure is partial — every member still
- * shows up in the tree-view header.
+ * in the tree (orphans), flush-left at the root. That covers the
+ * case where ProjectStructure is partial — every member still
+ * shows up in the structure header.
+ *
+ * Output shape (top-level flush-left, folder contents indented
+ * with box-drawing connectors):
+ *
+ *   📁 InternalMethods
+ *   └─ METHOD  DetectFirstScan
+ *   METHOD  AbortMover
+ *   METHOD  AddMoverToTrack
+ *   ...
+ *
+ * Returns an empty string when there are no entries at all
+ * (caller suppresses the code block in that case).
  */
-function buildTreeViewNodes(
+function buildAsciiTree(
   tree: PlcopenTreeNode[],
   members: PlcopenMember[],
-): Record<string, unknown>[] {
+): string {
   // Build an objectId → kind index for the leaf-kind resolution.
   // We dedupe by objectId because a property can produce two
   // accessor entries with the same objectId, and the tree-view
@@ -299,20 +326,23 @@ function buildTreeViewNodes(
   const referenced = new Set<string>();
   collectReferencedIds(tree, referenced);
 
-  const listItems: Record<string, unknown>[] = tree.map((node) =>
-    buildTreeListItem(node, kindByObjectId),
-  );
+  const lines: string[] = [];
 
-  // Append orphan members at the root.
+  // Top-level entries flush-left, no connectors. Folder contents
+  // get one-step indent and box-drawing connectors via the
+  // recursive helper below.
+  for (const node of tree) {
+    renderTreeNode(node, '', true, kindByObjectId, lines, /*topLevel*/ true);
+  }
+
+  // Append orphan members flush-left.
   for (const m of members) {
     if (!m.objectId || !referenced.has(m.objectId)) {
-      listItems.push(
-        buildMemberListItem(m.name, m.kind),
-      );
+      lines.push(formatLeaf(m.name, m.kind));
     }
   }
 
-  return listItems;
+  return lines.join('\n');
 }
 
 function collectReferencedIds(
@@ -328,66 +358,64 @@ function collectReferencedIds(
   }
 }
 
-/** One listItem JSON node for one tree node. Folders recurse into
- *  a nested bulletList. Member leaves render as a single paragraph
- *  inside the listItem. */
-function buildTreeListItem(
+/**
+ * Recursive ASCII tree renderer.
+ *
+ * `prefix` is the indent string accumulated from ancestors —
+ * either "" at the top, or some combination of "│  " / "   "
+ * for each level of nesting (the bar continues when there are
+ * more siblings ahead at that level, the spaces continue when
+ * the ancestor was the last child). At THIS level, the line is
+ * prefixed with the parent's `prefix` plus either "├─ " or
+ * "└─ " (last-sibling).
+ *
+ * `topLevel` suppresses the connectors for the top-level call
+ * (folders and members directly under the POU). Top-level rows
+ * are flush-left for a cleaner overview; only items inside
+ * folders get tree connectors. The POU itself is the implicit
+ * root and is never redrawn.
+ */
+function renderTreeNode(
   node: PlcopenTreeNode,
+  prefix: string,
+  isLast: boolean,
   kindByObjectId: Map<string, PlcopenMemberKind>,
-): Record<string, unknown> {
-  if (node.kind === 'folder') {
-    const itemContent: Record<string, unknown>[] = [
-      {
-        type: 'paragraph',
-        content: [
-          {
-            type: 'text',
-            marks: [{ type: 'italic' }],
-            text: `📁 ${node.name}`,
-          },
-        ],
-      },
-    ];
-    if (node.children.length > 0) {
-      itemContent.push({
-        type: 'bulletList',
-        content: node.children.map((c) =>
-          buildTreeListItem(c, kindByObjectId),
-        ),
-      });
-    }
-    return { type: 'listItem', content: itemContent };
-  }
+  out: string[],
+  topLevel: boolean,
+): void {
+  const connector = topLevel ? '' : (isLast ? '└─ ' : '├─ ');
+  const childIndent = topLevel ? '' : prefix + (isLast ? '   ' : '│  ');
 
-  // Member leaf. Resolve kind from objectId; fall back to the
-  // placeholder the parser gave us.
-  const resolvedKind = kindByObjectId.get(node.objectId) ?? node.memberKind;
-  return buildMemberListItem(node.name, resolvedKind);
+  if (node.kind === 'folder') {
+    out.push(prefix + connector + `📁 ${node.name}`);
+    const kids = node.children;
+    kids.forEach((child, i) => {
+      renderTreeNode(
+        child,
+        childIndent,
+        i === kids.length - 1,
+        kindByObjectId,
+        out,
+        /*topLevel*/ false,
+      );
+    });
+  } else {
+    // Member leaf. Resolve kind from objectId; fall back to the
+    // placeholder the parser gave us.
+    const resolvedKind = kindByObjectId.get(node.objectId) ?? node.memberKind;
+    out.push(prefix + connector + formatLeaf(node.name, resolvedKind));
+  }
 }
 
-/** One bulletList listItem for a single member entry — the leaf
- *  shape used both by the main tree walk and by the orphan-
- *  appending step. */
-function buildMemberListItem(
-  name: string,
-  kind: PlcopenMemberKind,
-): Record<string, unknown> {
-  return {
-    type: 'listItem',
-    content: [
-      {
-        type: 'paragraph',
-        content: [
-          {
-            type: 'text',
-            marks: [{ type: 'bold' }],
-            text: kindLabel(kind),
-          },
-          { type: 'text', text: `  ${name}` },
-        ],
-      },
-    ],
-  };
+/**
+ * Format a single member-leaf line: "METHOD  Name" (two spaces
+ * between the kind label and the name — wider than one looks
+ * deliberate, narrower than tab risks alignment surprises if the
+ * user's monospace font is unusual). Used by both the in-tree
+ * walk and the orphan-append step.
+ */
+function formatLeaf(name: string, kind: PlcopenMemberKind): string {
+  return `${kindLabel(kind)}  ${name}`;
 }
 
 /** "METHOD" / "ACTION" / "PROPERTY GET" / "PROPERTY SET". */
