@@ -104,9 +104,31 @@ the web UI. See [tray.md](tray.md).
 Layout: **3 panes**.
 
 - **Left rail (tree)**: collapsible (toggle in topbar).
-- **Centre**: folder listing — current folder's contents as a
-  list with name + kind + updated timestamp + size. Includes
-  inline rows for "new folder" and "new note" prompts.
+- **Centre**: a recursive **"All notes under X"** list of every
+  note at or below the current folder, sorted most-recently-
+  updated first. The list is **compact and zebra-striped**:
+  each row is a single line with the note's name (relative to
+  the current folder, .md stripped) on the left and a timestamp
+  on the right showing both a relative form and an absolute
+  short date (`1 hour ago · May 20`; the year suffix appears
+  only when the date isn't this year). Even-indexed rows pick
+  up a tinted background from the active theme's stripe colour
+  — the same `--nc-stripe-bg-*` variables the Links startpage
+  block uses, so the stripe shade follows whatever gradient
+  preset the user has picked and switches automatically between
+  light and dark variants. Long names truncate with ellipsis;
+  the full path is in the link's browser-default tooltip.
+  Pages with zero notes show a muted "No notes here yet."
+  placeholder instead of the list.
+
+  The centre pane also includes inline rows for "new folder"
+  and "new note" prompts (desktop), plus the mobile-only
+  bottom-of-page "+ Add note or folder" composer.
+
+  The compact styling is opt-in via the `nc-list-compact`
+  modifier on the list element; other callers of the shared
+  `nc-list` class (e.g. the vault picker) keep the original
+  taller-row styling.
 - **Right rail (properties)**: collapsible. Shows metadata for
   the selected note or folder; editable name/tags/locked/version
   inline. Includes a Move button that toggles the layout into

@@ -418,11 +418,55 @@ of the shell. Behaviours:
 - **Pinned rows at top**: the **Startpage** row is always at
   the top, above all other folders. **Daily Notes** is not
   pinned — it sorts as a regular folder named "Daily Notes".
+- **Empty folders are muted**: a folder we've loaded and seen
+  to contain zero subfolders + zero notes renders with a muted
+  label and a dimmed icon — a "don't bother opening this"
+  signal so the user can scan past empty folders without
+  expanding them. Hovering the row restores the normal
+  foreground colour; selecting it does too. The italic style
+  on the label persists in both states as a quiet extra cue.
+  Folders that haven't been loaded yet are NOT muted — "we
+  don't know" is rendered the same as "has stuff," because
+  graying unknowns would make the whole tree look dead on
+  first paint.
 
 The tree component is shared between the folder page and the
 editor page; it's mounted once per vault session and survives
 navigation between notes (its cached children + expanded set
 + selection don't reset).
+
+### Eager one-level pre-fetch
+
+For the empty-folder muting above to be useful, the tree has
+to know a folder's contents BEFORE the user expands it.
+Whenever a folder's children land in the listing cache, the
+tree fires listing requests for each of that folder's direct
+subfolders — one level deep, sequential (not parallel), and
+idempotent (already-loaded or in-flight paths are skipped).
+
+This is **one level only**. When a top-level folder's listing
+arrives, its direct subfolders get pre-fetched; their
+subfolders do NOT get pre-fetched at the same time. The next
+level only loads when the user expands the parent — which
+re-triggers the same one-level pre-fetch for the newly-loaded
+layer.
+
+Trade-offs to know:
+
+- **First-paint flash**: the tree renders un-muted for ~50-500
+  ms while the root listing arrives, then folders mute one by
+  one as their listings come back. On slow links this window
+  is longer; nothing breaks, the muting just settles in
+  visibly.
+- **N requests per expand**: a folder with K subfolders fires
+  K sequential listing calls when it expands. Each call is
+  small (one folder), but on a folder with 50 subfolders
+  there's a brief network burst.
+- **Cross-tab staleness**: if another tab (or user) creates a
+  note inside a pre-fetched-as-empty folder, the muting
+  persists in this tab until the folder's own listing refreshes
+  on a manual expand or vault re-open. Same-tab CRUD already
+  refreshes via the existing tree-refresh paths.
 
 ## Search
 
