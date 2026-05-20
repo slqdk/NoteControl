@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Link } from 'react-router-dom';
 
@@ -79,6 +79,20 @@ export function SearchBox({
   const [excluded, setExcluded] = useState<Set<string>>(() => readExcluded());
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Inline-style overrides for the dropdown so it can grow beyond
+  // its containing column. Anchored to the input's bounding rect via
+  // position:fixed; recomputed in a layout effect below on every open
+  // and on window resize. The dropdown is rendered with these values
+  // splatted onto its `style` prop — when null, the dropdown is
+  // hidden anyway, so the initial paint never sees a missing value.
+  const [dropdownStyle, setDropdownStyle] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   // List of vaults the box knows about, defaulting to a synthetic
   // single-entry list (the active vault) when the topbar hasn't
@@ -132,6 +146,63 @@ export function SearchBox({
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+
+  // Compute the dropdown's screen-space position whenever it might
+  // need to be visible. The dropdown uses position:fixed so it can
+  // escape its parent flex column and span the full app-frame width
+  // (not just the topbar centre column).
+  //
+  // Anchoring rules:
+  //   - top:      directly below the input (input.bottom + small gap)
+  //   - left:     the app-frame's left edge plus a padding gutter
+  //   - width:    app-frame width minus 2× the padding gutter
+  //   - maxH:     viewport bottom minus the input's bottom minus a
+  //               small bottom gutter, so the dropdown always fits
+  //               on screen and uses everything below the input
+  //
+  // Recomputes on: open state change, window resize/scroll, app-frame
+  // width changes (the user dragged the appearance slider). The scroll
+  // listener is "true" passive — we just snap to the new position;
+  // the dropdown doesn't track scroll smoothly because the topbar
+  // itself doesn't scroll (the topbar is `position: sticky` at the
+  // top of the layout).
+  useLayoutEffect(() => {
+    if (!open) {
+      setDropdownStyle(null);
+      return;
+    }
+    function recompute() {
+      const input = inputRef.current;
+      if (!input) return;
+      const inputRect = input.getBoundingClientRect();
+      // Look up the app-frame element. There's only one in the DOM —
+      // it's the centred band the whole app renders inside. If we
+      // can't find it (e.g. test environment, future refactor),
+      // fall back to the viewport itself.
+      const frame = document.querySelector('.nc-app-frame');
+      const frameRect = frame?.getBoundingClientRect();
+      const padding = 16; // gutter on each side of the dropdown
+      const frameLeft = frameRect ? frameRect.left : 0;
+      const frameRight = frameRect ? frameRect.right : window.innerWidth;
+      const left = frameLeft + padding;
+      const width = Math.max(280, frameRight - frameLeft - 2 * padding);
+      const top = inputRect.bottom + 4;
+      // Leave a small gutter at the bottom of the viewport so the
+      // dropdown doesn't kiss the edge.
+      const bottomGutter = 12;
+      const maxHeight = Math.max(160, window.innerHeight - top - bottomGutter);
+      setDropdownStyle({ top, left, width, maxHeight });
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    // Capture-phase scroll so we catch scrolls in ancestor containers
+    // (the app shell, the page main, etc.), not just window scrolls.
+    window.addEventListener('scroll', recompute, true);
+    return () => {
+      window.removeEventListener('resize', recompute);
+      window.removeEventListener('scroll', recompute, true);
+    };
+  }, [open]);
 
   // The actual query. Debounced; cancels the in-flight result set on
   // every keystroke + vault-selection change so stale results don't
@@ -264,6 +335,7 @@ export function SearchBox({
   return (
     <div ref={containerRef} className="nc-search">
       <input
+        ref={inputRef}
         type="search"
         className="nc-search-input"
         placeholder={placeholder}
@@ -275,8 +347,17 @@ export function SearchBox({
         onFocus={() => setOpen(true)}
         aria-label="Search notes"
       />
-      {showDropdown && (
-        <div className="nc-search-dropdown" role="listbox">
+      {showDropdown && dropdownStyle && (
+        <div
+          className="nc-search-dropdown"
+          role="listbox"
+          style={{
+            top: dropdownStyle.top,
+            left: dropdownStyle.left,
+            width: dropdownStyle.width,
+            maxHeight: dropdownStyle.maxHeight,
+          }}
+        >
           {/*
             Per-vault toggle row at the top of the dropdown. Always
             visible while the dropdown is open so the user knows what

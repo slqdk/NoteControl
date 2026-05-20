@@ -1800,10 +1800,16 @@ body.nc-dragging * {
 }
 
 .nc-search-dropdown {
-  position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px;
+  /* Position + dimensions are computed at runtime by SearchBox.tsx
+     (useLayoutEffect) and applied as inline styles, so the dropdown
+     can escape its containing flex column and span the full app-frame
+     width. We use position:fixed so the inline `top`/`left` values
+     are viewport-relative rather than relative to the topbar's
+     centre column. */
+  position: fixed;
   background: var(--nc-bg); border: 1px solid var(--nc-border);
   border-radius: var(--nc-radius); box-shadow: var(--nc-shadow);
-  max-height: 360px; overflow-y: auto; z-index: 50;
+  overflow-y: auto; z-index: 100;
 }
 .nc-search-result {
   display: block; padding: 8px 12px;
