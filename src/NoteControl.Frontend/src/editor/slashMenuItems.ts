@@ -10,6 +10,7 @@ import {
   type PlcopenMemberKind,
   type PlcopenTreeNode,
 } from './plcopenImport';
+import { importFromGitHubUrl } from './tcpouImport';
 import { getCachedTemplates } from './templateCache';
 
 /**
@@ -1047,6 +1048,71 @@ export function buildSlashMenuItems(ctx: SlashMenuContext): SlashMenuItem[] {
         window.addEventListener('focus', onFocusBack);
 
         input.click();
+      },
+    },
+    // TcPOU import from GitHub: fetches a `.TcPOU` file (single
+    // POU) or a TcPOU folder (a POU with its method/action/
+    // property files as siblings or in a same-named subfolder)
+    // straight from a GitHub URL. Re-uses the SAME PlcopenPou
+    // shape and the SAME insertPousAtSelection emitter as the
+    // PLCOpen XML item, so once parsed the output is identical:
+    // header + Structure (ASCII tree) + Declaration + Implementation
+    // + per-member sections.
+    //
+    // Accepted URL shapes (resolved by tcpouImport.resolveGitHubUrl):
+    //   - https://github.com/{o}/{r}/blob/{b}/path/Foo.TcPOU
+    //   - https://raw.githubusercontent.com/{o}/{r}/{b}/path/Foo.TcPOU
+    //   - https://github.com/{o}/{r}/tree/{b}/path/Foo  (folder)
+    //
+    // Other hosts are rejected with a clear error (CORS would block
+    // them anyway from the browser side without a server proxy;
+    // a server-proxy ship is a future option if/when needed).
+    //
+    // No allow-flag gate — works in both note and template editors,
+    // same reasoning as PLCOpen XML.
+    {
+      title: 'TcPOU from GitHub',
+      subtitle: 'Fetch a .TcPOU file or POU folder and import',
+      icon: 'TC',
+      keywords: ['tcpou', 'twincat', 'github', 'fetch', 'import', 'url', 'tcmethod', 'tcaction', 'tcproperty'],
+      command: async ({ editor, range }) => {
+        // Strip the "/" trigger immediately so a cancelled prompt
+        // doesn't leave a stranded slash behind.
+        editor.chain().focus().deleteRange(range).run();
+
+        // Plain window.prompt for the URL — consistent with the
+        // existing link-prompt pattern documented in notes.md.
+        // A proper modal is a future UI polish (queue item).
+        const url = window.prompt(
+          'GitHub URL of a .TcPOU file or POU folder:\n\n' +
+            '• blob URL:  https://github.com/owner/repo/blob/main/path/Foo.TcPOU\n' +
+            '• tree URL:  https://github.com/owner/repo/tree/main/path/Foo  (folder)\n' +
+            '• raw URL:   https://raw.githubusercontent.com/owner/repo/main/path/Foo.TcPOU',
+        );
+        if (!url) return;
+
+        let result;
+        try {
+          result = await importFromGitHubUrl(url);
+        } catch (e) {
+          window.alert(
+            `TcPOU import failed.\n\n${e instanceof Error ? e.message : String(e)}`,
+          );
+          return;
+        }
+
+        insertPousAtSelection(editor, result.pous);
+
+        if (result.skippedMembers.length > 0) {
+          // Folder mode can have per-file failures; we surface
+          // them as a single summary the same way the PLCOpen
+          // XML item handles skipped non-ST members.
+          window.alert(
+            `Imported ${result.pous.length} POU(s).\n\n` +
+              `Skipped ${result.skippedMembers.length} member file(s): ` +
+              result.skippedMembers.join(', '),
+          );
+        }
       },
     },
 
