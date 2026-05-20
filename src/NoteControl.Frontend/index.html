@@ -21,6 +21,51 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
+    <!--
+      PWA manifest. Modern Chrome / Edge / Firefox / Samsung Internet
+      use this to drive the "Add to Home Screen" / "Install app"
+      prompt and the resulting standalone launch behaviour. The
+      manifest itself defines name, icons, theme colour, start_url,
+      and display mode (standalone = no browser chrome).
+
+      Per-self-hoster scope: start_url is "/" so each installed
+      instance points at the origin it was installed from. A user
+      who installs from `https://my-server.example` ends up with an
+      icon that opens THAT server, not anyone else's.
+
+      iOS Safari ignores the manifest for home-screen-install
+      behaviour — it uses the legacy apple-mobile-web-app-* meta
+      tags below instead. Both have to coexist for cross-platform
+      coverage.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!--
+      Android Chrome reads theme-color for the address-bar tint when
+      the PWA is launched (and when the site is viewed in-browser).
+      Matches the brand-blue folder fill in the logo SVG.
+    -->
+    <meta name="theme-color" content="#2563EB" />
+
+    <!--
+      iOS Safari-specific PWA hints. Pre-Safari 15 these were the
+      ONLY way to control "Add to Home Screen" appearance; Safari
+      still honours them for back-compat.
+
+        apple-mobile-web-app-capable: yes  -> launch in standalone
+          mode (no Safari chrome). Without this, the icon just
+          re-opens Safari to the URL.
+        apple-mobile-web-app-status-bar-style: default -> status
+          bar uses light-content-on-dark or dark-content-on-light
+          based on the page background. "black-translucent" would
+          overlay content under the status bar, which we don't want.
+        apple-mobile-web-app-title -> shows under the icon on iOS
+          home screen. Falls back to <title> if absent.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="NoteControl" />
+
     <title>NoteControl</title>
   </head>
   <body>

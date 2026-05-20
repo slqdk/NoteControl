@@ -597,10 +597,30 @@ try
     //
     // UseDefaultFiles must come before UseStaticFiles: it rewrites
     // "/" to "/index.html" so static-files knows what to serve.
+    //
+    // The static-files provider uses ASP.NET Core's default
+    // FileExtensionContentTypeProvider which knows several hundred
+    // file extensions out of the box but NOT .webmanifest — the PWA
+    // manifest extension is obscure enough that it never made it
+    // into the baked-in mapping. Without an explicit mapping, the
+    // file is served with Content-Type: application/octet-stream,
+    // which causes Chrome to refuse the PWA install ("manifest is
+    // not valid"). Register it explicitly here.
+    //
+    // The official IANA media type is application/manifest+json
+    // (RFC 6838 + W3C web-app-manifest spec). Some browsers also
+    // accept application/json, but application/manifest+json is
+    // the correct, future-proof answer.
     if (spaPresent)
     {
+        var contentTypeProvider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+        contentTypeProvider.Mappings[".webmanifest"] = "application/manifest+json";
+
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            ContentTypeProvider = contentTypeProvider,
+        });
     }
 
     app.UseMiddleware<SessionResolverMiddleware>();
