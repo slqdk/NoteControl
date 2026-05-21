@@ -391,15 +391,30 @@
   border-color: #2563eb;
 }
 .nc-runtime-pill-bool-false {
-  /* White text on solid black. Reversed-out from TRUE so a
-   * page of mostly-FALSE pills still reads at a glance and
-   * doesn't compete visually with the cream non-BOOL pills. */
-  color: #ffffff;
-  background: #1a1a1a;
-  border-color: #1a1a1a;
+  /* Black text on light grey. Pairs visually with the solid blue
+   * TRUE pill — "off" reads as a calmer, recessive shape, "on"
+   * reads as the bright accent. Earlier iterations used reverse-
+   * out (white text on solid black) but that competed too hard
+   * with the cream non-BOOL pills and made false-heavy lines feel
+   * over-saturated. The light fill also keeps the pill legible
+   * against the grey "unknown identifier" foreground colour used
+   * elsewhere in this file. */
+  color: #1a1a1a;
+  background: #e5e7eb;
+  border-color: #9ca3af;
 }
 
-.nc-runtime-pill-missing {
+.nc-runtime-pill-missing:not(.nc-runtime-pill-bool) {
+  /* "Missing" tint for non-BOOL defaulted values. A defaulted
+   * UDINT 0 or STRING "" carries no meaningful value of its own,
+   * so we paint it in the warning red to make clear that this is
+   * a runtime-invented placeholder rather than a computed value.
+   *
+   * BOOL pills are deliberately NOT affected — a defaulted FALSE
+   * is still FALSE, and showing it with the normal FALSE styling
+   * is more useful than alarming the user. The :not() ensures
+   * the bool-false class wins and the pill reads as a normal
+   * grey-fill FALSE. */
   color: #ffffff;
   background: rgba(220, 38, 38, 0.85);
   border-color: rgba(220, 38, 38, 0.85);
@@ -464,18 +479,22 @@
 .nc-runtime-ident-unknown {
   opacity: 0.55;
 }
-.nc-runtime-pill-unknown {
+.nc-runtime-pill-unknown:not(.nc-runtime-pill-bool) {
   opacity: 0.7;
   /* Slightly different fill so unknown-poked pills don't look
    * identical to known-typed ones — the eye picks up that they
    * came from a different source. Same hue family as the default
-   * pill; just less saturation. */
+   * pill; just less saturation. BOOL pills are excluded via the
+   * :not() because once a chain read has resolved to TRUE/FALSE
+   * the user just wants to see the value — the "this is a chain"
+   * provenance hint is more useful on the numeric/string pills
+   * where the value itself doesn't carry its own strong styling. */
   background: var(--nc-runtime-pill-unknown-bg, #efe9d4);
   border-style: dashed;
 }
-/* Pokeable + unknown: hover lifts opacity so the user sees the
- * pill come "alive" when interacted with. */
-.nc-runtime-pill-unknown.nc-runtime-pill-pokeable:hover {
+/* Pokeable + unknown non-BOOL: hover lifts opacity so the user
+ * sees the pill come "alive" when interacted with. */
+.nc-runtime-pill-unknown:not(.nc-runtime-pill-bool).nc-runtime-pill-pokeable:hover {
   opacity: 1;
 }
 
