@@ -82,8 +82,9 @@ The editor is TipTap-based. What it supports out of the box:
   highlighting via lowlight, with a custom **Structured Text
   (TwinCAT 3 ST)** language registered — the keywords for ST
   are recognised case-insensitively.
-- **Tables** (3×3 default, header row, with a toolbar for
-  add/remove rows and columns).
+- **Tables** (3×3 default, header row). See the **Table editing**
+  section below for selection grips, the unified popup, and row
+  height.
 - **Callouts** in 5 variants: error, warning, info, tip, note.
   Each is a colour-coded box with an icon.
 - **Images**: inline, with hover controls (resize, replace,
@@ -160,6 +161,48 @@ LaTeX source of a new inline math node (the popover opens
 immediately so you can adjust the source); with no selection
 it inserts an empty inline math node — equivalent to
 `Ctrl+Shift+M`.
+
+### Table editing
+
+Cursor in a table cell does not show any chrome on its own.
+To edit the table's structure you select a row, a column, or
+the whole table via small grip handles that fade in on hover:
+
+- one grip on the **left edge of each row**
+- one grip on the **top edge of each column**
+- one grip in the **top-left corner** (the table grip)
+
+Clicking a grip opens a single popup whose contents are
+scoped to the selection:
+
+- **Row scope**: add row above, add row below, delete row,
+  row height (Auto / 24 / 32 / 48 / 64 / custom), toggle
+  header row.
+- **Column scope**: add column left, add column right, delete
+  column, cell alignment (left / centre / right), toggle
+  header column.
+- **Table scope**: row height, toggle header row, toggle
+  header column, merge cells / split cell, delete table.
+
+The popup closes on Escape, on a click outside, on selection
+leaving the table, or on note switch. Clicking a different
+grip while a popup is open swaps the popup's scope rather
+than closing-then-reopening.
+
+**Row height** is a single attribute on the whole table —
+choosing a height applies to every row, and every row stays
+at that height (rows grow if their content needs more, but
+never shrink below the value). A table with a non-Auto row
+height is stored as raw HTML inside the `.md` file (same as
+callouts); plain tables stay as markdown pipe syntax. Other
+table features that also force the HTML form are: any cell
+with a non-default alignment, merged cells (colspan/rowspan
+> 1), header cells outside row 0, multi-block content inside
+a cell (e.g. a list), and user-set column widths from the
+column-resize handle.
+
+Mobile uses a different editor surface and does not show
+grips today — table editing is desktop-only for now.
 
 ### Paste
 
