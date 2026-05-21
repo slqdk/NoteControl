@@ -503,6 +503,29 @@ export function SearchBox({
         onFocus={() => setOpen(true)}
         aria-label="Search notes"
       />
+      {/*
+        Dim backdrop while a search query is active. Anchored to the
+        dropdown's top so the topbar (containing the input itself and
+        the topbar's vault picker) stays fully visible above the dim
+        — only the page content below the search input is dimmed.
+        Sits between the page content (no z-index) and the dropdown
+        (z-index 100).
+        The backdrop is a DOM child of .nc-search (the same container
+        the outside-click handler treats as "inside"), so clicks on
+        it don't trigger the global handler. We give it its own
+        pointerdown that closes the dropdown explicitly.
+        Only shown when there's a query (not while the dropdown is
+        open just for the scope-picker row before typing) — dimming
+        when nothing is being searched would feel heavyweight.
+      */}
+      {showResultArea && dropdownStyle && (
+        <div
+          className="nc-search-backdrop"
+          style={{ top: dropdownStyle.top }}
+          aria-hidden="true"
+          onPointerDown={() => setOpen(false)}
+        />
+      )}
       {showDropdown && dropdownStyle && (
         <div
           className="nc-search-dropdown"
@@ -550,7 +573,7 @@ export function SearchBox({
                     title={checked ? 'Click to exclude' : 'Click to include'}
                     aria-pressed={checked}
                   >
-                    <VaultAvatar vault={v} size={18} />
+                    <VaultAvatar vault={v} size={12} />
                     <span className="nc-search-scope-pill-label">
                       {v.name}
                     </span>

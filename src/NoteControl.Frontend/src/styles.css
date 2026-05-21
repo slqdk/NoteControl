@@ -25,6 +25,10 @@
   --nc-radius-sm: 4px;
   --nc-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
   --nc-shadow-popover: 0 4px 12px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.08);
+  /* Translucent overlay used behind modal-ish UI (search backdrop).
+     Light mode: a soft slate dim; just enough to push the page back
+     visually without making it feel like a blocking modal. */
+  --nc-overlay-dim: rgba(15, 23, 42, 0.32);
   --nc-topbar-h: 52px;
 }
 
@@ -50,6 +54,9 @@
     --nc-error-bg: #450a0a;
     --nc-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
     --nc-shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.4);
+    /* Dark mode: pure-black overlay reads more strongly against the
+       already-dark canvas than a slate one would. */
+    --nc-overlay-dim: rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -70,6 +77,7 @@
   --nc-error-bg: #450a0a;
   --nc-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
   --nc-shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.4);
+  --nc-overlay-dim: rgba(0, 0, 0, 0.45);
 }
 /* Ship 80: explicit light theme override. Re-asserts the light
    tokens so we beat the prefers-color-scheme @media block when
@@ -90,6 +98,7 @@
   --nc-error-bg: #fef2f2;
   --nc-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
   --nc-shadow-popover: 0 4px 12px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.08);
+  --nc-overlay-dim: rgba(15, 23, 42, 0.32);
 }
 
 html, body {
@@ -1907,18 +1916,26 @@ body.nc-dragging * {
 .nc-search-error { color: var(--nc-error-fg); }
 
 /* Per-vault toggle row at the top of the search dropdown. Each pill
-   shows a vault avatar + name; clicking toggles whether that vault
-   is included in the search. Horizontally scrollable so a long
-   vault list doesn't push the dropdown wide. */
+   shows a small vault avatar + name; clicking toggles whether that
+   vault is included in the search.
+   Sized DELIBERATELY smaller and more muted than the topbar vault
+   picker so the two don't get confused — topbar pills mean "switch
+   to this vault", these pills mean "include this vault in results".
+   Centered horizontally; falls back to a horizontal scroll only
+   when an unusually long vault list overflows the dropdown width. */
 .nc-search-scope {
   display: flex;
-  gap: 4px;
-  padding: 8px 8px;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 8px;
   overflow-x: auto;
   border-bottom: 1px solid var(--nc-border);
   background: var(--nc-bg-elev);
-  /* Hide scrollbar gutter on Firefox; WebKit handles via ::-webkit
-     below. Keeps the row visually compact when nothing overflows. */
+  /* Wrap if the row would overflow horizontally — for typical vault
+     counts (≤6) wrapping isn't triggered; large counts wrap into
+     multiple lines rather than forcing horizontal scroll, which is
+     awkward inside a dropdown. */
+  flex-wrap: wrap;
   scrollbar-width: thin;
 }
 .nc-search-scope::-webkit-scrollbar { height: 6px; }
@@ -1929,38 +1946,66 @@ body.nc-dragging * {
 .nc-search-scope-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   flex-shrink: 0;
-  padding: 3px 10px 3px 4px;
+  /* Smaller padding + smaller font => roughly half the visual
+     weight of the topbar's vault pills. Intentional. */
+  padding: 1px 7px 1px 3px;
   font: inherit;
-  font-size: 12px;
+  font-size: 10px;
+  line-height: 1.4;
   border-radius: 999px;
   border: 1px solid var(--nc-border);
   background: var(--nc-bg);
   color: var(--nc-fg-muted);
   cursor: pointer;
-  /* Dim "off" state visually — opacity + muted text. Matches the
-     "active vs inactive" pattern used by the VaultPicker pills. */
-  opacity: 0.55;
+  /* Dim "off" state visually. Lower max opacity than the topbar
+     pills (0.85 instead of 1.0 even when "on") keeps these
+     visually subordinate to the input. */
+  opacity: 0.5;
   transition: opacity 90ms ease-out, background 90ms ease-out, border-color 90ms ease-out;
 }
 .nc-search-scope-pill:hover {
-  opacity: 0.85;
+  opacity: 0.75;
 }
 .nc-search-scope-pill-on {
-  opacity: 1;
-  background: var(--nc-accent-bg-soft);
-  border-color: var(--nc-accent-bg-soft);
+  opacity: 0.85;
+  background: var(--nc-bg-elev-2);
+  border-color: var(--nc-border-strong);
   color: var(--nc-fg);
 }
 .nc-search-scope-pill-on:hover {
-  border-color: var(--nc-accent);
+  opacity: 1;
 }
 .nc-search-scope-pill-label {
-  max-width: 140px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Backdrop shown behind the dropdown while a search query is active.
+   Sits between the page content (no z-index, default stacking) and
+   the dropdown (z-index 100). The inline `top` is set at runtime to
+   the dropdown's top edge so the topbar stays fully readable above
+   the dim — the dim only covers the page content the user has
+   "paused" while searching.
+   Clicking the backdrop is a click outside .nc-search, so the
+   existing outside-click handler closes the dropdown. */
+.nc-search-backdrop {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 99;
+  background: var(--nc-overlay-dim);
+  /* Fade in subtly so it doesn't snap. The starting state uses a
+     transparent overlay so we animate the alpha not the colour. */
+  animation: nc-search-backdrop-in 120ms ease-out;
+}
+@keyframes nc-search-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Container for per-vault error chips, shown between the toggle
