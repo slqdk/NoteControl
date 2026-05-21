@@ -779,11 +779,15 @@ function renderPill(
   const canPoke = pokeEnabled && data.pokeKind !== null;
   if (canPoke) cls += ' nc-runtime-pill-pokeable';
 
-  // BOOL pills support a double-click toggle. For unknown-typed,
-  // we only treat them as BOOL if a BOOL has actually been poked;
-  // otherwise the type isn't known yet and there's nothing to
-  // toggle.
-  const canToggleBool = canPoke && data.pillType === 'BOOL' && !data.isMissing;
+  // BOOL pills support a double-click toggle. We allow toggling
+  // even when `isMissing` (defaulted) is true — flipping a
+  // defaulted FALSE to a real poked TRUE is the whole point of
+  // the gesture, and it's what the user expects in a state
+  // machine where most chain reads default to FALSE until
+  // overridden. (Ship 1.1 marks defaulted values as isMissing
+  // for the muted pill styling; that styling shouldn't lock the
+  // toggle out.)
+  const canToggleBool = canPoke && data.pillType === 'BOOL';
 
   // Tooltip — surfaces both interaction affordances when present
   // and notes the unknown-type origin so the greyed pill is
@@ -818,27 +822,70 @@ function renderPill(
     tooltip += ' — click to edit';
   }
 
-  // Single-click handler: open the inline editor.
+  // Single-click vs double-click coordination.
+  //
+  // Browsers fire `click` BEFORE `dblclick`. If single-click
+  // immediately opens the editor, the second click of a double-
+  // click lands in the now-open input field (selecting its text)
+  // and `dblclick` never gets to toggle the value. The user sees
+  // "I have to double-click to toggle, but double-click just
+  // opens the editor" — which is exactly the bug.
+  //
+  // Fix: defer the single-click's editor-open by ~250ms (slightly
+  // longer than the OS double-click threshold). If a `dblclick`
+  // arrives in that window, we cancel the pending open and toggle
+  // instead. If no dblclick arrives, the pending open fires.
+  //
+  // The timer ID lives at module scope (see PENDING_CLICK at the
+  // bottom of this file) because only one click can be pending
+  // at a time across the whole UI, and putting it there avoids
+  // needing per-render refs in this stateless helper.
   const handleClick = canPoke
     ? () => {
-        setEditing({
-          line: lineNum,
-          column: d.column,
-          nameLower: editTargetNameLower,
-          memberLower: editTargetMemberLower,
-          chainKey: editTargetChainKey,
-        });
+        clearPendingClick();
+        // If this pill supports double-click toggle, defer the
+        // editor-open so a dblclick can pre-empt it. For pills
+        // that DON'T toggle (non-BOOL or non-pokeable), open
+        // immediately — no point making the user wait.
+        if (canToggleBool) {
+          PENDING_CLICK.id = window.setTimeout(() => {
+            PENDING_CLICK.id = null;
+            setEditing({
+              line: lineNum,
+              column: d.column,
+              nameLower: editTargetNameLower,
+              memberLower: editTargetMemberLower,
+              chainKey: editTargetChainKey,
+            });
+          }, 250);
+        } else {
+          setEditing({
+            line: lineNum,
+            column: d.column,
+            nameLower: editTargetNameLower,
+            memberLower: editTargetMemberLower,
+            chainKey: editTargetChainKey,
+          });
+        }
       }
     : undefined;
 
   // Double-click handler: BOOL pills toggle directly. Routed
   // through the matching poke API (pokeVariable / pokeMember /
-  // pokeChain) so unknown BOOLs (poked-as-BOOL) and chain BOOLs
-  // toggle the same way as declared BOOLs.
+  // pokeChain) so unknown BOOLs, chain BOOLs, and known scalar
+  // BOOLs all toggle the same way. Defaulted BOOLs (from the
+  // Ship 1.1 default-FALSE policy) are first-class targets here
+  // — toggling a defaulted FALSE to a poked TRUE is the typical
+  // way the user drives the simulation past a CASE branch's
+  // gating chain read.
   const handleDoubleClick = canToggleBool
     ? (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        // Pre-empt the pending single-click open. Without this
+        // the editor would open after the timer expires, on top
+        // of the toggle that just succeeded — confusing UI.
+        clearPendingClick();
         const flipped = !data.isBoolTrue;
         const newVal: ScalarValue = {
           kind: 'scalar', type: 'BOOL', value: flipped,
@@ -1010,4 +1057,27 @@ export function formatTimeForPill(ms: number): string {
   if (r >= sec) { const s = Math.floor(r / sec); parts.push(`${s}s`); r -= s * sec; }
   if (r > 0) parts.push(`${r}ms`);
   return 'T#' + parts.join('');
+}
+
+/**
+ * Module-scope holder for the deferred-single-click timer.
+ *
+ * Single-click on a toggleable BOOL pill schedules the editor-
+ * open on this timer. Double-click clears it (and toggles the
+ * value instead). Storing the timer at module scope is fine
+ * because only one click can be pending at a time across the
+ * whole inline-source UI — multiple simultaneous pending clicks
+ * would only happen on multi-touch, which isn't a target use
+ * case for the desktop sandbox.
+ *
+ * `id` is a `window.setTimeout` return value (number in the DOM
+ * type, but TypeScript's lib.dom types it as `number` already).
+ */
+const PENDING_CLICK: { id: number | null } = { id: null };
+
+function clearPendingClick(): void {
+  if (PENDING_CLICK.id !== null) {
+    window.clearTimeout(PENDING_CLICK.id);
+    PENDING_CLICK.id = null;
+  }
 }
