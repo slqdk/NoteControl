@@ -41,7 +41,8 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { showToast } from '../utils/toast';
 import type { NoteDto } from '../api/types';
 import type { SaveState } from './SaveStatusIndicator';
-import { TableToolbar } from './TableToolbar';
+import { TableGripOverlay } from './TableGripOverlay';
+import { TablePopup } from './TablePopup';
 import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
 import { MobileNoteProperties } from './MobileNoteProperties';
@@ -1061,7 +1062,8 @@ export function NoteEditor({
 
           We listen on the page-area wrapper (above EditorContent)
           and scope the match to anchors INSIDE .ProseMirror so the
-          floating toolbars below (BubbleMenu, TableToolbar) are
+          floating overlays below (BubbleMenu, TableGripOverlay,
+          TablePopup) are
           unaffected. The handler runs in the React onClick phase,
           which fires AFTER ProseMirror's mousedown/click handlers
           but is still in time to call window.open ourselves.
@@ -1112,17 +1114,24 @@ export function NoteEditor({
           <EditorContent editor={editor} />
         </div>
         {/*
-          Floating toolbar that appears above the active table when
-          the cursor is inside a cell. Hidden otherwise. Self-manages
-          its position via the editor's selection events.
+          Hover-revealed grips on the edges of any table inside the
+          editor. Clicking a grip selects the row/column/whole table
+          and opens the TablePopup. See TableGripOverlay.tsx for the
+          full behaviour notes.
         */}
-        <TableToolbar editor={editor} />
+        <TableGripOverlay editor={editor} />
+        {/*
+          Unified table-editing popup. Listens for grip-driven open
+          events from TableGripOverlay. Hidden until a grip has been
+          clicked. See TablePopup.tsx.
+        */}
+        <TablePopup editor={editor} />
         {/*
           Selection-driven formatting toolbar (bold / italic / inline
           code / link). Appears whenever the user has selected at
           least 2 characters outside a code block; hidden otherwise.
-          Independent of TableToolbar — both can be visible at once
-          when text is selected inside a table cell.
+          Independent of the table popup — both can be visible at
+          once when text is selected inside a table cell.
         */}
         <BubbleMenu
           editor={editor}

@@ -30,7 +30,8 @@ import {
   preprocessMarkdownForMath,
 } from '../editor/MathPasteExtension';
 import { MathExtension } from '../editor/MathExtension';
-import { TableToolbar } from './TableToolbar';
+import { TableGripOverlay } from './TableGripOverlay';
+import { TablePopup } from './TablePopup';
 import { TableInsertDialog, type TableInsertOpts } from './TableInsertDialog';
 import { BubbleMenu } from './BubbleMenu';
 import { assetsApi } from '../api/client';
@@ -350,7 +351,8 @@ export function TemplateEditor({
   return (
     <div className="nc-template-editor">
       <EditorContent editor={editor} />
-      <TableToolbar editor={editor} />
+      <TableGripOverlay editor={editor} />
+      <TablePopup editor={editor} />
       <BubbleMenu editor={editor} />
       {/*
         Table insert dialog. Same pattern as NoteEditor — the slash
