@@ -329,6 +329,14 @@ Operations:
   with a manifest (so a future "undelete" feature could find
   them); folder structure inside trash mirrors the original
   paths.
+- **Cover image** — a folder (including the vault root) can
+  have an optional cover image rendered above the search on
+  the Folder view. Managed from the Properties panel; stored
+  as a hidden dotfile inside the folder so it moves with the
+  folder automatically. See
+  [frontend.md § Folder view](frontend.md#folder-view) for the
+  UX and [storage.md § Folder covers](storage.md#folder-covers)
+  for the on-disk layout.
 
 ## Trash
 

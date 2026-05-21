@@ -123,6 +123,16 @@ Layout: **3 panes**.
   Pages with zero notes show a muted "No notes here yet."
   placeholder instead of the list.
 
+  Above the search box, a **per-folder cover image** renders
+  whenever the folder has one configured (see the Properties
+  panel for the upload affordance). The image displays at its
+  natural intrinsic size, scaling down to `max-width: 100%` of
+  the centre column when wider — aspect ratio preserved. Folders
+  without a cover render no banner at all; the page goes title →
+  search box as before. The cover lives at
+  `<folder>/.folder-cover.<ext>` on disk (see
+  [storage.md](storage.md#vault-folder)).
+
   The centre pane also includes inline rows for "new folder"
   and "new note" prompts (desktop), plus the mobile-only
   bottom-of-page "+ Add note or folder" composer.
@@ -219,6 +229,18 @@ Shows the selected note or folder's metadata. For notes:
 
 For folders: name, full path, contents count, created/updated
 timestamps. Move/Delete buttons available.
+
+Folders also have an editable **Cover** row that uploads, replaces,
+or removes the per-folder cover image rendered above the search on
+the Folder view. Buttons: **Upload cover…** (or **Replace…** when
+one exists) and **Delete cover** (with confirmation). When a cover
+is set, a small thumbnail renders inline in the panel. Image-only
+uploads (PNG, JPEG, GIF, WebP, BMP, SVG); other types are rejected
+with an inline error. The vault root counts as a folder here too —
+its cover row is available when the root is selected. Mobile note
+properties don't currently surface this row; the cover banner still
+renders on the folder page on mobile, but managing it is a
+desktop-only affordance for now.
 
 The panel toggles via the rail-toggle button in the topbar (or
 collapses automatically on narrow viewports).

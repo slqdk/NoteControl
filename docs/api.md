@@ -98,6 +98,9 @@ All under `/api/vaults/{vaultId}`.
 | POST | `/folder` | vault:editor | Create folder. Body has parent path + name. |
 | DELETE | `/folder?path=` | vault:editor | Recursively delete folder + all notes inside. |
 | PUT | `/folder/move` | vault:editor | Move/rename a folder. Index entries for notes inside are updated. |
+| GET | `/folder/cover?path=` | vault:viewer | Stream the folder's cover image bytes. `?path=` empty = vault root. 404 if the folder has no cover. The URL embedded in `FolderListingDto.coverUrl` (see [notes.md § Folders](notes.md#folders)) carries a `&v=<unix-ms>` cache-buster so re-uploads bypass the browser cache. |
+| POST | `/folder/cover?path=` | vault:editor | Multipart upload (or replace) of the folder's cover. Form field: `file` (required). **Image-only** — server enforces `image/*` content types (PNG/JPEG/GIF/WebP/BMP/SVG); other types return 415. Size limit reuses the asset endpoint's `MaxUploadBytes`. Returns the freshly-built `coverUrl` for immediate use in `<img src>`. |
+| DELETE | `/folder/cover?path=` | vault:editor | Remove the folder's cover. Idempotent — returns 204 whether or not a cover existed. |
 
 ## Templates
 
@@ -240,7 +243,7 @@ status codes used:
 - **409** — conflict (creating a name that exists, concurrent
   backup running, etc.).
 - **413** — request body too large (asset upload exceeds size limit).
-- **415** — unsupported content type (e.g. non-image upload to `/template/asset`).
+- **415** — unsupported content type (e.g. non-image upload to `/template/asset` or `/folder/cover`).
 - **423** — login locked out (per-account rate limit hit).
 - **429** — too many requests (per-IP rate limit hit).
 - **5xx** — uncaught exception. Logged with a correlation id;

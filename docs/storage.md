@@ -208,6 +208,32 @@ A note's body references its assets relatively:
 folder is **portable** — copy or move the whole vault folder
 elsewhere and references stay intact.
 
+### Folder covers
+
+A folder can have a single cover image rendered above the search
+on the Folder view (see [frontend.md § Folder view](frontend.md#folder-view)).
+Storage is a hidden dotfile at the folder root: `<folder>/.folder-cover.<ext>`
+with `<ext>` one of `png`, `jpg`, `gif`, `webp`, `bmp`, `svg`. The
+vault root counts as a folder for this purpose — its cover lives at
+`<vault>/.folder-cover.<ext>` directly.
+
+- **Moves with the folder for free.** A folder rename / move is a
+  `Directory.Move` on the on-disk folder; the cover comes along.
+  No id mapping, no descendant-cover synchronisation.
+- **Invisible to listings.** The folder-listing code only enumerates
+  `*.md` files and non-`.notesapp`/`.assets` subdirectories, so the
+  dotfile doesn't appear in the UI.
+- **Not counted as user-visible content.** The "is folder empty"
+  check that gates `DELETE /folder` only counts `*.md` files and
+  non-`.notesapp` subfolders. A cover-only folder stays deletable;
+  the cover gets nuked along with the folder.
+- **At most one per folder.** Uploading a new cover deletes any
+  prior `.folder-cover.*` sibling so the folder never holds two
+  covers at once. The atomic temp-then-rename pattern matches note
+  assets.
+- **Backed up like any other vault file** — backups are a plain
+  copy of DataRoot, so covers ride along.
+
 ## server.db (server-wide SQLite)
 
 The server-wide database. Tables:
