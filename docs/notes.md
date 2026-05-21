@@ -473,13 +473,19 @@ Trade-offs to know:
 Server-side full-text search uses SQLite FTS5 over the
 per-vault index DB. Behaviours:
 
-- Search hits return note path, title, and a snippet with the
-  match highlighted.
+- Search hits return note path, title, and a snippet with matched
+  tokens wrapped in U+0001 / U+0002 control characters (see
+  [api.md](api.md#search--indexing) for the wire format).
 - Tokenizer is `porter unicode61` — handles Latin scripts well,
   case-insensitive, basic English stemming. Danish stems are
   not handled specifically.
-- Searches are scoped to one vault. There is no cross-vault
-  search today.
+- The endpoint is per-vault. Multi-vault search is implemented
+  client-side as a parallel fan-out across selected vaults; see
+  [frontend.md](frontend.md#search-box).
+- Multi-term queries first run a strict AND match (every term in
+  title or body); if that returns zero hits and the query has
+  2+ terms, the server retries with OR (any single term) and
+  sets `looseMatch=true` on the response.
 - The index is rebuilt automatically on schema-version bump
   (currently 1). Owners can also force-rebuild via
   `POST /api/vaults/{id}/index/rebuild`.

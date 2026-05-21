@@ -56,8 +56,10 @@ The top bar contains, left to right:
      dropdown for the others. Right-click on the active pill
      opens an **appearance popover** (12 emoji + 8 colour swatches
      + auto fallback) for changing the vault's icon/colour.
-2. **Search box** — searches the current vault. Submits to
-   `/api/vaults/{id}/search`. Hits open the result in the editor.
+2. **Search box** — searches across vaults, scoped by the per-vault
+   toggle row in the dropdown. Submits to
+   `/api/vaults/{id}/search` once per selected vault. Hits open
+   the result in the editor.
 3. **Rail toggle slot** — placeholder filled by VaultLayout. Has
    two buttons (📁 toggles the tree rail, ℹ️ toggles the
    properties panel) in vault routes. Empty on routes without a
@@ -382,14 +384,81 @@ files. Each sticky has:
 
 ## Search box
 
-In the topbar. Submits the current text to
-`/api/vaults/{id}/search`. Displays results in a dropdown panel
-under the box: each row shows note title, path breadcrumb, and
-a snippet with the match highlighted. Clicking a result
-navigates to the editor at that note's path.
+In the topbar. Searches across every vault the user has selected
+in the scope row at the top of the dropdown — fans out client-side
+to `/api/vaults/{id}/search` per selected vault in parallel and
+merges the results into one ranked list. The dropdown panel sits
+below the box; each row shows note title, the note's full path
+in bold underneath, and a snippet, all with matching query terms
+highlighted. Clicking a result navigates to the editor at that
+note's path.
 
-The search is server-side FTS5; behaviour and tokenisation rules
-are in [notes.md](notes.md).
+**Scope row.** A row of small pills at the top of the dropdown,
+one per known vault, shows which vaults are being searched. Pills
+are toggleable; the selection persists across sessions (see
+localStorage table below — exclusions are stored, so new vaults
+appear ticked automatically). Centered under the search input,
+deliberately styled smaller and more muted than the topbar's
+vault picker so the two don't get confused: scope-row pills mean
+"include this vault in results", topbar pills mean "switch to
+this vault".
+
+**Multi-word fallback.** If a 2+ term query returns zero strict
+hits in a vault (every term must appear in title or body — see
+[notes.md](notes.md#search)), that vault retries automatically
+with an OR query (any single term hits). The response carries
+a `looseMatch` flag indicating which pass produced the hits.
+
+**Client-side coverage filter and ranking.** After the merge,
+the client re-scores every row and drops any row that doesn't
+cover every query term as a case-insensitive substring somewhere
+in path + title + snippet. This handles two server quirks at once:
+
+- The FTS5 schema marks `path` as `UNINDEXED`, so a search for
+  `ax5000 firmware` can't natively match a note whose `ax5000`
+  signal is in the folder path. The re-rank gives +30 per term
+  found in the path, +20 per term in the title, +5 per term in
+  the snippet, a +50 bonus when every term is covered, and a
+  small +5 if the row comes from the currently-active vault.
+- The Porter stemmer treats `windows` and `window` as the same
+  token. The coverage filter drops rows where only the stem is
+  present — the user sees results that literally contain what
+  they typed.
+
+If the coverage filter would empty the result list entirely, it
+falls back to showing the unfiltered scored set so a query with
+no perfect match still surfaces partial matches.
+
+**Highlighting.** The server marks matched tokens in snippets with
+U+0001 / U+0002 control characters (see
+[api.md](api.md#search--indexing)); the client narrows those
+highlights to wrapped tokens that actually contain one of the
+typed query terms, so stem-only matches in the snippet are not
+bolded. Title and path highlights are computed client-side using
+the same substring rule.
+
+**Dropdown size.** The dropdown is sized to match the user's
+default note width (`nc:note-defaults.width`) and centred inside
+the app frame, so results appear in the same column the notes
+themselves occupy. Height fills the viewport below the input
+minus a small bottom gutter. Re-anchors live on window resize
+and on note-width changes from the appearance settings.
+
+**Backdrop.** While a query is active, the page area below the
+input is dimmed with a translucent overlay (theme-aware via
+`--nc-overlay-dim`). The dim appears on first keystroke and
+clears when the query is cleared (X button or backspace to
+empty), when a result is clicked, or when anything outside the
+search box is clicked.
+
+**FolderPage in-page search.** The same component is also mounted
+inside FolderPage with `vaults` undefined; in that mode the
+scope row and backdrop are hidden and the search is single-vault
+folder-scoped (passes `path=` to the endpoint), preserving the
+pre-existing folder-search behaviour.
+
+The underlying server FTS5 behaviour and tokenisation rules are
+in [notes.md](notes.md#search).
 
 ## Account menu
 
@@ -425,6 +494,7 @@ Per-browser preferences and ephemeral state:
 | `nc:tree-behaviour` | rowClickExpands flag |
 | `nc:last-vault-id` | Last vault opened (for redirect from `/vaults`) |
 | `nc:tree-expanded:<vaultId>` | Set of expanded folder paths per vault |
+| `nc:search-vaults-excluded` | JSON array of vault IDs un-ticked in the search scope row. Stores exclusions (not inclusions) so new vaults appear ticked by default. |
 
 These are best-effort and can be cleared without breaking the
 app — defaults take over.

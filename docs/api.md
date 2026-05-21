@@ -128,7 +128,7 @@ All under `/api/vaults/{vaultId}`.
 
 | Method | Path | Auth | Behaviour |
 |---|---|---|---|
-| GET | `/search?q=` | vault:viewer | FTS5 search of the per-vault index. Returns matches with title, path, snippet. |
+| GET | `/search?q=&path=&limit=` | vault:viewer | FTS5 search of the per-vault index. `q` is the free-text query (whitespace-separated terms ANDed; falls back to OR per vault if AND returns zero and the query has 2+ terms). Optional `path=` limits the search to one folder subtree. Optional `limit=` caps results (default 50, max 200). Response is `{ results: SearchResultDto[], indexing: bool, looseMatch: bool }`. Each result has `path`, `title`, `snippet`, `updated`; matched tokens inside the snippet are wrapped with U+0001 (start) and U+0002 (end) control characters — C0 controls are used rather than markdown markers so the client can distinguish FTS5 emphasis from literal bold in the source body. `looseMatch=true` indicates the OR fallback fired for this vault. |
 | GET | `/index/status` | vault:viewer | Index health: schema version, note count, last-built-at. |
 | POST | `/index/rebuild` | vault:owner | Force rebuild the index by re-reading every note. Long-running. |
 
