@@ -59,10 +59,10 @@ interface MergedResult extends SearchResultDto {
  *
  * looseMatch carries the server flag indicating whether THIS vault's
  * results came from the OR fallback (true) or the strict AND pass
- * (false). The merge step uses it to decide whether to drop rows
- * that don't cover every query term — safe for OR rows, would
- * cause false negatives on AND rows whose snippet window happens
- * to omit a term that genuinely matched deeper in the body.
+ * (false). Not currently consumed by the merge step (which applies
+ * a strict coverage filter to all rows regardless) but kept on the
+ * outcome so a future UX hook — e.g. "no exact match, showing
+ * partial results" — can flag the case without a server round-trip.
  */
 interface VaultSearchOutcome {
   vault: VaultDto;
@@ -322,49 +322,52 @@ export function SearchBox({
   }, []);
 
   // Merge per-vault outcomes into a single globally-ranked list,
-  // then post-filter to drop OR-fallback rows that don't actually
-  // cover every query term across path + title + snippet.
+  // then post-filter to drop rows that don't actually contain every
+  // query term across path + title + snippet.
   //
-  // The server returns FTS5-ranked results per vault, but FTS5 only
-  // sees the title and body columns — the note's PATH is UNINDEXED
-  // in the schema. That means a search for "ax5000 firmware" can
-  // miss a note titled "Firmware Changelog" living under
-  // MOTION/HARDWARE/AX5000/ because the AX5000 token never matches
-  // (it's in the path) and so the AND query returns 0 → falls
-  // through to OR → finds matches for either word in many other
-  // notes, all ranked above the actually-perfect-match note whose
-  // body just happens to be short.
+  // Two underlying server quirks we compensate for here:
   //
-  // We compensate client-side in two ways:
+  //  1. The FTS5 schema marks `path` as UNINDEXED. A search for
+  //     "ax5000 firmware" can miss a note titled "Firmware Changelog"
+  //     living under MOTION/HARDWARE/AX5000/ because the AX5000 token
+  //     never matches (it's in the path). We re-score below so notes
+  //     matching in the path / title get boosted.
   //
-  //  1. Re-score each result with simple, explainable heuristics:
+  //  2. The FTS5 index uses `tokenize='porter unicode61'` — the
+  //     Porter stemmer. A search for "windows" matches notes that
+  //     contain only "window", because both stem to the same root.
+  //     The user typed "windows" — they don't want notes that only
+  //     have "window" cluttering the list.
   //
-  //       +30 per query term found (case-insensitive) in the path
-  //       +20 per query term found in the title
-  //       +5  per query term found in the snippet's plain text
-  //       +50 bonus when every query term appears somewhere across
-  //           path + title + snippet (the "complete AND match" bonus)
-  //       +5  if the result is from the currently-active vault
+  // Re-scoring (always applied):
   //
-  //  2. When a result came from a LOOSE-match vault (server's strict
-  //     AND returned 0 and it fell back to OR), drop the row if it
-  //     doesn't have full coverage. This is the fix for "noisy" OR
-  //     results like an AX8000 note showing up for an "ax5000 …"
-  //     search — that note matches on `firmware` alone, doesn't
-  //     mention ax5000 anywhere we can see, and shouldn't be in
-  //     the list.
+  //     +30 per query term found (case-insensitive) in the path
+  //     +20 per query term found in the title
+  //     +5  per query term found in the snippet's plain text
+  //     +50 bonus when every query term appears somewhere across
+  //         path + title + snippet (the "complete coverage" bonus)
+  //     +5  if the result is from the currently-active vault
   //
-  // We DON'T apply the coverage filter to strict (AND-matched) rows
-  // because the snippet is a 32-token window into the body — a term
-  // can legitimately match deeper in the body and never appear in
-  // the snippet. Strict rows are trusted because the server already
-  // confirmed every term matches in title+body.
+  // Coverage filter (always applied, with safety valve):
   //
-  // Safety valve: if the filter would empty the list (all rows were
-  // loose-vault rows and none covered), we fall back to showing the
-  // unfiltered scored set. That preserves the original "treat word 2
-  // as a new criterion if there's no exact match" intent — better
-  // to show partial matches than nothing.
+  //   A row is kept only when every query term literally appears
+  //   (case-insensitive substring) somewhere in its path, title, or
+  //   snippet text. This drops both:
+  //     - OR-fallback noise (term completely missing)
+  //     - stem-expanded matches (note has the stem but not the
+  //       surface form the user typed)
+  //
+  // Trade-off: the snippet is only a 32-token window. For a multi-
+  // term query where one term genuinely matches deeper in the body
+  // than the snippet shows, the row is dropped. In practice FTS5's
+  // snippet picker prefers windows that contain co-occurring matches,
+  // so this is rare — but it can happen. If you find a result you
+  // expected to see disappearing, broaden the search.
+  //
+  // Safety valve: if filtering empties the list entirely, fall back
+  // to the unfiltered scored set. Better to show partial matches
+  // than nothing — preserves the "loose match" intent for queries
+  // where literally nothing covers every term.
   //
   // Server's BM25 rank is preserved as the final tiebreaker via the
   // result's position within its per-vault outcome (lower index = the
@@ -382,7 +385,6 @@ export function SearchBox({
       score: number;
       vaultRank: number;
       allCovered: boolean;
-      fromLooseVault: boolean;
     }
     const scored: Scored[] = [];
 
@@ -419,7 +421,6 @@ export function SearchBox({
           score,
           vaultRank: idxWithinVault,
           allCovered,
-          fromLooseVault: o.looseMatch,
         });
       });
     }
@@ -431,16 +432,13 @@ export function SearchBox({
       return a.vaultRank - b.vaultRank;
     });
 
-    // Apply the coverage filter to loose-vault rows. Strict-vault
-    // rows always pass through.
-    const filtered = scored.filter(
-      (s) => !s.fromLooseVault || s.allCovered,
-    );
+    // Strict coverage filter applied to ALL rows (see header comment
+    // for the trade-off discussion).
+    const filtered = scored.filter((s) => s.allCovered);
 
-    // Safety valve: if filtering emptied the list but we had loose
-    // results to begin with, fall back to showing the loose results
-    // unfiltered. Better to show partial matches than nothing when
-    // nothing covers everything.
+    // Safety valve: if filtering emptied the list, fall back to the
+    // unfiltered scored set. Better to show partial matches than
+    // nothing.
     const final = filtered.length > 0 ? filtered : scored;
 
     return final.map((s) => s.row);
