@@ -590,8 +590,12 @@ function ValueCell({
   }
 
   let cls = 'nc-runtime-pill';
+  // Apply 'missing' and BOOL classes independently — CSS layer
+  // scopes .nc-runtime-pill-missing with :not(.nc-runtime-pill-bool)
+  // so the BOOL styling wins for defaulted BOOL pills. See the
+  // matching comment in InlineSource.tsx for the full rationale.
   if (data.isMissing) cls += ' nc-runtime-pill-missing';
-  else if (data.pillType === 'BOOL') {
+  if (data.pillType === 'BOOL') {
     cls += data.isBoolTrue
       ? ' nc-runtime-pill-bool nc-runtime-pill-bool-true'
       : ' nc-runtime-pill-bool nc-runtime-pill-bool-false';
@@ -601,7 +605,10 @@ function ValueCell({
   const canPoke = pokeEnabled && data.pokeKind !== null;
   if (canPoke) cls += ' nc-runtime-pill-pokeable';
 
-  const canToggleBool = canPoke && data.pillType === 'BOOL' && !data.isMissing;
+  // BOOL pills toggle on double-click, including defaulted ones —
+  // matches the InlineSource Ship 1.3 behaviour (flipping a
+  // defaulted FALSE to a real poked TRUE is the typical gesture).
+  const canToggleBool = canPoke && data.pillType === 'BOOL';
 
   const handleClick = canPoke
     ? () => setEditing({ nameLower, memberLower })

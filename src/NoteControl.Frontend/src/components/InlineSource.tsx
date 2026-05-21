@@ -765,8 +765,17 @@ function renderPill(
   }
 
   let cls = 'nc-runtime-pill';
+  // Apply 'missing' and the BOOL classes independently. A pill
+  // can legitimately be both (a defaulted chain BOOL returning
+  // FALSE is "missing" in the sense of "no real value yet" AND
+  // a BOOL); the CSS layer scopes .nc-runtime-pill-missing with
+  // :not(.nc-runtime-pill-bool) so the BOOL styling wins for
+  // those. Previously this was if/else, which meant defaulted
+  // BOOL pills never got the bool-false class — so the CSS
+  // :not() couldn't suppress the red overlay because the class
+  // it was checking for wasn't there.
   if (data.isMissing) cls += ' nc-runtime-pill-missing';
-  else if (data.pillType === 'BOOL') {
+  if (data.pillType === 'BOOL') {
     cls += data.isBoolTrue
       ? ' nc-runtime-pill-bool nc-runtime-pill-bool-true'
       : ' nc-runtime-pill-bool nc-runtime-pill-bool-false';
