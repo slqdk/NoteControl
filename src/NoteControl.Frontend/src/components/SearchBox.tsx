@@ -305,20 +305,102 @@ export function SearchBox({
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, []);
 
-  // Merge per-vault outcomes into a single ordered list for rendering.
-  // Active-vault hits come first (current-context priority), then the
-  // others in the order their vault appears in `knownVaults`.
+  // Merge per-vault outcomes into a single globally-ranked list.
+  //
+  // The server returns FTS5-ranked results per vault, but FTS5 only
+  // sees the title and body columns — the note's PATH is UNINDEXED
+  // in the schema. That means a search for "ax5000 firmware" can
+  // miss a note titled "Firmware Changelog" living under
+  // MOTION/HARDWARE/AX5000/ because the AX5000 token never matches
+  // (it's in the path) and so the AND query returns 0 → falls
+  // through to OR → finds matches for either word in many other
+  // notes, all ranked above the actually-perfect-match note whose
+  // body just happens to be short.
+  //
+  // We compensate client-side by re-scoring each result with simple,
+  // explainable heuristics:
+  //
+  //   +30 per query term found (case-insensitive) in the path
+  //       — the user is searching the folder/file naming, treat that
+  //         as a very strong intent signal.
+  //   +20 per query term found in the title
+  //       — strong signal, but less than a path match because path
+  //         words are usually deliberately chosen for organisation.
+  //   +5  per query term found in the snippet's plain text
+  //       — weak (server already ranked this via BM25; this is a
+  //         tiebreaker that ensures snippet-only hits don't get
+  //         starved by stronger-anchored hits).
+  //   +50 bonus when every query term appears somewhere across
+  //       path + title + snippet — the "complete AND match" bonus.
+  //       Even when the result was returned via OR fallback, if the
+  //       union of path/title/snippet covers every word the user
+  //       typed, that's the strongest match available.
+  //   +5  if the result is from the currently-active vault — small
+  //       tiebreaker for "your current context probably matters".
+  //
+  // Server's BM25 rank is preserved as the final tiebreaker via the
+  // result's position within its per-vault outcome (lower index = the
+  // server ranked it higher).
   const merged: MergedResult[] = useMemo(() => {
     if (!outcomes) return [];
-    const order = (v: VaultDto) =>
-      v.id === vaultId ? -1 : knownVaults.findIndex((kv) => kv.id === v.id);
-    const sorted = [...outcomes].sort((a, b) => order(a.vault) - order(b.vault));
-    const flat: MergedResult[] = [];
-    for (const o of sorted) {
-      for (const r of o.results) flat.push({ ...r, vault: o.vault });
+    const terms = query
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+
+    interface Scored {
+      row: MergedResult;
+      score: number;
+      vaultRank: number;
     }
-    return flat;
-  }, [outcomes, knownVaults, vaultId]);
+    const scored: Scored[] = [];
+
+    for (const o of outcomes) {
+      o.results.forEach((r, idxWithinVault) => {
+        const path = r.path.toLowerCase();
+        const title = r.title.toLowerCase();
+        // Strip the control-char highlight markers before scoring so
+        // the markers themselves don't accidentally affect substring
+        // matches. (They won't, since the terms can't contain
+        // control chars, but defensive.)
+        const snippetText = r.snippet.replace(/[\u0001\u0002]/g, '').toLowerCase();
+
+        let pathHits = 0;
+        let titleHits = 0;
+        let snippetHits = 0;
+        let allCovered = terms.length > 0;
+        for (const term of terms) {
+          const inPath = path.includes(term);
+          const inTitle = title.includes(term);
+          const inSnippet = snippetText.includes(term);
+          if (inPath) pathHits++;
+          if (inTitle) titleHits++;
+          if (inSnippet) snippetHits++;
+          if (!inPath && !inTitle && !inSnippet) allCovered = false;
+        }
+
+        let score = pathHits * 30 + titleHits * 20 + snippetHits * 5;
+        if (allCovered) score += 50;
+        if (o.vault.id === vaultId) score += 5;
+
+        scored.push({
+          row: { ...r, vault: o.vault },
+          score,
+          vaultRank: idxWithinVault,
+        });
+      });
+    }
+
+    // Sort by score DESC; on ties, by the server's per-vault rank
+    // ASC so the highest-BM25-ranked hit wins the tiebreaker.
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.vaultRank - b.vaultRank;
+    });
+
+    return scored.map((s) => s.row);
+  }, [outcomes, query, vaultId]);
 
   // Vaults that returned an error (after a query ran). Surfaced as a
   // tiny chip below the toggles so failures don't masquerade as zero
@@ -523,6 +605,15 @@ function readExcluded(): Set<string> {
 }
 
 function snippetToSafeHtml(raw: string): string {
+  // The server wraps each matched token with U+0001 (start) and
+  // U+0002 (end). We replace those with <strong> tags. These
+  // characters cannot appear in legitimate note bodies, so there is
+  // no risk of false-positive bolding from literal markdown source
+  // (which is what happened with the old "**" markers — they
+  // collided with markdown bold syntax in the snippet text).
+  //
+  // We HTML-escape first, then replace the control characters with
+  // tag substitutions, then run DOMPurify as a defence in depth.
   const escaped = raw
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -530,11 +621,9 @@ function snippetToSafeHtml(raw: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-  let inside = false;
-  const html = escaped.replace(/\*\*/g, () => {
-    inside = !inside;
-    return inside ? '<strong>' : '</strong>';
-  });
+  const html = escaped
+    .replace(/\u0001/g, '<strong>')
+    .replace(/\u0002/g, '</strong>');
 
   return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['strong'], ALLOWED_ATTR: [] });
 }

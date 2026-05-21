@@ -18,11 +18,22 @@ namespace NoteControl.Server.Search.Services;
 /// </summary>
 public sealed class IndexService : IIndexService
 {
-    // Keep snippet excerpts short; FTS5's snippet() takes start/end markers
-    // and a token budget. The double-asterisks match the spec's choice for
-    // markdown-friendly highlighting.
-    private const string SnippetStartMark = "**";
-    private const string SnippetEndMark = "**";
+    // Snippet emphasis markers. We must NOT use markdown-friendly
+    // characters here ("**", "__", "*", "_") because note bodies
+    // frequently contain those as actual markdown — and FTS5's
+    // snippet() function returns the raw text inside the matched
+    // passage, so any literal markdown markers in that passage come
+    // through unchanged and the client cannot tell "FTS5 wrapped
+    // this match" from "the source markdown said this was bold".
+    //
+    // C0 control characters (\u0001 STX, \u0002 SOT) cannot appear
+    // in user-typed markdown notes — they would have to be inserted
+    // by a script or via copy-paste from a binary file — so they
+    // are an unambiguous signal that "FTS5 put this here, not the
+    // user". The frontend's snippet-to-HTML converter looks for
+    // these specific characters to insert <strong> tags.
+    private const string SnippetStartMark = "\u0001";
+    private const string SnippetEndMark = "\u0002";
     private const int SnippetTokenBudget = 32;
     private const int DefaultSearchLimit = 50;
     private const int MaxSearchLimit = 200;
