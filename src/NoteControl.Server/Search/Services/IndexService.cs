@@ -168,6 +168,7 @@ public sealed class IndexService : IIndexService
         var prefix = string.IsNullOrEmpty(folderPath) ? "" : folderPath + "/";
 
         List<SearchResultDto> results;
+        bool looseMatch = false;
         if (!string.IsNullOrWhiteSpace(query))
         {
             // Two-pass strategy for free-text queries:
@@ -184,10 +185,13 @@ public sealed class IndexService : IIndexService
             // user expectation of "treat word 2 as a new criterion if
             // the strict query finds nothing".
             //
-            // The OR retry is silent: the response shape is unchanged
-            // and the client can't tell which pass produced the hits.
-            // Ranking inside each pass is FTS5's `rank` (BM25-ish) so
-            // the most relevant hit floats to the top.
+            // We signal which pass produced the hits by setting
+            // LooseMatch=true on the response when pass 2 ran. The
+            // client uses that flag to decide whether to post-filter
+            // results by coverage of the original query terms (it can
+            // safely tighten the OR set; tightening AND results would
+            // be wrong because the snippet window may not contain
+            // every term that matched in the full body).
             results = await SearchByQueryAsync(
                 lease.Connection, query, tag, prefix, clampedLimit, useOr: false, ct).ConfigureAwait(false);
 
@@ -195,6 +199,7 @@ public sealed class IndexService : IIndexService
             {
                 results = await SearchByQueryAsync(
                     lease.Connection, query, tag, prefix, clampedLimit, useOr: true, ct).ConfigureAwait(false);
+                looseMatch = results.Count > 0;
             }
         }
         else
@@ -202,7 +207,7 @@ public sealed class IndexService : IIndexService
             results = await SearchByTagAsync(lease.Connection, tag!, prefix, clampedLimit, ct).ConfigureAwait(false);
         }
 
-        return new SearchResponseDto(results, _buildState.IsBuilding(vaultId));
+        return new SearchResponseDto(results, _buildState.IsBuilding(vaultId), looseMatch);
     }
 
     /// <summary>

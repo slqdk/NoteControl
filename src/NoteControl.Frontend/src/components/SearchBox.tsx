@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import DOMPurify from 'dompurify';
 import { Link } from 'react-router-dom';
 
@@ -56,10 +56,18 @@ interface MergedResult extends SearchResultDto {
  * visible (rather than silently dropping them) so the user can tell
  * when a vault is excluded from results due to a server problem
  * rather than because their query genuinely missed.
+ *
+ * looseMatch carries the server flag indicating whether THIS vault's
+ * results came from the OR fallback (true) or the strict AND pass
+ * (false). The merge step uses it to decide whether to drop rows
+ * that don't cover every query term — safe for OR rows, would
+ * cause false negatives on AND rows whose snippet window happens
+ * to omit a term that genuinely matched deeper in the body.
  */
 interface VaultSearchOutcome {
   vault: VaultDto;
   results: SearchResultDto[];
+  looseMatch: boolean;
   error: string | null;
 }
 
@@ -270,12 +278,20 @@ export function SearchBox({
       const next: VaultSearchOutcome[] = selectedVaults.map((vault, i) => {
         const r = responses[i];
         if (r.status === 'fulfilled') {
-          return { vault, results: r.value.results, error: null };
+          return {
+            vault,
+            results: r.value.results,
+            // Default to false when an older server omits the field
+            // — the optional `?` in SearchResponseDto means decoded
+            // values can legitimately be undefined.
+            looseMatch: r.value.looseMatch === true,
+            error: null,
+          };
         }
         const reason = r.reason;
         const message =
           reason instanceof ApiError ? reason.message : 'Search failed';
-        return { vault, results: [], error: message };
+        return { vault, results: [], looseMatch: false, error: message };
       });
       setOutcomes(next);
       setLoading(false);
@@ -305,7 +321,9 @@ export function SearchBox({
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, []);
 
-  // Merge per-vault outcomes into a single globally-ranked list.
+  // Merge per-vault outcomes into a single globally-ranked list,
+  // then post-filter to drop OR-fallback rows that don't actually
+  // cover every query term across path + title + snippet.
   //
   // The server returns FTS5-ranked results per vault, but FTS5 only
   // sees the title and body columns — the note's PATH is UNINDEXED
@@ -317,26 +335,36 @@ export function SearchBox({
   // notes, all ranked above the actually-perfect-match note whose
   // body just happens to be short.
   //
-  // We compensate client-side by re-scoring each result with simple,
-  // explainable heuristics:
+  // We compensate client-side in two ways:
   //
-  //   +30 per query term found (case-insensitive) in the path
-  //       — the user is searching the folder/file naming, treat that
-  //         as a very strong intent signal.
-  //   +20 per query term found in the title
-  //       — strong signal, but less than a path match because path
-  //         words are usually deliberately chosen for organisation.
-  //   +5  per query term found in the snippet's plain text
-  //       — weak (server already ranked this via BM25; this is a
-  //         tiebreaker that ensures snippet-only hits don't get
-  //         starved by stronger-anchored hits).
-  //   +50 bonus when every query term appears somewhere across
-  //       path + title + snippet — the "complete AND match" bonus.
-  //       Even when the result was returned via OR fallback, if the
-  //       union of path/title/snippet covers every word the user
-  //       typed, that's the strongest match available.
-  //   +5  if the result is from the currently-active vault — small
-  //       tiebreaker for "your current context probably matters".
+  //  1. Re-score each result with simple, explainable heuristics:
+  //
+  //       +30 per query term found (case-insensitive) in the path
+  //       +20 per query term found in the title
+  //       +5  per query term found in the snippet's plain text
+  //       +50 bonus when every query term appears somewhere across
+  //           path + title + snippet (the "complete AND match" bonus)
+  //       +5  if the result is from the currently-active vault
+  //
+  //  2. When a result came from a LOOSE-match vault (server's strict
+  //     AND returned 0 and it fell back to OR), drop the row if it
+  //     doesn't have full coverage. This is the fix for "noisy" OR
+  //     results like an AX8000 note showing up for an "ax5000 …"
+  //     search — that note matches on `firmware` alone, doesn't
+  //     mention ax5000 anywhere we can see, and shouldn't be in
+  //     the list.
+  //
+  // We DON'T apply the coverage filter to strict (AND-matched) rows
+  // because the snippet is a 32-token window into the body — a term
+  // can legitimately match deeper in the body and never appear in
+  // the snippet. Strict rows are trusted because the server already
+  // confirmed every term matches in title+body.
+  //
+  // Safety valve: if the filter would empty the list (all rows were
+  // loose-vault rows and none covered), we fall back to showing the
+  // unfiltered scored set. That preserves the original "treat word 2
+  // as a new criterion if there's no exact match" intent — better
+  // to show partial matches than nothing.
   //
   // Server's BM25 rank is preserved as the final tiebreaker via the
   // result's position within its per-vault outcome (lower index = the
@@ -353,6 +381,8 @@ export function SearchBox({
       row: MergedResult;
       score: number;
       vaultRank: number;
+      allCovered: boolean;
+      fromLooseVault: boolean;
     }
     const scored: Scored[] = [];
 
@@ -388,6 +418,8 @@ export function SearchBox({
           row: { ...r, vault: o.vault },
           score,
           vaultRank: idxWithinVault,
+          allCovered,
+          fromLooseVault: o.looseMatch,
         });
       });
     }
@@ -399,7 +431,19 @@ export function SearchBox({
       return a.vaultRank - b.vaultRank;
     });
 
-    return scored.map((s) => s.row);
+    // Apply the coverage filter to loose-vault rows. Strict-vault
+    // rows always pass through.
+    const filtered = scored.filter(
+      (s) => !s.fromLooseVault || s.allCovered,
+    );
+
+    // Safety valve: if filtering emptied the list but we had loose
+    // results to begin with, fall back to showing the loose results
+    // unfiltered. Better to show partial matches than nothing when
+    // nothing covers everything.
+    const final = filtered.length > 0 ? filtered : scored;
+
+    return final.map((s) => s.row);
   }, [outcomes, query, vaultId]);
 
   // Vaults that returned an error (after a query ran). Surfaced as a
@@ -408,6 +452,19 @@ export function SearchBox({
   const failedVaults = useMemo(
     () => (outcomes ?? []).filter((o) => o.error !== null),
     [outcomes],
+  );
+
+  // Lowercased query terms, reused by the render to highlight matches
+  // in title and path. Same split rule as the merge memo so what we
+  // score by is what we highlight by.
+  const queryTerms = useMemo(
+    () =>
+      query
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 0),
+    [query],
   );
 
   function toggleVault(id: string) {
@@ -548,7 +605,9 @@ export function SearchBox({
                 role="option"
               >
                 <div className="nc-search-result-header">
-                  <div className="nc-search-result-title">{r.title}</div>
+                  <div className="nc-search-result-title">
+                    {highlightTerms(r.title, queryTerms)}
+                  </div>
                   {/*
                     Vault chip — only shown when more than one vault
                     is known to the box. In single-vault contexts
@@ -571,13 +630,23 @@ export function SearchBox({
                     </span>
                   )}
                 </div>
+                {/*
+                  Path sits directly under the title in bold so the
+                  user can immediately distinguish similarly-titled
+                  notes (e.g. AX5000/Firmware Changelog vs
+                  AX8000/Firmware Changelog). Matching query terms
+                  inside the path are highlighted with <strong>,
+                  same visual treatment as the title and snippet.
+                */}
+                <div className="nc-search-result-path">
+                  {highlightTerms(r.path, queryTerms)}
+                </div>
                 <div
                   className="nc-search-result-snippet"
                   dangerouslySetInnerHTML={{
                     __html: snippetToSafeHtml(r.snippet),
                   }}
                 />
-                <div className="nc-search-result-path">{r.path}</div>
               </Link>
             ))}
         </div>
@@ -626,4 +695,65 @@ function snippetToSafeHtml(raw: string): string {
     .replace(/\u0002/g, '</strong>');
 
   return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['strong'], ALLOWED_ATTR: [] });
+}
+
+/**
+ * Split a string into a sequence of React nodes, wrapping any
+ * substring that case-insensitively matches one of the query terms
+ * in a <strong> tag. Used for the title and path fields where the
+ * server doesn't provide pre-marked snippet HTML — we have to
+ * compute the highlights client-side.
+ *
+ * Match strategy:
+ *   1. For each term, collect every (start, end) interval where it
+ *      appears in the text (case-insensitive).
+ *   2. Sort intervals by start, then merge any that overlap or
+ *      touch. Without merging, overlapping terms would produce
+ *      nested <strong> tags and double-bolded text.
+ *   3. Walk the text emitting alternating plain segments and
+ *      highlighted segments.
+ *
+ * Returns React nodes (not an HTML string) so the caller can render
+ * directly without DOMPurify.
+ */
+function highlightTerms(text: string, terms: string[]): ReactNode[] {
+  if (!text) return [];
+  if (terms.length === 0) return [text];
+
+  const lower = text.toLowerCase();
+  const intervals: Array<[number, number]> = [];
+  for (const term of terms) {
+    if (!term) continue;
+    let i = lower.indexOf(term, 0);
+    while (i !== -1) {
+      intervals.push([i, i + term.length]);
+      i = lower.indexOf(term, i + term.length);
+    }
+  }
+  if (intervals.length === 0) return [text];
+
+  intervals.sort((a, b) => a[0] - b[0]);
+  // Merge overlapping / adjacent intervals so the rendered tags
+  // don't nest. Adjacent (b[0] === a[1]) intervals from different
+  // terms also collapse, which produces one <strong> instead of
+  // two side-by-side ones — cleaner DOM, same visual.
+  const merged: Array<[number, number]> = [];
+  for (const iv of intervals) {
+    const last = merged[merged.length - 1];
+    if (last && iv[0] <= last[1]) {
+      if (iv[1] > last[1]) last[1] = iv[1];
+    } else {
+      merged.push([iv[0], iv[1]]);
+    }
+  }
+
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  merged.forEach(([start, end], idx) => {
+    if (cursor < start) out.push(text.slice(cursor, start));
+    out.push(<strong key={idx}>{text.slice(start, end)}</strong>);
+    cursor = end;
+  });
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return out;
 }

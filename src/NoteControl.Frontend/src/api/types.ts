@@ -166,6 +166,17 @@ export interface SearchResultDto {
 export interface SearchResponseDto {
   results: SearchResultDto[];
   indexing: boolean;
+  /**
+   * True when the server's strict AND query returned zero results and
+   * it fell back to an OR query (any single term). The SearchBox
+   * applies a client-side coverage filter to loose-match responses so
+   * notes that don't actually contain every query term across path
+   * + title + snippet get dropped. Always false for single-term
+   * queries (no fallback is possible) and for queries that found at
+   * least one strict hit. Optional in the type so older server
+   * versions (which never emit it) decode without errors.
+   */
+  looseMatch?: boolean;
 }
 
 // ---------------------------------------------------------------- Errors

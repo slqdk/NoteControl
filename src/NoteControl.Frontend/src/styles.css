@@ -1838,13 +1838,48 @@ body.nc-dragging * {
   min-width: 0;
   flex: 1;
 }
-.nc-search-result-snippet { font-size: 13px; color: var(--nc-fg-muted); }
+.nc-search-result-title strong {
+  /* Matching query terms in the title get the same blue chip
+     treatment as the snippet's matches, so the eye picks them up
+     instantly across all three fields (title, path, snippet). */
+  color: var(--nc-fg);
+  background: rgba(37, 99, 235, 0.18);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+/* Path sits right under the title in a bold, slightly-muted line.
+   The bold makes it easy to tell similarly-titled notes apart
+   (e.g. "Firmware Changelog" under AX5000 vs AX8000); the muted
+   color keeps it from competing with the title for primary
+   attention. Truncates with ellipsis on overflow so the row stays
+   one line. */
+.nc-search-result-path {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  font-weight: 600;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nc-search-result-path strong {
+  /* Same chip treatment as title/snippet highlights. */
+  color: var(--nc-fg);
+  background: rgba(37, 99, 235, 0.18);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+.nc-search-result-snippet {
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+  margin-top: 4px;
+}
 .nc-search-result-snippet strong {
   color: var(--nc-fg);
   background: rgba(37, 99, 235, 0.18);
   padding: 0 2px; border-radius: 2px;
 }
-.nc-search-result-path { font-size: 11px; color: var(--nc-fg-muted); margin-top: 4px; }
 
 /* Per-result "from <vault>" chip. Sits at the right edge of each
    result's header row. Uses the existing VaultAvatar component for
