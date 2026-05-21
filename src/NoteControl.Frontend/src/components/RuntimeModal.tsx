@@ -419,7 +419,7 @@ export function RuntimeModal({
         </div>
 
         <div className="nc-runtime-modal-body">
-          <div className="nc-runtime-modal-pane">
+          <div className="nc-runtime-modal-pane nc-runtime-modal-pane-decl">
             <div className="nc-runtime-modal-pane-title">
               <span>Declaration</span>
               {parsed.ok && (
@@ -470,7 +470,7 @@ export function RuntimeModal({
               </pre>
             )}
           </div>
-          <div className="nc-runtime-modal-pane">
+          <div className="nc-runtime-modal-pane nc-runtime-modal-pane-impl">
             <div className="nc-runtime-modal-pane-title">
               <span>Implementation</span>
             </div>

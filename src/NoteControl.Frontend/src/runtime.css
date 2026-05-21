@@ -58,7 +58,12 @@
 }
 
 .nc-runtime-modal {
-  width: min(900px, 100%);
+  /* Sized to dominate the viewport without being foolish on
+   * ultrawides. 95vw gives a small breathing margin so the
+   * backdrop still shows around the edges; 1600px is the upper
+   * bound — past that the lines just get gappy and the eye has
+   * to track too far between LHS pills and RHS chain pills. */
+  width: min(1600px, 95vw);
   max-height: 88vh;
   display: flex;
   flex-direction: column;
@@ -206,6 +211,20 @@
   overflow: hidden;
   background: var(--nc-bg-elev);
   min-height: 0;
+}
+
+/* Body splits ~1/3 declaration, 2/3 implementation. The
+ * `flex-basis: 0` is the trick that makes the `flex-grow`
+ * ratios behave like actual height ratios rather than "grow
+ * proportionally from each pane's content height". Without it
+ * a long implementation eats all the share and the decl pane
+ * collapses to its content. Min-height stays 0 so they can both
+ * shrink past their content if the viewport is short. */
+.nc-runtime-modal-pane-decl {
+  flex: 1 1 0;
+}
+.nc-runtime-modal-pane-impl {
+  flex: 2 1 0;
 }
 
 .nc-runtime-modal-pane-title {
