@@ -196,6 +196,19 @@ function collectDecorations(
   }
 
   /**
+   * True if `nameLower` is declared as STRING. Used by the
+   * Assign-visit to drop the LHS-side pill on string-literal
+   * assignments (`StatusSTRING := '...';`), which otherwise
+   * displays the stale prior value next to the new literal —
+   * pure noise on a state machine that re-assigns the same
+   * variable many times.
+   */
+  function isStringTypedVar(nameLower: string): boolean {
+    const v = program.program.vars.find(x => x.nameLower === nameLower);
+    return v?.type.kind === 'scalar' && v.type.name === 'STRING';
+  }
+
+  /**
    * For a chain whose last segment is a method call, find the
    * column of the closing `)` so the pill renders right after it
    * rather than between the method name and its opening paren.
@@ -340,10 +353,28 @@ function collectDecorations(
 
   function visitStmt(s: Statement) {
     switch (s.kind) {
-      case 'Assign':
-        visitVarRef(s.target);
+      case 'Assign': {
+        // The LHS-side pill is a "before" view of the variable
+        // that's about to be overwritten. It's useful when the
+        // RHS is a computation (you see what was there vs what's
+        // going in), but pure noise for STRING literal assigns —
+        // every `StatusSTRING := '...';` line would show the
+        // same stale value next to the new literal, making the
+        // user's eye flick back and forth.
+        //
+        // Skip the LHS pill in that one narrow case: RHS is a
+        // STRING literal AND the LHS variable is declared STRING.
+        // Numeric `InitialStep := 10;` patterns keep their LHS
+        // pill — the CASE-state "what step am I on" reading is
+        // genuinely useful there.
+        const skipLhsPill =
+          s.value.kind === 'Literal' &&
+          s.value.litType === 'STRING' &&
+          isStringTypedVar(s.target.nameLower);
+        if (!skipLhsPill) visitVarRef(s.target);
         visitExpr(s.value);
         return;
+      }
       case 'ChainAssign':
         // The LHS is a chain expression — emit its decoration
         // (which is anchored at its last segment) and walk the
@@ -536,13 +567,18 @@ function gatherPillData(
       // from input syntax. If the user has poked something, show
       // that value with its inferred type's styling.
       if (v.scalarValue === null) {
+        // No poked value: show the runtime's default (BOOL FALSE)
+        // with muted styling. Matches the chain pill's policy
+        // and reflects what evalExpr will actually return when
+        // the runtime reads this variable.
         return {
           ...empty,
-          formattedValue: `<${v.typeName}?>`,
+          formattedValue: 'FALSE',
+          pillType: 'BOOL',
+          isMissing: true,
+          isBoolTrue: false,
           isUnknownTyped: true,
           pokeKind: 'unknown-var',
-          // isMissing stays true so the pill renders muted but
-          // still highlights as pokeable.
         };
       }
       const sv = v.scalarValue;
@@ -550,7 +586,10 @@ function gatherPillData(
         formattedValue: formatRuntimeValue(sv),
         pillType: sv.type,
         isBoolTrue: sv.type === 'BOOL' && sv.value === true,
-        isMissing: false,
+        // A stored defaulted value (`fromUnknownDefault`) renders
+        // muted so the user sees "this isn't real" — same as the
+        // chain pill.
+        isMissing: sv.fromUnknownDefault === true,
         isUnknownTyped: true,
         pokeKind: 'unknown-var',
       };
@@ -573,20 +612,35 @@ function gatherPillData(
     // key. The chain key uniquely identifies this chain shape
     // across all its uses in the source, so a single poke applies
     // everywhere the same chain expression appears.
+    //
+    // No stored value? Show the runtime's default (BOOL FALSE)
+    // with `isMissing` styling. This mirrors evalChain's policy:
+    // unpoked chains default to FALSE; the user can click to
+    // override. Previously the pill showed "?" and the runtime
+    // halted on first read — that turned out to be unworkable
+    // because Reset wiped pokes and the user couldn't progress.
     const stored = readChain(env, d.payload.baseLower, d.payload.chainKey);
     if (!stored) {
       return {
         ...empty,
-        formattedValue: '?',
+        formattedValue: 'FALSE',
+        pillType: 'BOOL',
+        isMissing: true,
+        isBoolTrue: false,
         isUnknownTyped: true,
         pokeKind: 'chain',
       };
     }
+    // Poked or stored-defaulted value. `fromUnknownDefault` on
+    // the stored value means "this came from a defaulted read
+    // that was assigned through" — still show the value, but
+    // keep the muted (isMissing) styling so the user knows it
+    // isn't a real computed value.
     return {
       formattedValue: formatRuntimeValue(stored),
       pillType: stored.type,
       isBoolTrue: stored.type === 'BOOL' && stored.value === true,
-      isMissing: false,
+      isMissing: stored.fromUnknownDefault === true,
       isUnknownTyped: true,
       pokeKind: 'chain',
     };
@@ -600,9 +654,13 @@ function gatherPillData(
     // unknowns. Look up whatever's been poked into this member.
     const poked = obj.members.get(d.payload.memberLower);
     if (!poked) {
+      // Match the runtime default: BOOL FALSE, muted styling.
       return {
         ...empty,
-        formattedValue: '?',
+        formattedValue: 'FALSE',
+        pillType: 'BOOL',
+        isMissing: true,
+        isBoolTrue: false,
         isUnknownTyped: true,
         pokeKind: 'unknown-member',
       };
@@ -611,7 +669,7 @@ function gatherPillData(
       formattedValue: formatRuntimeValue(poked),
       pillType: poked.type,
       isBoolTrue: poked.type === 'BOOL' && poked.value === true,
-      isMissing: false,
+      isMissing: poked.fromUnknownDefault === true,
       isUnknownTyped: true,
       pokeKind: 'unknown-member',
     };

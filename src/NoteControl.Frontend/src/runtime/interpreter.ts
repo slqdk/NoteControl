@@ -70,6 +70,26 @@ export interface ScalarValue {
   kind: 'scalar';
   type: ScalarTypeName;
   value: number | bigint | boolean | string;
+  /**
+   * Set when the value was synthesised as a default because an
+   * unknown-typed read had no poked value. The flag rides along
+   * through arithmetic, member reads, and call returns. Two
+   * downstream behaviours key on it:
+   *
+   *   1. `coerceTo` substitutes the target type's default
+   *      instead of throwing on type mismatch — so a defaulted
+   *      BOOL FALSE assigned to a UDINT becomes UDINT 0 rather
+   *      than halting the scan.
+   *   2. The inline-pill renderer styles defaulted values muted
+   *      so the user sees "you can poke me to override this"
+   *      rather than "this is a real value the runtime computed".
+   *
+   * The flag is NEVER set on user-poked values (`pokeChain`,
+   * `pokeVariable`, `pokeMember`) or on literals from the source
+   * — only on values the runtime invented because it had no
+   * better answer.
+   */
+  fromUnknownDefault?: true;
 }
 
 /**
@@ -135,6 +155,32 @@ function scalar(type: ScalarTypeName, value: ScalarValue['value']): ScalarValue 
   return { kind: 'scalar', type, value };
 }
 
+/**
+ * Build a defaulted scalar — a ScalarValue with the
+ * `fromUnknownDefault` flag set, used wherever the runtime has
+ * to invent a value because an unknown-typed source had nothing
+ * poked into it. The chosen type drives:
+ *
+ *   - The pill's visible value (FALSE / 0 / "" / T#0ms).
+ *   - The "true" type-tag downstream consumers see (so
+ *     arithmetic on a defaulted DINT still produces a DINT-shaped
+ *     result, not a BOOL).
+ *
+ * Defaults to BOOL FALSE when no type hint is available — that's
+ * the most useful default for IF-condition reads, which are the
+ * most common "this hasn't been poked yet" scenario in the
+ * sample programs we've tested.
+ */
+function defaultedScalar(type: ScalarTypeName = 'BOOL'): ScalarValue {
+  const meta = TYPE_META[type];
+  return {
+    kind: 'scalar',
+    type,
+    value: meta.defaultValue,
+    fromUnknownDefault: true,
+  };
+}
+
 function asScalar(v: RuntimeValue, line: number, ctx: string): ScalarValue {
   if (v.kind === 'fb') {
     throw new StRuntimeError(
@@ -143,16 +189,14 @@ function asScalar(v: RuntimeValue, line: number, ctx: string): ScalarValue {
     );
   }
   if (v.kind === 'unknown') {
-    // An unknown-typed bare variable doesn't have a value until
-    // the user pokes one. Reading before poking is reported as
-    // a type mismatch so the user sees what's missing — we don't
-    // want to silently feed a default into the surrounding
-    // expression and have it produce a misleading result.
+    // An unknown-typed bare variable with no poked value: return
+    // a defaulted BOOL FALSE. The flag rides through arithmetic
+    // and coercion so the user can poke a real value at any time
+    // and it'll override on the next scan. Throwing here would
+    // halt the whole scan on the first missing pill, which is
+    // exactly the failure mode we're rolling back.
     if (v.scalarValue === null) {
-      throw new StRuntimeError(
-        'type-mismatch', line,
-        `${ctx}: variable of unknown type "${v.typeName}" has no value yet — double-click or click the pill to poke one`,
-      );
+      return defaultedScalar('BOOL');
     }
     return v.scalarValue;
   }
@@ -323,10 +367,17 @@ function execStatement(s: Statement, ctx: ScanContext): void {
         // Whatever type the expression evaluated to becomes the
         // current type of the unknown variable. The pill will
         // render with that type's styling on the next render.
+        // If the RHS was a defaulted value (e.g. from an unknown
+        // chain that hasn't been poked), preserve the flag so
+        // the assigned variable's pill stays muted — the value
+        // is still "the runtime invented this", just transitively.
         const sv = asScalar(value, s.line, `assignment to ${s.target.name}`);
+        const stored: ScalarValue = sv.fromUnknownDefault
+          ? { kind: 'scalar', type: sv.type, value: sv.value, fromUnknownDefault: true }
+          : { kind: 'scalar', type: sv.type, value: sv.value };
         ctx.env.set(s.target.nameLower, {
           ...targetVar,
-          scalarValue: { kind: 'scalar', type: sv.type, value: sv.value },
+          scalarValue: stored,
         });
         return;
       }
@@ -559,15 +610,15 @@ function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
         );
       }
       // Unknown-typed bare variable: if the user has poked a
-      // value, return it. Otherwise we surface a clear runtime
-      // error rather than feed a default — silent zero-out
-      // would mask problems in the user's logic.
+      // value, return it. Otherwise return a defaulted BOOL FALSE
+      // so the scan can proceed — the flag rides through coercion
+      // so this never produces a type-mismatch halt. (Old behaviour
+      // was to throw; that turned out to be unworkable because
+      // Reset wiped pokes, leaving no path past the first missing
+      // value.)
       if (v.kind === 'unknown') {
         if (v.scalarValue === null) {
-          throw new StRuntimeError(
-            'type-mismatch', e.line,
-            `variable "${e.name}" of unknown type "${v.typeName}" has no value yet — click its pill to poke one`,
-          );
+          return defaultedScalar('BOOL');
         }
         return scalar(v.scalarValue.type, v.scalarValue.value);
       }
@@ -607,14 +658,12 @@ function evalMember(e: MemberExpr, ctx: ScanContext): RuntimeValue {
   }
   if (v.kind === 'unknown') {
     // Unknown-typed member access: read whatever's been poked
-    // into this member, or surface a clear error if nothing has.
-    // Same policy as bare unknowns — no silent defaulting.
+    // into this member, or return a defaulted BOOL FALSE. Same
+    // policy as bare unknowns and chains — the flag rides
+    // through coercion so missing members never halt the scan.
     const poked = v.members.get(e.memberLower);
     if (!poked) {
-      throw new StRuntimeError(
-        'type-mismatch', e.line,
-        `member "${e.object.name}.${e.member}" of unknown type "${v.typeName}" has no value yet — click its pill to poke one`,
-      );
+      return defaultedScalar('BOOL');
     }
     return scalar(poked.type, poked.value);
   }
@@ -732,26 +781,35 @@ function evalChain(e: ChainExpr, ctx: ScanContext): RuntimeValue {
     }
   }
 
-  // If the chain ends in a 'call' segment, the user is invoking
-  // a slot of an indexed array (e.g. `fb_MC_Power[IDX](Axis:=…)`)
-  // — typically as a STATEMENT, not for its return value. We
-  // silently no-op these (same policy as the unknown FB-instance
-  // call form in evalCall), returning BOOL TRUE. The user can
-  // still pill-poke the chain on the call site if they want a
-  // specific return value, since we don't otherwise short-circuit.
+  // If the chain ends in a 'call' segment (e.g. `fb_MC_Power[IDX](Axis:=…)`)
+  // it's typically used as a STATEMENT, not for its return value.
+  // Return a defaulted BOOL FALSE; the flag rides through any
+  // downstream coercion so this never throws on type-mismatch.
+  // The user can still pill-poke the chain on the call site if
+  // they want a specific return value — pokes override defaults.
   const tail = e.segments[e.segments.length - 1];
   if (tail.kind === 'call') {
-    return scalar('BOOL', true);
+    return defaultedScalar('BOOL');
   }
 
   const key = CHAIN_KEY_PREFIX + chainKey(e.segments);
   const poked = v.members.get(key);
   if (!poked) {
-    throw new StRuntimeError(
-      'type-mismatch', e.line,
-      `value of "${chainDisplay(e.base, e.segments)}" hasn't been poked yet — click its pill to set one`,
-    );
+    // Nothing poked yet — return a defaulted BOOL FALSE. Previously
+    // we threw "click pill to poke", which halted the scan on the
+    // first missing value; that turned out to be unworkable in
+    // practice (Reset wipes pokes, so the user could never
+    // make progress past a chain). The new policy: default-FALSE
+    // by default, user pokes override, and the flag lets coerceTo
+    // substitute the right type's default on assignment so a
+    // defaulted BOOL going into a UDINT becomes UDINT 0 instead
+    // of a runtime type error.
+    return defaultedScalar('BOOL');
   }
+  // Poked value: return as-is. The flag is NOT set on poked values
+  // (pokeChain doesn't set it), so coerceTo treats it as a real
+  // value and throws on actual type mismatches — the user gets
+  // honest feedback if they poke the wrong type.
   return scalar(poked.type, poked.value);
 }
 
@@ -813,7 +871,10 @@ function execChainAssign(s: ChainAssignStmt, ctx: ScanContext): void {
   }
 
   const key = CHAIN_KEY_PREFIX + chainKey(s.target.segments);
-  v.members.set(key, { kind: 'scalar', type: sv.type, value: sv.value });
+  const stored: ScalarValue = sv.fromUnknownDefault
+    ? { kind: 'scalar', type: sv.type, value: sv.value, fromUnknownDefault: true }
+    : { kind: 'scalar', type: sv.type, value: sv.value };
+  v.members.set(key, stored);
 }
 
 /**
@@ -1119,6 +1180,21 @@ function coerceTo(
   valueIn: RuntimeValue, target: ScalarTypeName, line: number,
 ): ScalarValue {
   const value = asScalar(valueIn, line, `assign to ${target}`);
+
+  // Defaulted-source short-circuit. If the source value came from
+  // an unknown-typed read with no poked value, the type-tag on it
+  // is meaningless — it's just "the runtime had to invent
+  // something". Substitute the target type's default and preserve
+  // the flag, so downstream reads of the assignment target still
+  // know they're looking at a defaulted value (the pill will style
+  // it muted). Without this short-circuit a `TrackCount := <chain>`
+  // where the chain returned a defaulted BOOL would throw "cannot
+  // assign BOOL to UDINT" — which is exactly the halt the new
+  // policy is meant to avoid.
+  if (value.fromUnknownDefault && value.type !== target) {
+    return defaultedScalar(target);
+  }
+
   const meta = TYPE_META[target];
 
   if (target === 'BOOL') {
@@ -1963,7 +2039,7 @@ function evalCall(
         try { evalExpr(a.value, ctx); } catch { /* ignored */ }
       }
     }
-    return scalar('BOOL', true);
+    return defaultedScalar('BOOL');
   }
 
   // Built-in path. Reject named args for KNOWN built-ins (we
@@ -2026,24 +2102,18 @@ function evalCall(
  */
 function permissiveUnknownBuiltinReturn(nameLower: string): ScalarValue {
   // TO_<TYPE> conversions — recognise the suffix and synthesise
-  // a typed default. The list mirrors TYPE_META keys so any type
-  // the runtime knows about can be a TO_ target.
+  // a defaulted value of that type. The flag rides through so
+  // downstream coercion handles type mismatches gracefully.
   if (nameLower.startsWith('to_')) {
     const suffix = nameLower.slice(3).toUpperCase() as ScalarTypeName;
     if (suffix in TYPE_META) {
-      const meta = TYPE_META[suffix];
-      // For integer types, default to 0; for BOOL FALSE; for
-      // STRING empty. Pulled from TYPE_META.defaultValue.
-      if (suffix === 'BOOL') return scalar('BOOL', false);
-      if (suffix === 'STRING') return scalar('STRING', '');
-      if (suffix === 'TIME') return scalar('TIME', 0);
-      // Integer or real types — defaultValue is already the
-      // right shape (number or bigint).
-      return scalar(suffix, meta.defaultValue as ScalarValue['value']);
+      return defaultedScalar(suffix);
     }
   }
-  // Fallback — BOOL TRUE, matching the unknown-FB-call policy.
-  return scalar('BOOL', true);
+  // Fallback — defaulted BOOL FALSE. (Was BOOL TRUE pre-Ship 1.1;
+  // changed to FALSE so behaviour matches the "assume false /
+  // poke to override" model the user requested.)
+  return defaultedScalar('BOOL');
 }
 
 /**
