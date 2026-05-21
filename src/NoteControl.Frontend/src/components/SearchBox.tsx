@@ -644,7 +644,7 @@ export function SearchBox({
                 <div
                   className="nc-search-result-snippet"
                   dangerouslySetInnerHTML={{
-                    __html: snippetToSafeHtml(r.snippet),
+                    __html: snippetToSafeHtml(r.snippet, queryTerms),
                   }}
                 />
               </Link>
@@ -673,28 +673,81 @@ function readExcluded(): Set<string> {
   }
 }
 
-function snippetToSafeHtml(raw: string): string {
+function snippetToSafeHtml(raw: string, terms: string[]): string {
   // The server wraps each matched token with U+0001 (start) and
-  // U+0002 (end). We replace those with <strong> tags. These
+  // U+0002 (end). We translate those to <strong> tags. These
   // characters cannot appear in legitimate note bodies, so there is
   // no risk of false-positive bolding from literal markdown source
   // (which is what happened with the old "**" markers — they
   // collided with markdown bold syntax in the snippet text).
   //
-  // We HTML-escape first, then replace the control characters with
-  // tag substitutions, then run DOMPurify as a defence in depth.
-  const escaped = raw
+  // However the SERVER's notion of "this matched the query" is
+  // looser than the user expects. The FTS5 index uses the Porter
+  // stemmer, so "windows" and "window" share a stem — a search for
+  // "windows" highlights "window" in the snippet, which looks
+  // misleading ("I didn't search for that").
+  //
+  // We narrow the server's highlights to those whose wrapped surface
+  // form actually contains one of the user's query terms (case-
+  // insensitive substring). The asymmetry is deliberate:
+  //   - typed "windows", marked "window"  → drop (term not in marked)
+  //   - typed "window",  marked "windows" → keep (term IS in marked,
+  //                                              user sees the word
+  //                                              they typed inside the
+  //                                              highlight, which feels
+  //                                              right)
+  //   - typed "fire",    marked "firmware" → keep (substring match)
+  //
+  // The underlying search behaviour is unchanged — the server still
+  // returns notes via stem-expansion, so a "windows" query still
+  // finds notes that only contain "window". We only suppress the
+  // visual emphasis on tokens that don't literally include what the
+  // user typed.
+  //
+  // Pipeline:
+  //   1. Walk the raw text and rewrite every \u0001…\u0002 pair into
+  //      either <strong>…</strong> (kept) or just the inner text
+  //      (dropped), HTML-escaping all literal text as we go.
+  //   2. Run DOMPurify on the result as defence in depth.
+  let html = '';
+  let i = 0;
+  while (i < raw.length) {
+    const start = raw.indexOf('\u0001', i);
+    if (start === -1) {
+      html += escapeHtml(raw.slice(i).replace(/\u0002/g, ''));
+      break;
+    }
+    html += escapeHtml(raw.slice(i, start).replace(/\u0002/g, ''));
+    const end = raw.indexOf('\u0002', start + 1);
+    if (end === -1) {
+      // Malformed: start with no end. Treat the remainder as plain
+      // text after stripping any stray start markers.
+      html += escapeHtml(raw.slice(start + 1).replace(/[\u0001\u0002]/g, ''));
+      break;
+    }
+    const inner = raw.slice(start + 1, end);
+    const innerLower = inner.toLowerCase();
+    const keep =
+      terms.length === 0 ||
+      terms.some((t) => t.length > 0 && innerLower.includes(t));
+    if (keep) {
+      html += '<strong>' + escapeHtml(inner) + '</strong>';
+    } else {
+      html += escapeHtml(inner);
+    }
+    i = end + 1;
+  }
+
+  return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['strong'], ALLOWED_ATTR: [] });
+}
+
+function escapeHtml(s: string): string {
+  return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-
-  const html = escaped
-    .replace(/\u0001/g, '<strong>')
-    .replace(/\u0002/g, '</strong>');
-
-  return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['strong'], ALLOWED_ATTR: [] });
 }
 
 /**
