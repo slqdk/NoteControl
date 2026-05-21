@@ -64,6 +64,14 @@
    * bound — past that the lines just get gappy and the eye has
    * to track too far between LHS pills and RHS chain pills. */
   width: min(1600px, 95vw);
+  /* Take the height we ask for instead of only capping it. With
+   * just `max-height` the modal shrinks to fit its (flex-based)
+   * content, and `flex-basis: 0` on the panes means that content
+   * has zero intrinsic height — so the modal would collapse to
+   * just the chrome. `height: 88vh` claims a real height; the
+   * `max-height` on top of it is now belt-and-braces for
+   * pathological viewport sizes. */
+  height: 88vh;
   max-height: 88vh;
   display: flex;
   flex-direction: column;
