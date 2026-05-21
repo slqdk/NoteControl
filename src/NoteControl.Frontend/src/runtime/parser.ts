@@ -37,7 +37,7 @@ import {
   type ParsedProgram, type ProgramDecl, type VarDecl, type VarSection, type TypeRef,
   type Statement, type Expr, type CaseLabel, type CaseBranch,
   type IfBranch, type LiteralExpr, type VarRefExpr, type BinaryOp,
-  type CallArg,
+  type CallArg, type ChainSegment,
 } from './ast';
 import { StParseError } from './errors';
 import { tokenize, type Token } from './lexer';
@@ -50,6 +50,13 @@ import { lookupTypeName, lookupFbType } from './types';
 export function parseProgram(declText: string, bodyText: string): ParsedProgram {
   const program = parseDeclaration(declText);
   const body = parseBody(bodyText);
+  // Auto-declare any chain bases that aren't in the VAR block.
+  // These typically refer to namespaced globals
+  // (`XTS_Configuration.MoverCount`) or other-POU constants that
+  // the user hasn't bothered to mirror in the local VAR block.
+  // Synthesising them as unknown FB instances lets the body parse
+  // and run; reads/pokes work like any other unknown chain.
+  autoDeclareChainBases(body, program.vars);
   // Cross-check: every reference in the body must resolve to a
   // declared variable. We do this in the parser (rather than the
   // interpreter) so a misspelled variable surfaces immediately
@@ -262,35 +269,13 @@ class Parser {
       }
       this.expectPunct(':');
 
-      // Type — first try scalar, then known FB types, then fall
-      // back to "unknown". Unknown is for user-defined FBs and
-      // DUTs the v1 runtime doesn't understand: the variable is
-      // still allocated and pokeable, but no scan logic runs for
-      // it. The TypeRef variant carries which case applies so the
-      // interpreter can branch cleanly.
+      // Type — handled by `readTypeRef()` which supports plain
+      // scalars/FBs, dotted/namespaced type names (treated as
+      // unknown), and ARRAY[...] OF T (also treated as unknown,
+      // with the full source-equivalent name preserved on the
+      // typeRef for the watch-table tooltip).
       const typeTok = this.peek();
-      if (typeTok.kind !== 'IDENT' && typeTok.kind !== 'KEYWORD') {
-        throw this.err(typeTok, `expected type name, got ${describeToken(typeTok)}`);
-      }
-      const scalarName = lookupTypeName(typeTok.value);
-      const fbName = scalarName ? null : lookupFbType(typeTok.value);
-      let typeRef: TypeRef;
-      if (scalarName) {
-        typeRef = { kind: 'scalar', name: scalarName, line: typeTok.line };
-      } else if (fbName) {
-        typeRef = { kind: 'fb', name: fbName, line: typeTok.line };
-      } else {
-        // Unknown: a user-defined FB instance, struct, enum, or
-        // similar. We accept the declaration so the body can
-        // still be run; the interpreter treats reads/writes as
-        // poke-driven values rather than computed ones.
-        typeRef = {
-          kind: 'unknown',
-          unknownName: typeTok.value,
-          line: typeTok.line,
-        };
-      }
-      this.consume();
+      const typeRef = this.readTypeRef();
 
       // Optional initial value — only meaningful for scalars.
       // FB instances (known or unknown) have internal state init
@@ -301,7 +286,7 @@ class Parser {
         if (typeRef.kind !== 'scalar') {
           throw this.err(
             typeTok,
-            `${typeRef.kind === 'fb' ? 'FB instances' : 'unknown-typed variables'} cannot have an initial value (drop the := for "${typeTok.value}")`,
+            `${typeRef.kind === 'fb' ? 'FB instances' : 'unknown-typed variables'} cannot have an initial value (drop the := for "${describeTypeRef(typeRef)}")`,
           );
         }
         initial = this.parseExpression();
@@ -333,6 +318,122 @@ class Parser {
     }
     this.consume();
     return { tok: t, name: t.value, nameLower: t.value.toLowerCase() };
+  }
+
+  /**
+   * Read a type reference. Three shapes are accepted:
+   *
+   *   1. `ARRAY [ range { , range } ] OF <typeRef>`
+   *      Recursive: the element type is itself a typeRef, so
+   *      multi-dimensional arrays via nested ARRAYs work
+   *      (`ARRAY[1..3] OF ARRAY[1..4] OF INT`). Ranges accept
+   *      any expression on either side of `..` — including
+   *      dotted/namespaced names like `XTS_Configuration.Count`
+   *      — because chain expressions parse cleanly now.
+   *
+   *      The whole array type collapses to a single `unknown`
+   *      typeRef. The runtime doesn't model per-element storage
+   *      in v1 (the interpreter just treats the whole array as
+   *      one poke target). Indexing via `Mover[IDX]` in the body
+   *      becomes a chain segment that all share the same key —
+   *      same `(*)` collapsing rule the chain reader uses for
+   *      method args.
+   *
+   *   2. `IDENT { . IDENT }` — a possibly-namespaced type name.
+   *      A SINGLE IDENT is matched against built-in scalar and
+   *      FB types first (so `INT`, `BOOL`, `TON` still resolve);
+   *      a dotted name like `Tc3_XTS_Utility.FB_TcIoXtsEnvironment`
+   *      is always unknown — the v1 runtime has no schemas for
+   *      namespaced types.
+   *
+   *   3. The error path: anything else gets a clear message.
+   *
+   * Returns a `TypeRef`. The unknown name preserves the original
+   * casing of every segment, joined back together — useful for
+   * the watch-table tooltip.
+   */
+  private readTypeRef(): TypeRef {
+    const head = this.peek();
+    if (head.kind !== 'IDENT' && head.kind !== 'KEYWORD') {
+      throw this.err(head, `expected type name, got ${describeToken(head)}`);
+    }
+
+    // ARRAY[...] OF ...  — `ARRAY` is not in the lexer keyword
+    // set, so it arrives as IDENT. Case-insensitive match.
+    if (head.kind === 'IDENT' && head.value.toUpperCase() === 'ARRAY') {
+      this.consume(); // ARRAY
+      this.expectPunct('[');
+      const ranges: string[] = [];
+      // Parse one or more ranges, comma-separated. Each range is
+      // `<expr> .. <expr>`. We don't keep the parsed bounds —
+      // they're not used at runtime — but we DO record their
+      // source text for the type-name display. We do that by
+      // re-tokenising… too much work. Instead just consume them
+      // structurally and record a placeholder.
+      do {
+        // Parse the low bound as an expression.
+        this.parseExpression();
+        // ".." separator is required.
+        this.expectPunct('..');
+        this.parseExpression();
+        ranges.push('…');
+      } while (this.acceptPunct(','));
+      this.expectPunct(']');
+      // OF after the bounds. The lexer treats `of` as a KEYWORD
+      // (it's part of CASE...OF), so we look for the keyword
+      // here, not an IDENT — accepting either keeps the parser
+      // robust to lexer reclassification.
+      if (!this.acceptKeyword('of')) {
+        const ofTok = this.peek();
+        // Permit the IDENT spelling too, in case a future lexer
+        // change drops `of` from the keyword set.
+        if (ofTok.kind === 'IDENT' && ofTok.value.toUpperCase() === 'OF') {
+          this.consume();
+        } else {
+          throw this.err(ofTok, `expected "OF" after ARRAY[...], got ${describeToken(ofTok)}`);
+        }
+      }
+      // Recursively read the element type.
+      const elementType = this.readTypeRef();
+      return {
+        kind: 'unknown',
+        unknownName: `ARRAY[${ranges.join(',')}] OF ${describeTypeRef(elementType)}`,
+        line: head.line,
+      };
+    }
+
+    // Plain or dotted type name. Read one head IDENT/KEYWORD,
+    // then keep consuming `.IDENT` while the next token is `.`.
+    this.consume(); // head
+    const parts: string[] = [head.value];
+    while (this.acceptPunct('.')) {
+      const t = this.peek();
+      if (t.kind !== 'IDENT' && t.kind !== 'KEYWORD') {
+        throw this.err(t, `expected type name part after ".", got ${describeToken(t)}`);
+      }
+      this.consume();
+      parts.push(t.value);
+    }
+
+    // If the type is a SINGLE undotted name, try built-in
+    // resolution (scalar then FB). Dotted names are always
+    // unknown — there are no namespaced built-ins in v1.
+    if (parts.length === 1) {
+      const scalarName = lookupTypeName(parts[0]);
+      if (scalarName) {
+        return { kind: 'scalar', name: scalarName, line: head.line };
+      }
+      const fbName = lookupFbType(parts[0]);
+      if (fbName) {
+        return { kind: 'fb', name: fbName, line: head.line };
+      }
+    }
+
+    return {
+      kind: 'unknown',
+      unknownName: parts.join('.'),
+      line: head.line,
+    };
   }
 
   // -- Statements ---------------------------------------------
@@ -384,33 +485,95 @@ class Parser {
     }
 
     if (t.kind === 'IDENT') {
-      // Either an assignment (IDENT := ...) or a call expression
-      // statement (IDENT(...) ; ).
-      // Look ahead one token to decide.
-      const next = this.peek(1);
-      if (next.kind === 'PUNCT' && next.value === ':=') {
-        // Assignment
-        const target: VarRefExpr = {
-          kind: 'VarRef',
-          name: t.value,
-          nameLower: t.value.toLowerCase(),
-          line: t.line,
-          column: t.column,
-        };
-        this.consume(); // IDENT
-        this.consume(); // :=
+      // The IDENT branch handles two statement shapes:
+      //
+      //   1. Assignment: `<lhs> := <expr>;`
+      //      The LHS may be a plain identifier (`x := ...`), a
+      //      single-dot member of an FB or unknown (`obj.m := ...`),
+      //      or a deeper chain on an unknown
+      //      (`a.b(1).c := ...`).
+      //
+      //   2. Expression statement: a call form like `MyTimer(...)`
+      //      or `obj.method(args);` whose return value is discarded.
+      //
+      // Both LHS-of-assign and bare-statement-expression share the
+      // same prefix grammar, so we parse the prefix as an
+      // expression first and then look at the next token. `:=` →
+      // assignment; otherwise expression statement.
+      //
+      // The previous implementation peeked one token ahead for `:=`
+      // and committed to assignment only on a bare IDENT LHS. That
+      // ruled out dotted assign targets (an explicit limitation we
+      // are lifting in this ship).
+      const expr = this.parseExpression();
+      if (this.acceptPunct(':=')) {
         const value = this.parseExpression();
         this.expectPunct(';');
-        return { kind: 'Assign', target, value, line: t.line };
+        return this.buildAssignFromLhs(expr, value, t.line);
       }
-      // Otherwise it's an expression statement (will likely be a
-      // call form); parse as expression and require ;.
-      const expression = this.parseExpression();
       this.expectPunct(';');
-      return { kind: 'ExpressionStmt', expression, line: t.line };
+      return { kind: 'ExpressionStmt', expression: expr, line: t.line };
     }
 
     throw this.err(t, `expected a statement, got ${describeToken(t)}`);
+  }
+
+  /**
+   * Promote a parsed expression to an assignment-target. Three
+   * shapes are valid:
+   *
+   *   - VarRefExpr  → `AssignStmt` (the original simple case)
+   *   - MemberExpr  → `ChainAssignStmt` with a one-segment chain
+   *                   (covers `MyTimer.IN := …` patterns)
+   *   - ChainExpr whose last segment is a 'member'  →
+   *     `ChainAssignStmt`
+   *
+   * Anything else (Literal, Binary, a method-call ending, etc.)
+   * is rejected with a clear error pointing at the LHS line. */
+  private buildAssignFromLhs(
+    lhs: Expr, value: Expr, line: number,
+  ): Statement {
+    if (lhs.kind === 'VarRef') {
+      return { kind: 'Assign', target: lhs, value, line };
+    }
+    if (lhs.kind === 'Member') {
+      return {
+        kind: 'ChainAssign',
+        target: {
+          kind: 'Chain',
+          base: lhs.object,
+          segments: [{
+            kind: 'member',
+            name: lhs.member,
+            nameLower: lhs.memberLower,
+            line: lhs.line,
+            // The column of the member identifier itself —
+            // `MemberExpr` carries the OBJECT's column, not the
+            // member's. We approximate by offsetting past the
+            // object's name and the dot. This is only used by the
+            // inline-pill renderer; "approximate" is fine.
+            column: lhs.column + lhs.object.name.length + 1,
+          }],
+          line: lhs.line,
+        },
+        value,
+        line,
+      };
+    }
+    if (lhs.kind === 'Chain') {
+      const last = lhs.segments[lhs.segments.length - 1];
+      if (!last || (last.kind !== 'member' && last.kind !== 'index')) {
+        throw new StParseError(
+          'parse', lhs.line, 0,
+          `can't assign to the result of a method call — the left side must end in a member name or array index`,
+        );
+      }
+      return { kind: 'ChainAssign', target: lhs, value, line };
+    }
+    throw new StParseError(
+      'parse', lhs.line, 0,
+      `left side of ":=" must be a variable or a dotted member, not ${describeExprForDiag(lhs)}`,
+    );
   }
 
   private parseIf(): Statement {
@@ -804,57 +967,120 @@ class Parser {
     }
     if (t.kind === 'IDENT') {
       this.consume();
-      // Function or FB-instance call?
-      if (this.acceptPunct('(')) {
-        const args: CallArg[] = [];
-        if (!this.acceptPunct(')')) {
-          args.push(this.parseCallArg());
-          while (this.acceptPunct(',')) {
-            args.push(this.parseCallArg());
-          }
-          this.expectPunct(')');
-        }
+      // Simple no-suffix variable reference is the dominant case.
+      // We check for it first so the common path is short and the
+      // chain handling below only runs when there's actually
+      // something to chain.
+      const next = this.peek();
+      const hasDot = next.kind === 'PUNCT' && next.value === '.';
+      const hasParen = next.kind === 'PUNCT' && next.value === '(';
+      const hasBracket = next.kind === 'PUNCT' && next.value === '[';
+
+      if (!hasDot && !hasParen && !hasBracket) {
         return {
-          kind: 'Call',
+          kind: 'VarRef',
           name: t.value,
           nameLower: t.value.toLowerCase(),
-          args,
-          line: t.line,
-        };
-      }
-      // Member access? `MyTimer.Q` — only one dot supported. The
-      // VarRef on the left becomes the `object` of the MemberExpr;
-      // we don't recurse into chained `.a.b.c`.
-      if (this.acceptPunct('.')) {
-        const memberTok = this.peek();
-        if (memberTok.kind !== 'IDENT' && memberTok.kind !== 'KEYWORD') {
-          throw this.err(
-            memberTok,
-            `expected member name after ".", got ${describeToken(memberTok)}`,
-          );
-        }
-        this.consume();
-        return {
-          kind: 'Member',
-          object: {
-            kind: 'VarRef',
-            name: t.value,
-            nameLower: t.value.toLowerCase(),
-            line: t.line,
-            column: t.column,
-          },
-          member: memberTok.value,
-          memberLower: memberTok.value.toLowerCase(),
           line: t.line,
           column: t.column,
         };
       }
-      return {
+
+      // `IDENT(args)` with NO further chain segments — keep
+      // emitting the original `Call` shape so built-in/function
+      // dispatch and the existing inline renderer are untouched
+      // for the simple-call case.
+      if (hasParen) {
+        // Peek at what follows the matching `)` to see if a chain
+        // continues. If it does (`fb(args).foo` or `fb(args)[i]`),
+        // we treat the whole thing as a chain whose first segment
+        // is a method call. If not, emit the legacy `Call`.
+        //
+        // We can decide cheaply: parse the `(args)` first, then
+        // look at the next token.
+        this.consume(); // (
+        const args = this.parseCallArgList();
+        const after = this.peek();
+        const continues = after.kind === 'PUNCT' &&
+          (after.value === '.' || after.value === '[' || after.value === '(');
+        if (!continues) {
+          return {
+            kind: 'Call',
+            name: t.value,
+            nameLower: t.value.toLowerCase(),
+            args,
+            line: t.line,
+          };
+        }
+        // Promote to a chain: the head IDENT becomes a faux base
+        // VarRef and the (args) becomes a first 'method' segment.
+        // Then read any further segments.
+        const baseRef: VarRefExpr = {
+          kind: 'VarRef',
+          name: t.value,
+          nameLower: t.value.toLowerCase(),
+          line: t.line,
+          column: t.column,
+        };
+        const segments: ChainSegment[] = [{
+          kind: 'method',
+          name: t.value,
+          nameLower: t.value.toLowerCase(),
+          args,
+          line: t.line,
+          column: t.column,
+        }];
+        segments.push(...this.parseChainTail());
+        return {
+          kind: 'Chain', base: baseRef, segments, line: t.line,
+        };
+      }
+
+      // `IDENT[index]` — promote to a chain starting with an
+      // index segment.
+      if (hasBracket) {
+        const baseRef: VarRefExpr = {
+          kind: 'VarRef',
+          name: t.value,
+          nameLower: t.value.toLowerCase(),
+          line: t.line,
+          column: t.column,
+        };
+        const segments: ChainSegment[] = [this.parseIndexSegment()];
+        segments.push(...this.parseChainTail());
+        return {
+          kind: 'Chain', base: baseRef, segments, line: t.line,
+        };
+      }
+
+      // Dotted access. `obj.member` / `obj.method(args)` / deeper
+      // chains. We special-case the one-dot, no-args, no-bracket
+      // shape (`MyTimer.Q`) and keep emitting `MemberExpr` for
+      // backwards compatibility — every consumer that destructures
+      // `e.object.name` continues to work. Anything deeper or
+      // call/index-bearing is emitted as `ChainExpr`.
+      this.consume(); // .
+      const baseRef: VarRefExpr = {
         kind: 'VarRef',
         name: t.value,
         nameLower: t.value.toLowerCase(),
         line: t.line,
         column: t.column,
+      };
+      const segments = this.parseChainSegments();
+      if (segments.length === 1 && segments[0].kind === 'member') {
+        const m = segments[0];
+        return {
+          kind: 'Member',
+          object: baseRef,
+          member: m.name,
+          memberLower: m.nameLower,
+          line: t.line,
+          column: t.column,
+        };
+      }
+      return {
+        kind: 'Chain', base: baseRef, segments, line: t.line,
       };
     }
     if (t.kind === 'PUNCT' && t.value === '(') {
@@ -865,6 +1091,138 @@ class Parser {
     }
 
     throw this.err(t, `expected an expression, got ${describeToken(t)}`);
+  }
+
+  /**
+   * Parse a contiguous run of chain segments after a leading dot
+   * has been consumed (so the FIRST segment is name-based — a
+   * member or method). This is the path used when the chain
+   * originates from `obj.…`.
+   *
+   * The grammar in EBNF:
+   *
+   *   chain-tail-dotted = name-segment chain-tail ;
+   *   name-segment      = IDENT [ '(' arg-list ')' ] ;
+   *   chain-tail        = { '.' name-segment | '[' index-list ']' } ;
+   */
+  private parseChainSegments(): ChainSegment[] {
+    const segments: ChainSegment[] = [];
+    segments.push(this.parseNameSegment());
+    segments.push(...this.parseChainTail());
+    return segments;
+  }
+
+  /**
+   * Parse zero or more trailing chain segments — `.name` /
+   * `.name(args)` / `[index]` / `(args)`. Stops at the first
+   * non-segment token. Used after every segment is consumed to
+   * pick up the next link if any.
+   *
+   * The `(args)` form (without a leading `.`) is the TwinCAT
+   * array-of-FBs invocation pattern: `fb_MC_Power[IDX](Axis:=…)`.
+   * Semantically it's "call this slot"; we represent it as a
+   * 'call' chain segment.
+   */
+  private parseChainTail(): ChainSegment[] {
+    const segments: ChainSegment[] = [];
+    while (true) {
+      if (this.acceptPunct('.')) {
+        segments.push(this.parseNameSegment());
+        continue;
+      }
+      const t = this.peek();
+      if (t.kind === 'PUNCT' && t.value === '[') {
+        segments.push(this.parseIndexSegment());
+        continue;
+      }
+      if (t.kind === 'PUNCT' && t.value === '(') {
+        // `(args)` after a chain segment is a call on that
+        // segment's result. Emit a 'call' segment that carries
+        // the arg list; the runtime treats it identically to a
+        // method segment for chain-key purposes.
+        //
+        // We don't guard on segments.length because callers
+        // always establish chain context before invoking us —
+        // a bare `(args)` with no preceding chain context only
+        // appears inside parseCallArgList, not here.
+        const openTok = t;
+        this.consume(); // (
+        const args = this.parseCallArgList();
+        segments.push({
+          kind: 'call',
+          args,
+          line: openTok.line,
+          column: openTok.column,
+        });
+        continue;
+      }
+      break;
+    }
+    return segments;
+  }
+
+  /** Parse `IDENT` or `IDENT(args)` as a chain segment. */
+  private parseNameSegment(): ChainSegment {
+    const nameTok = this.peek();
+    if (nameTok.kind !== 'IDENT' && nameTok.kind !== 'KEYWORD') {
+      throw this.err(
+        nameTok,
+        `expected member name after ".", got ${describeToken(nameTok)}`,
+      );
+    }
+    this.consume();
+    if (this.acceptPunct('(')) {
+      const args = this.parseCallArgList();
+      return {
+        kind: 'method',
+        name: nameTok.value,
+        nameLower: nameTok.value.toLowerCase(),
+        args,
+        line: nameTok.line,
+        column: nameTok.column,
+      };
+    }
+    return {
+      kind: 'member',
+      name: nameTok.value,
+      nameLower: nameTok.value.toLowerCase(),
+      line: nameTok.line,
+      column: nameTok.column,
+    };
+  }
+
+  /** Parse `[expr, expr, ...]` as an index segment. Caller has
+   *  confirmed the next token is `[` but not consumed it. */
+  private parseIndexSegment(): ChainSegment {
+    const openTok = this.peek();
+    this.expectPunct('[');
+    const indices: Expr[] = [];
+    indices.push(this.parseExpression());
+    while (this.acceptPunct(',')) {
+      indices.push(this.parseExpression());
+    }
+    this.expectPunct(']');
+    return {
+      kind: 'index',
+      indices,
+      line: openTok.line,
+      column: openTok.column,
+    };
+  }
+
+  /** Read a (possibly empty) parenthesised arg list AFTER the
+   *  opening `(` has been consumed. Returns the args and consumes
+   *  the matching `)`. Shared by the simple-call path in primary
+   *  and by chain-segment method calls. */
+  private parseCallArgList(): CallArg[] {
+    const args: CallArg[] = [];
+    if (this.acceptPunct(')')) return args;
+    args.push(this.parseCallArg());
+    while (this.acceptPunct(',')) {
+      args.push(this.parseCallArg());
+    }
+    this.expectPunct(')');
+    return args;
   }
 
   /**
@@ -888,6 +1246,25 @@ class Parser {
         // named-in
         this.consume(); // IDENT
         this.consume(); // :=
+        // TwinCAT allows `Param := ,` and `Param := )` — an
+        // explicit "skip this binding" form, leaving the FB's
+        // input at its default. Detect by looking at the next
+        // token; if it's `,` or `)`, we emit a named-in arg with
+        // value=null (matching named-out's convention for the
+        // unbound form). The interpreter ignores null-valued
+        // named-in args when ticking known FBs; on unknown FBs
+        // the whole call is a no-op anyway.
+        const peek = this.peek();
+        if (peek.kind === 'PUNCT' && (peek.value === ',' || peek.value === ')')) {
+          return {
+            kind: 'named-in',
+            name: first.value,
+            nameLower: first.value.toLowerCase(),
+            value: null,
+            target: null,
+            line: first.line,
+          };
+        }
         const value = this.parseExpression();
         return {
           kind: 'named-in',
@@ -965,6 +1342,116 @@ class Parser {
 // --- Post-parse cross-checks ----------------------------------
 
 /**
+ * Walk `body` and collect every chain-base identifier that isn't
+ * already in `vars`. Append synthetic `unknown`-typed VarDecls
+ * for each one. This is what makes patterns like
+ *
+ *   `FOR IDX := 1 TO XTS_Configuration.MoverCount DO …`
+ *
+ * work without forcing the user to mirror namespaced globals
+ * into the local VAR block — the runtime treats the synthetic
+ * decl as an unknown FB instance, so reads of any chain on it
+ * follow the standard "poke me" flow.
+ *
+ * The synthetic decls go into a dedicated 'EXTERNAL' section so
+ * they're visually distinct in the watch table — the user can
+ * see at a glance that the runtime invented these.
+ *
+ * Only chain BASES are synthesised, not other undeclared names.
+ * Bare undeclared identifiers (e.g. `Foo := 1;`) still fail
+ * validation — they're far more likely to be typos than valid
+ * namespace references.
+ */
+function autoDeclareChainBases(body: Statement[], vars: VarDecl[]): void {
+  const declared = new Set(vars.map((v) => v.nameLower));
+  const missing = new Map<string, { name: string; line: number }>();
+
+  function collectFromExpr(e: Expr): void {
+    switch (e.kind) {
+      case 'Literal': return;
+      case 'VarRef': return;
+      case 'Unary': collectFromExpr(e.operand); return;
+      case 'Binary': collectFromExpr(e.left); collectFromExpr(e.right); return;
+      case 'Member':
+        if (!declared.has(e.object.nameLower) && !missing.has(e.object.nameLower)) {
+          missing.set(e.object.nameLower, { name: e.object.name, line: e.line });
+        }
+        return;
+      case 'Call':
+        for (const a of e.args) {
+          if (a.value) collectFromExpr(a.value);
+        }
+        return;
+      case 'Chain':
+        if (!declared.has(e.base.nameLower) && !missing.has(e.base.nameLower)) {
+          missing.set(e.base.nameLower, { name: e.base.name, line: e.line });
+        }
+        for (const seg of e.segments) {
+          if (seg.kind === 'method' || seg.kind === 'call') {
+            for (const a of seg.args) {
+              if (a.value) collectFromExpr(a.value);
+            }
+          } else if (seg.kind === 'index') {
+            for (const idx of seg.indices) collectFromExpr(idx);
+          }
+        }
+        return;
+    }
+  }
+
+  function collectFromStmt(s: Statement): void {
+    switch (s.kind) {
+      case 'Assign': collectFromExpr(s.value); return;
+      case 'ChainAssign': collectFromExpr(s.target); collectFromExpr(s.value); return;
+      case 'If':
+        for (const b of s.branches) {
+          if (b.condition) collectFromExpr(b.condition);
+          for (const inner of b.body) collectFromStmt(inner);
+        }
+        return;
+      case 'Case':
+        collectFromExpr(s.selector);
+        for (const b of s.branches) {
+          for (const l of b.labels) {
+            collectFromExpr(l.low);
+            if (l.kind === 'Range') collectFromExpr(l.high);
+          }
+          for (const inner of b.body) collectFromStmt(inner);
+        }
+        return;
+      case 'For':
+        collectFromExpr(s.start); collectFromExpr(s.end);
+        if (s.step) collectFromExpr(s.step);
+        for (const inner of s.body) collectFromStmt(inner);
+        return;
+      case 'While':
+        collectFromExpr(s.condition);
+        for (const inner of s.body) collectFromStmt(inner);
+        return;
+      case 'Repeat':
+        for (const inner of s.body) collectFromStmt(inner);
+        collectFromExpr(s.until);
+        return;
+      case 'ExpressionStmt': collectFromExpr(s.expression); return;
+      // Exit / Continue / Return: nothing to scan.
+    }
+  }
+
+  for (const s of body) collectFromStmt(s);
+
+  for (const [nameLower, info] of missing) {
+    vars.push({
+      name: info.name,
+      nameLower,
+      type: { kind: 'unknown', unknownName: '(auto)', line: info.line },
+      section: 'EXTERNAL',
+      initial: null,
+      line: info.line,
+    });
+  }
+}
+
+/**
  * Walk `body` and ensure every variable reference (including
  * assignment targets and FOR loop variables) refers to a declared
  * name. Built-in function names are accepted in call position
@@ -1017,6 +1504,39 @@ function validateVarRefs(body: Statement[], vars: VarDecl[]): void {
           );
         }
         return;
+      case 'Chain':
+        // Same rule: the base of a chain must be a declared
+        // variable. Segments aren't validated here — they refer
+        // to fields/methods on an unknown FB type, which the
+        // runtime treats as poke-only.
+        if (!declared.has(e.base.nameLower)) {
+          throw new StParseError(
+            'parse', e.line, 1,
+            `undeclared variable "${e.base.name}" before "."`,
+          );
+        }
+        // Walk args of method/call segments and indices of index
+        // segments so undeclared variables inside those
+        // subexpressions still get caught.
+        for (const seg of e.segments) {
+          if (seg.kind === 'method' || seg.kind === 'call') {
+            const segLabel = seg.kind === 'method' ? `.${seg.name}` : '(...)';
+            for (const a of seg.args) {
+              if (a.value) visitExpr(a.value);
+              if (a.target) {
+                if (!declared.has(a.target.nameLower)) {
+                  throw new StParseError(
+                    'parse', a.target.line, 1,
+                    `undeclared output target "${a.target.name}" in call to "${segLabel}"`,
+                  );
+                }
+              }
+            }
+          } else if (seg.kind === 'index') {
+            for (const idx of seg.indices) visitExpr(idx);
+          }
+        }
+        return;
     }
   }
 
@@ -1029,6 +1549,13 @@ function validateVarRefs(body: Statement[], vars: VarDecl[]): void {
             `undeclared variable "${s.target.name}" on left-hand side of assignment`,
           );
         }
+        visitExpr(s.value);
+        return;
+      case 'ChainAssign':
+        // The base of the LHS chain must be a declared variable.
+        // Re-using the Chain case via visitExpr handles both base
+        // validation AND any args inside method segments.
+        visitExpr(s.target);
         visitExpr(s.value);
         return;
       case 'If':
@@ -1089,4 +1616,28 @@ function describeToken(t: Token): string {
   if (t.kind === 'STRING') return 'string literal';
   if (t.kind === 'TIME') return `TIME literal`;
   return `token`;
+}
+
+/** Short, human-readable summary of an expression for diagnostic
+ *  messages. Used only by parse-time "can't assign to <x>" errors,
+ *  so it doesn't need to handle every shape gracefully — anything
+ *  unrecognised collapses to "this expression". */
+function describeExprForDiag(e: Expr): string {
+  switch (e.kind) {
+    case 'Literal': return 'a literal';
+    case 'Call': return `the call to "${e.name}"`;
+    case 'Unary': return 'a unary expression';
+    case 'Binary': return 'an arithmetic/logical expression';
+    case 'Chain': return 'a method-call result';
+    default: return 'this expression';
+  }
+}
+
+/** Render a TypeRef as the user would have typed it. Used in
+ *  diagnostics and to build the unknownName of nested ARRAY
+ *  declarations. */
+function describeTypeRef(t: TypeRef): string {
+  if (t.kind === 'scalar') return t.name;
+  if (t.kind === 'fb') return t.name;
+  return t.unknownName;
 }

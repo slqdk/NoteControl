@@ -577,6 +577,7 @@ function ValueCell({
       <PillEditor
         nameLower={nameLower}
         memberLower={memberLower}
+        chainKey={null}
         pokeKind={data.pokeKind}
         currentText={data.formattedValue.replace(/^'|'$/g, '')}
         env={env}

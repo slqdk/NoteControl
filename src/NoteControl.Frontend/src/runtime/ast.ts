@@ -138,7 +138,8 @@ export type Expr =
   | UnaryExpr
   | BinaryExpr
   | CallExpr
-  | MemberExpr;
+  | MemberExpr
+  | ChainExpr;
 
 /**
  * A literal value parsed from source. We keep the original token
@@ -267,10 +268,153 @@ export interface MemberExpr {
   column: number;
 }
 
+/**
+ * A chain of dotted accesses and/or calls hanging off a base
+ * identifier — patterns that exceed what `MemberExpr` was built
+ * for (which is exactly one dot, e.g. `MyTimer.Q`).
+ *
+ * Examples:
+ *
+ *   `XtsEnvironment.Init(bExecute := TRUE)`
+ *   `XtsEnvironment.XpuTcIo(1).GetAreAllModulesInOp()`
+ *   `XtsEnvironment.InfoServerTcIo(1).InfoStationTcIo(IDX2)
+ *      .GetStopPositions()`
+ *
+ * The base is always a plain `VarRefExpr` (an identifier the user
+ * declared, typically of unknown type since the v1 runtime has no
+ * schemas for these methods). The `segments` array holds one or
+ * more `ChainSegment`s describing what comes after the base, in
+ * source order.
+ *
+ * The parser only emits a `ChainExpr` when the chain is *deeper
+ * than what `MemberExpr` can represent*, i.e. when there are 2+
+ * dotted/called segments after the base, or when the first
+ * segment after the base is a call (e.g. `foo.bar(args)`). A
+ * single `foo.bar` access still produces `MemberExpr` — that
+ * keeps every existing consumer that special-cases `MemberExpr`
+ * working unchanged.
+ *
+ * Runtime semantics live in the interpreter:
+ *
+ *   - If the base is an `unknown`-typed variable: every segment
+ *     walks the unknown container's `members` map using a stable
+ *     dotted-path key (e.g. `XpuTcIo(*).GetAreAllModulesInOp(*)`,
+ *     with the `(*)` standing in for any call's arg list so a
+ *     single poke applies regardless of the actual call args).
+ *     Returns an "unknown member" value: poke it once, it sticks.
+ *   - If the base is a known `fb` instance: only one dot is
+ *     supported in v1; the runtime throws a clear "deep chains
+ *     on known FBs aren't supported in v1" error.
+ *   - If the base is a scalar: runtime type-mismatch error.
+ *
+ * Call-arg sub-expressions in any segment ARE evaluated (so a
+ * `XpuTcIo(IDX)` argument's variables show up in the inline
+ * pills), but their values don't differentiate the chain key —
+ * any args are treated as a wildcard. This is the simplest rule
+ * the runtime can defend: in real ST these would address
+ * different array slots or function-block instances, and a
+ * sandbox without schemas can't tell them apart, so it gives
+ * them all the same identity. The user can poke one cell and
+ * see it sticking across calls; if they want to distinguish
+ * `(1)` from `(2)` they can introduce intermediate variables.
+ */
+export interface ChainExpr {
+  kind: 'Chain';
+  /** The leading identifier — the variable the chain hangs off. */
+  base: VarRefExpr;
+  /** One or more segments in source order. ChainExpr is only
+   *  emitted when there's a syntactic need for it; an empty
+   *  segments array is a parser bug. */
+  segments: ChainSegment[];
+  line: number;
+}
+
+/**
+ * One link in a chain. Two shapes:
+ *
+ *   - 'member' — just `.name`. Reads a member's last-poked value.
+ *   - 'method' — `.name(args)`. Args are evaluated for their
+ *                side effects on inline pill rendering, but the
+ *                runtime treats this as an opaque method call on
+ *                an unknown: returns an unknown-member value that
+ *                's pokeable, no state change.
+ *
+ * Both carry `name`/`nameLower` for the segment identifier and
+ * `line`/`column` for diagnostics and inline-pill placement.
+ * Method segments carry an `args` array.
+ */
+export type ChainSegment =
+  | {
+      kind: 'member';
+      name: string;
+      nameLower: string;
+      line: number;
+      /** 1-indexed column of the segment's identifier (not of the
+       *  leading dot). Used by the inline-pill renderer so the
+       *  pill is placed right after the segment text. */
+      column: number;
+    }
+  | {
+      kind: 'method';
+      name: string;
+      nameLower: string;
+      args: CallArg[];
+      line: number;
+      column: number;
+    }
+  | {
+      /**
+       * Array indexing: `[expr]` or `[expr, expr]`. Treated as an
+       * opaque step on an unknown — like a method call, the
+       * index expressions ARE evaluated (so pills appear next to
+       * `IDX` inside `Mover[IDX]`), but the index VALUES don't
+       * differentiate the chain key. All `Mover[*]` references
+       * share one pokeable slot in v1; if the user needs to tell
+       * `Mover[1]` from `Mover[2]` apart they can introduce
+       * intermediate variables.
+       *
+       * Note: index segments DON'T introduce a leading dot in the
+       * source — they come right after the previous identifier
+       * or segment, e.g. `Mover[IDX]` is `<base=Mover>[IDX]`,
+       * not `<base=Mover>.[IDX]`. The parser handles this in
+       * `parsePrimary` and `parseChainTail` accordingly.
+       */
+      kind: 'index';
+      /** The bracketed index expressions, in source order. */
+      indices: Expr[];
+      line: number;
+      /** Column of the opening `[`. */
+      column: number;
+    }
+  | {
+      /**
+       * A bare parenthesised call form, used when `(args)`
+       * follows a non-name segment — typically right after an
+       * array index, as in TwinCAT's array-of-FBs invocation
+       * pattern:
+       *
+       *   `fb_MC_Power[IDX](Axis := Mover[IDX], Enable := TRUE)`
+       *
+       * Semantically it's "call this slot of the indexed array".
+       * Since the runtime treats the whole array as one unknown,
+       * 'call' segments collapse the same way method segments do
+       * for chain-key purposes.
+       *
+       * 'call' segments don't carry a name — the call's target
+       * is whatever segment preceded it. The `column` is the
+       * column of the opening `(`.
+       */
+      kind: 'call';
+      args: CallArg[];
+      line: number;
+      column: number;
+    };
+
 // --- Statements ------------------------------------------------
 
 export type Statement =
   | AssignStmt
+  | ChainAssignStmt
   | IfStmt
   | CaseStmt
   | ForStmt
@@ -284,6 +428,34 @@ export type Statement =
 export interface AssignStmt {
   kind: 'Assign';
   target: VarRefExpr;
+  value: Expr;
+  line: number;
+}
+
+/**
+ * Assignment to a dotted target on an unknown-typed base, e.g.
+ *
+ *   `MoverInterface.OverAllMoverSpeed_Pct := OverAllMoverSpeed_Pct;`
+ *   `XtsEnvironment.InfoServerTcIo(1).InfoStationTcIo(IDX).SetStationId := IDX;`
+ *
+ * The full LHS chain is captured here. The interpreter stores the
+ * RHS scalar under the same stable dotted-path key the matching
+ * `ChainExpr` would use for reads, so a read of the same chain
+ * shape comes back unchanged on the next scan — the chain shape
+ * is the identity.
+ *
+ * Only meaningful when the base is unknown-typed. If the base is
+ * a known FB or scalar, the runtime raises a clear error. (The
+ * parser cannot reject these at parse time — it has no type
+ * info — so this is enforced at execution.)
+ */
+export interface ChainAssignStmt {
+  kind: 'ChainAssign';
+  /** The whole LHS as a chain expression. The chain MUST end in
+   *  a 'member' segment OR an 'index' segment — assigning to the
+   *  result of a method call is a parse error, enforced in the
+   *  parser. */
+  target: ChainExpr;
   value: Expr;
   line: number;
 }

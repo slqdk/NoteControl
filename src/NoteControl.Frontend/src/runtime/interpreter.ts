@@ -47,7 +47,7 @@
 import type {
   ParsedProgram, Statement, Expr, BinaryOp,
   CaseLabel, ScalarTypeName, FbTypeName, CallArg, MemberExpr,
-  VarRefExpr,
+  VarRefExpr, ChainExpr, ChainAssignStmt, ChainSegment,
 } from './ast';
 import { StRuntimeError } from './errors';
 import { TYPE_META, type TypeMeta } from './types';
@@ -335,6 +335,11 @@ function execStatement(s: Statement, ctx: ScanContext): void {
       return;
     }
 
+    case 'ChainAssign': {
+      execChainAssign(s, ctx);
+      return;
+    }
+
     case 'If': {
       for (const branch of s.branches) {
         if (branch.condition === null) {
@@ -573,6 +578,9 @@ function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
     case 'Member':
       return evalMember(e, ctx);
 
+    case 'Chain':
+      return evalChain(e, ctx);
+
     case 'Unary':
       return evalUnary(e.op, evalExpr(e.operand, ctx), e.line);
 
@@ -617,6 +625,258 @@ function evalMember(e: MemberExpr, ctx: ScanContext): RuntimeValue {
     );
   }
   return readFbMember(v, e.memberLower, e.member, e.line);
+}
+
+/**
+ * Build a stable, lowercased key for a chain's segments after the
+ * base. The base is excluded — the key is meaningful within the
+ * `members` map of a single base's `UnknownInstance`, so prefixing
+ * the base name would be redundant. The format mirrors what the
+ * user typed, with all method-call arg lists collapsed to `(*)`:
+ *
+ *   `.Init(TRUE)`                            → `init(*)`
+ *   `.Init(FALSE)`                           → `init(*)`   (same key)
+ *   `.XpuTcIo(1).GetAreAllModulesInOp()`     → `xputcio(*).getareallmodulesinop(*)`
+ *   `.InfoStationTcIo(IDX).SetStationId`     → `infostationtcio(*).setstationid`
+ *
+ * Why collapse args: the runtime has no way to disambiguate
+ * `.XpuTcIo(1)` from `.XpuTcIo(2)` without schemas. Picking one
+ * arbitrary key per call site means a single poke covers every
+ * invocation along that chain shape — predictable for the user,
+ * consistent with how the bare unknown-variable poke already
+ * works.
+ *
+ * If your runtime ever grows schemas for these types, this is the
+ * function to revisit: real disambiguation would mean encoding
+ * each arg's evaluated value into the key.
+ */
+function chainKey(segments: ChainSegment[]): string {
+  return segments
+    .map(s => {
+      if (s.kind === 'method') return `${s.nameLower}(*)`;
+      if (s.kind === 'call') return `(*)`;
+      if (s.kind === 'index') return `[*]`;
+      return s.nameLower;
+    })
+    .join('.');
+}
+
+/** Human-friendly display of a chain — used in error messages
+ *  and tooltips. Uses the original-cased segment names. */
+function chainDisplay(base: VarRefExpr, segments: ChainSegment[]): string {
+  let out = base.name;
+  for (const s of segments) {
+    if (s.kind === 'method') out += '.' + s.name + '(...)';
+    else if (s.kind === 'call') out += '(...)';
+    else if (s.kind === 'index') out += '[…]';
+    else out += '.' + s.name;
+  }
+  return out;
+}
+
+/**
+ * Evaluate a chain expression (something deeper than one dot, or
+ * with a call segment).
+ *
+ * Rules:
+ *   - Base must resolve in env.
+ *   - Base must be `unknown`. Known FB / scalar bases land here
+ *     only if the user tries to chain on them — clear error.
+ *   - Method-call args ARE evaluated. This is on purpose: it
+ *     surfaces inline pills next to the args (e.g. `IDX2` inside
+ *     `InfoStationTcIo(IDX2)`), and it catches typos in arg
+ *     expressions promptly. Side effects in arg expressions —
+ *     uncommon in real ST — do fire.
+ *   - The chain's value is read from the base's `members` map
+ *     keyed by `chainKey(segments)` (with a reserved prefix so
+ *     it can't collide with a simple `.foo` poke on the same
+ *     base). Missing → standard poke prompt at the chain's line.
+ */
+function evalChain(e: ChainExpr, ctx: ScanContext): RuntimeValue {
+  const v = ctx.env.get(e.base.nameLower);
+  if (!v) {
+    throw new StRuntimeError(
+      'internal', e.line,
+      `internal: unknown variable "${e.base.name}" at runtime`,
+    );
+  }
+  if (v.kind === 'fb') {
+    throw new StRuntimeError(
+      'type-mismatch', e.line,
+      `chained access "${chainDisplay(e.base, e.segments)}" isn't supported on the built-in FB "${e.base.name}" (only single ".member" access is)`,
+    );
+  }
+  if (v.kind !== 'unknown') {
+    throw new StRuntimeError(
+      'type-mismatch', e.line,
+      `cannot apply chained access to non-FB variable "${e.base.name}"`,
+    );
+  }
+
+  // Evaluate any call args / index expressions along the way for
+  // side-effects / pill rendering. Values are discarded. Per-arg
+  // errors are swallowed so an unpoked unknown member passed as
+  // an arg doesn't halt the whole scan — the user only needs to
+  // poke values they actually CARE about reading.
+  for (const seg of e.segments) {
+    if (seg.kind === 'method' || seg.kind === 'call') {
+      for (const a of seg.args) {
+        if (a.value) {
+          try { evalExpr(a.value, ctx); } catch { /* ignored */ }
+        }
+      }
+    } else if (seg.kind === 'index') {
+      for (const idx of seg.indices) {
+        try { evalExpr(idx, ctx); } catch { /* ignored */ }
+      }
+    }
+  }
+
+  // If the chain ends in a 'call' segment, the user is invoking
+  // a slot of an indexed array (e.g. `fb_MC_Power[IDX](Axis:=…)`)
+  // — typically as a STATEMENT, not for its return value. We
+  // silently no-op these (same policy as the unknown FB-instance
+  // call form in evalCall), returning BOOL TRUE. The user can
+  // still pill-poke the chain on the call site if they want a
+  // specific return value, since we don't otherwise short-circuit.
+  const tail = e.segments[e.segments.length - 1];
+  if (tail.kind === 'call') {
+    return scalar('BOOL', true);
+  }
+
+  const key = CHAIN_KEY_PREFIX + chainKey(e.segments);
+  const poked = v.members.get(key);
+  if (!poked) {
+    throw new StRuntimeError(
+      'type-mismatch', e.line,
+      `value of "${chainDisplay(e.base, e.segments)}" hasn't been poked yet — click its pill to set one`,
+    );
+  }
+  return scalar(poked.type, poked.value);
+}
+
+/**
+ * Execute a `ChainAssign` statement.
+ *
+ * Stores the RHS into the same chain-key slot used by `evalChain`
+ * reads. After this runs, the matching chain read on the next
+ * scan returns the value we just stored.
+ *
+ * Same constraints as evalChain: base must be unknown. The parser
+ * already guarantees the chain ends in a 'member' segment, so we
+ * don't re-check that here.
+ */
+function execChainAssign(s: ChainAssignStmt, ctx: ScanContext): void {
+  const v = ctx.env.get(s.target.base.nameLower);
+  if (!v) {
+    throw new StRuntimeError(
+      'internal', s.line,
+      `internal: unknown variable "${s.target.base.name}" at runtime`,
+    );
+  }
+  if (v.kind === 'fb') {
+    throw new StRuntimeError(
+      'type-mismatch', s.line,
+      `cannot assign through "${chainDisplay(s.target.base, s.target.segments)}" — "${s.target.base.name}" is a built-in FB, not an unknown-type instance`,
+    );
+  }
+  if (v.kind !== 'unknown') {
+    throw new StRuntimeError(
+      'type-mismatch', s.line,
+      `cannot assign through "${chainDisplay(s.target.base, s.target.segments)}" — "${s.target.base.name}" isn't an FB instance`,
+    );
+  }
+
+  // Evaluate the RHS first. Surfacing RHS errors before we mutate
+  // anything keeps a failed assignment from leaving half-applied
+  // state.
+  const rhs = evalExpr(s.value, ctx);
+  const sv = asScalar(
+    rhs, s.line,
+    `assignment to ${chainDisplay(s.target.base, s.target.segments)}`,
+  );
+
+  // Walk the chain args/indices for side-effects. Per-arg errors
+  // are swallowed (same policy as reads).
+  for (const seg of s.target.segments) {
+    if (seg.kind === 'method' || seg.kind === 'call') {
+      for (const a of seg.args) {
+        if (a.value) {
+          try { evalExpr(a.value, ctx); } catch { /* ignored */ }
+        }
+      }
+    } else if (seg.kind === 'index') {
+      for (const idx of seg.indices) {
+        try { evalExpr(idx, ctx); } catch { /* ignored */ }
+      }
+    }
+  }
+
+  const key = CHAIN_KEY_PREFIX + chainKey(s.target.segments);
+  v.members.set(key, { kind: 'scalar', type: sv.type, value: sv.value });
+}
+
+/**
+ * Reserved prefix on chain-derived keys in the `members` map.
+ * Chains use this so they share namespace with simple `.foo`
+ * member pokes without colliding: a poke against `obj.foo` lands
+ * under key `foo`, while a poke against `obj.foo()` lands under
+ * `__chain__foo(*)`. The leading underscores can never appear in
+ * an ST identifier, so collision with a user-named member is
+ * impossible.
+ */
+const CHAIN_KEY_PREFIX = '__chain__';
+
+/**
+ * Public API for poking the value of a chain expression — the
+ * equivalent of pokeMember/pokeVariable for chained call/member
+ * paths. The InlineSource component calls this when the user
+ * commits a value on a chain pill.
+ *
+ * `chainKeyStr` is the already-built key (returned by
+ * `buildChainKey()` on the segments visible at the call site).
+ * The InlineSource pre-computes it so the runtime never needs to
+ * import its own segment representation back from the renderer.
+ *
+ * Returns true if the poke succeeded, false if the base variable
+ * is missing or not an unknown (in which case the caller should
+ * fall back to a clear user-facing message — but in practice the
+ * pill wouldn't be pokeable in those cases).
+ */
+export function pokeChain(
+  env: Environment,
+  baseNameLower: string,
+  chainKeyStr: string,
+  value: ScalarValue,
+): boolean {
+  const v = env.get(baseNameLower);
+  if (!v || v.kind !== 'unknown') return false;
+  v.members.set(CHAIN_KEY_PREFIX + chainKeyStr, {
+    kind: 'scalar', type: value.type, value: value.value,
+  });
+  return true;
+}
+
+/**
+ * Public API for reading the currently-poked chain value, used by
+ * the inline pill renderer to know what to show. Returns the
+ * stored ScalarValue, or null if nothing has been poked yet.
+ */
+export function readChain(
+  env: Environment,
+  baseNameLower: string,
+  chainKeyStr: string,
+): ScalarValue | null {
+  const v = env.get(baseNameLower);
+  if (!v || v.kind !== 'unknown') return null;
+  return v.members.get(CHAIN_KEY_PREFIX + chainKeyStr) ?? null;
+}
+
+/** Build a chain key from segments — exported so the inline pill
+ *  renderer can construct the same key the interpreter will use
+ *  on the next eval. */
+export function buildChainKey(segments: ChainSegment[]): string {
+  return chainKey(segments);
 }
 
 function evalUnary(
@@ -1689,20 +1949,46 @@ function evalCall(
   }
   if (targetVar && targetVar.kind === 'unknown') {
     // Unknown FB-instance call: silently no-op. We don't have a
-    // schema, so we can't tick state or compute outputs. Args
-    // are NOT evaluated — that means side effects in arg
-    // expressions don't fire either. This is the simplest rule
-    // and the one least likely to surprise the user: a greyed-
-    // out call line means "this entire statement is on hold; the
-    // user drives it via pokes". Statement budget still
-    // decrements (handled by the caller in execStatement) so an
-    // infinite loop containing only unknown calls still
-    // terminates.
+    // schema, so we can't tick state or compute outputs. We DO
+    // evaluate arg expressions for pill side-effects (so pills
+    // appear next to variables passed in) — matching the chain
+    // semantics. Statement budget still decrements (handled by
+    // the caller) so an infinite loop containing only unknown
+    // calls still terminates.
+    for (const a of args) {
+      if (a.value) {
+        // Swallow per-arg errors — the user might pass an
+        // unpoked unknown member, and we don't want one missing
+        // pill to halt the whole scan.
+        try { evalExpr(a.value, ctx); } catch { /* ignored */ }
+      }
+    }
     return scalar('BOOL', true);
   }
 
-  // Built-in path. Reject named args (we don't model parameter
-  // names for built-ins — using `:=` here is a likely bug).
+  // Built-in path. Reject named args for KNOWN built-ins (we
+  // don't model parameter names there — using `:=` is a likely
+  // bug). For UNKNOWN built-ins we're permissive: accept any
+  // arg shape and return a sensible default. See the comment on
+  // `permissiveUnknownBuiltinReturn` for the type-inference rules.
+  const fn = BUILTINS.get(nameLower);
+  if (!fn) {
+    // Unknown built-in: evaluate args for side-effects (so pills
+    // appear next to passed-in variables), then return a default
+    // value picked from the function name when possible. This
+    // keeps the scan moving on patterns like `TO_UINT(X)` used
+    // in FOR-loop bounds or `CONCAT(a, b)` used in string
+    // assignment — silently doing the wrong thing is preferable
+    // to halting the run, given the "make it run no matter what"
+    // policy.
+    for (const a of args) {
+      if (a.value) {
+        try { evalExpr(a.value, ctx); } catch { /* ignored */ }
+      }
+    }
+    return permissiveUnknownBuiltinReturn(nameLower);
+  }
+  // Known built-in: strict arg handling as before.
   const positional: ScalarValue[] = [];
   for (const a of args) {
     if (a.kind !== 'positional') {
@@ -1720,14 +2006,44 @@ function evalCall(
     const v = evalExpr(a.value, ctx);
     positional.push(asScalar(v, line, `argument to ${originalName}`));
   }
-  const fn = BUILTINS.get(nameLower);
-  if (!fn) {
-    throw new StRuntimeError(
-      'unknown-builtin', line,
-      `unknown function "${originalName}" (v1 supports a small set of built-ins — see modal docs)`,
-    );
-  }
   return fn(positional, line);
+}
+
+/**
+ * Return a sensible default for a call to an unknown built-in
+ * function. The naming convention `TO_<TYPE>(x)` is recognised
+ * and the destination type's default value is returned —
+ * `TO_UINT` → UINT 0, `TO_STRING` → STRING "", etc. Anything
+ * else returns BOOL TRUE, matching the unknown-FB-instance
+ * policy.
+ *
+ * Why not "throw and ask the user to poke": built-in calls don't
+ * have a syntactic pill site of their own. The chain machinery
+ * pills the chain's tail; a bare `TO_STRING(IDX)` has no chain
+ * tail. Until/unless we add pills for plain call expressions,
+ * returning a default is the only way to keep `make it run`
+ * working.
+ */
+function permissiveUnknownBuiltinReturn(nameLower: string): ScalarValue {
+  // TO_<TYPE> conversions — recognise the suffix and synthesise
+  // a typed default. The list mirrors TYPE_META keys so any type
+  // the runtime knows about can be a TO_ target.
+  if (nameLower.startsWith('to_')) {
+    const suffix = nameLower.slice(3).toUpperCase() as ScalarTypeName;
+    if (suffix in TYPE_META) {
+      const meta = TYPE_META[suffix];
+      // For integer types, default to 0; for BOOL FALSE; for
+      // STRING empty. Pulled from TYPE_META.defaultValue.
+      if (suffix === 'BOOL') return scalar('BOOL', false);
+      if (suffix === 'STRING') return scalar('STRING', '');
+      if (suffix === 'TIME') return scalar('TIME', 0);
+      // Integer or real types — defaultValue is already the
+      // right shape (number or bigint).
+      return scalar(suffix, meta.defaultValue as ScalarValue['value']);
+    }
+  }
+  // Fallback — BOOL TRUE, matching the unknown-FB-call policy.
+  return scalar('BOOL', true);
 }
 
 /**
@@ -1754,9 +2070,10 @@ function tickFbCall(
       );
     }
     if (a.kind === 'named-in') {
-      if (!a.value) {
-        throw new StRuntimeError('internal', a.line, 'internal: named-in arg has no value');
-      }
+      // `value` is null when the user wrote `Param :=` with
+      // nothing after — TwinCAT's "skip this binding" form.
+      // Leave the FB's input at its current value.
+      if (!a.value) continue;
       const v = asScalar(evalExpr(a.value, ctx), a.line, `argument ${a.name}`);
       inputs.set(a.nameLower, v);
     } else {

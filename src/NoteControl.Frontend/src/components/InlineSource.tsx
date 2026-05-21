@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Environment, RuntimeValue, ScalarValue } from '../runtime/interpreter';
 import {
   formatRuntimeValue, parsePokeInput, parsePokeInputForUnknown,
-  pokeVariable, pokeMember,
+  pokeVariable, pokeMember, pokeChain, readChain, buildChainKey,
 } from '../runtime/interpreter';
 import type {
   ParsedProgram, VarRefExpr, Statement, Expr, ScalarTypeName,
@@ -66,35 +66,68 @@ interface MemberPayload {
   memberName: string;
 }
 
+/**
+ * Decoration for a chain expression (deeper-than-one-dot or
+ * call-bearing). The pill renders right after the LAST segment of
+ * the chain (so it sits visually after the closing `)` of a
+ * trailing method call, or after the final `.member` name).
+ *
+ * `chainKey` is the runtime key the renderer uses for both reads
+ * (via `readChain`) and pokes (via `pokeChain`) — pre-computed at
+ * decoration time so the render pass doesn't re-derive it.
+ *
+ * `displayPath` is the human-readable form (e.g.
+ * `XtsEnvironment.XpuTcIo(...).GetTrackCount(...)`) used in
+ * tooltips.
+ */
+interface ChainPayload {
+  kind: 'chain';
+  /** Lowercased base variable name — for env lookup. */
+  baseLower: string;
+  /** Original-cased base name — for tooltips. */
+  baseName: string;
+  /** Stable runtime key for this chain shape (no base prefix). */
+  chainKey: string;
+  /** Display form for tooltips. */
+  displayPath: string;
+}
+
 interface Decoration {
   /** 1-indexed column of the decoration's first character. */
   column: number;
   /** How many source characters this decoration spans. For
    *  VarRefs that's the identifier's length; for MemberExprs
-   *  it's `object.length + 1 + member.length`. */
+   *  it's `object.length + 1 + member.length`. For ChainExprs we
+   *  span only the last segment's identifier so the pill lands
+   *  right after it — the base and any intermediate segments
+   *  aren't decorated separately (avoids three pills competing
+   *  for space on one line). */
   length: number;
   /** 1-indexed source line. */
   line: number;
-  payload: VarPayload | MemberPayload;
+  payload: VarPayload | MemberPayload | ChainPayload;
 }
 
-/** Identity of the variable / member being edited in the inline
- *  editor. For bare unknowns and known scalars `memberLower` is
- *  null; for unknown-FB member pokes the object is `nameLower`
- *  and the field is `memberLower`. */
+/** Identity of the variable / member / chain being edited in the
+ *  inline editor. For bare unknowns and known scalars `memberLower`
+ *  and `chainKey` are null. For unknown-FB member pokes the object
+ *  is `nameLower` and the field is `memberLower`. For chain pokes
+ *  the base is `nameLower` and `chainKey` is the segments key. */
 interface EditingTarget {
   line: number;
   column: number;
   nameLower: string;
-  /** null for bare-variable poke, set for member poke. */
+  /** null for bare-variable poke or chain poke, set for member poke. */
   memberLower: string | null;
+  /** null for var/member pokes, set for chain pokes. */
+  chainKey: string | null;
 }
 
 export function InlineSource({
   source, program, env, errorLine, envVersion, pokeEnabled,
 }: InlineSourceProps) {
-  const decorations = collectDecorations(program);
   const lines = source.split('\n');
+  const decorations = collectDecorations(program, lines);
 
   // Active poke session. Null when nothing is being edited. Used
   // for exclusivity (only one poke at a time) and so the user's
@@ -152,6 +185,7 @@ export function InlineSource({
  */
 function collectDecorations(
   program: ParsedProgram,
+  sourceLines: string[],
 ): Map<number, Decoration[]> {
   const out = new Map<number, Decoration[]>();
 
@@ -159,6 +193,112 @@ function collectDecorations(
     const list = out.get(d.line);
     if (list) list.push(d);
     else out.set(d.line, [d]);
+  }
+
+  /**
+   * For a chain whose last segment is a method call, find the
+   * column of the closing `)` so the pill renders right after it
+   * rather than between the method name and its opening paren.
+   *
+   * Same idea for a trailing array-index segment: scan past `[…]`
+   * to the column after `]`.
+   *
+   * Strategy: scan forward counting `(`/`)` (or `[`/`]`) from the
+   * starting column, honouring nested matches. If the chain wraps
+   * across lines (rare), we fall back to the column we started
+   * scanning from — the pill will land slightly off, but at least
+   * visibly tied to the chain.
+   *
+   * The returned column is 1-indexed and points at the column
+   * AFTER the closing bracket — where the pill will be inserted.
+   */
+  function findColumnAfterMatchingClose(
+    line: number, startCol: number, open: '(' | '[',
+  ): number {
+    const close = open === '(' ? ')' : ']';
+    const lineText = sourceLines[line - 1] ?? '';
+    let i = startCol - 1; // 0-indexed cursor
+    // Skip whitespace until we hit the opening bracket.
+    while (i < lineText.length && /\s/.test(lineText[i]!)) i++;
+    if (lineText[i] !== open) return startCol;
+    let depth = 0;
+    for (; i < lineText.length; i++) {
+      const ch = lineText[i];
+      if (ch === open) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) return i + 2; // +1 to 1-index, +1 to land AFTER
+      }
+    }
+    // No matching close on this line — chain wraps. Pill at start.
+    return startCol;
+  }
+
+  function visitChain(e: import('../runtime/ast').ChainExpr) {
+    // Always visit args / indices first so inner pills exist
+    // even if the outer chain pill couldn't be placed.
+    for (const seg of e.segments) {
+      if (seg.kind === 'method' || seg.kind === 'call') {
+        for (const a of seg.args) {
+          if (a.value) visitExpr(a.value);
+          if (a.target) visitVarRef(a.target);
+        }
+      } else if (seg.kind === 'index') {
+        for (const idx of seg.indices) visitExpr(idx);
+      }
+    }
+
+    const lastSeg = e.segments[e.segments.length - 1]!;
+    let column: number;
+    let length: number;
+    if (lastSeg.kind === 'method') {
+      // Pill goes right after the closing `)`. Method segments
+      // have `column` pointing at the method name; the `(` comes
+      // right after the name (possibly with whitespace).
+      column = findColumnAfterMatchingClose(
+        lastSeg.line, lastSeg.column + lastSeg.name.length, '(',
+      );
+      length = 0;
+    } else if (lastSeg.kind === 'call') {
+      // 'call' segments carry the column of the `(` itself.
+      column = findColumnAfterMatchingClose(
+        lastSeg.line, lastSeg.column, '(',
+      );
+      length = 0;
+    } else if (lastSeg.kind === 'index') {
+      // Pill goes right after the closing `]`. Index segments
+      // carry the column of the `[` itself.
+      column = findColumnAfterMatchingClose(
+        lastSeg.line, lastSeg.column, '[',
+      );
+      length = 0;
+    } else {
+      // Pill goes right after the last `.name`.
+      column = lastSeg.column;
+      length = lastSeg.name.length;
+    }
+
+    // Build the display path.
+    let displayPath = e.base.name;
+    for (const s of e.segments) {
+      if (s.kind === 'method') displayPath += '.' + s.name + '(...)';
+      else if (s.kind === 'call') displayPath += '(...)';
+      else if (s.kind === 'index') displayPath += '[…]';
+      else displayPath += '.' + s.name;
+    }
+
+    add({
+      line: lastSeg.line,
+      column,
+      length,
+      payload: {
+        kind: 'chain',
+        baseLower: e.base.nameLower,
+        baseName: e.base.name,
+        chainKey: buildChainKey(e.segments),
+        displayPath,
+      },
+    });
   }
 
   function visitExpr(e: Expr) {
@@ -182,6 +322,9 @@ function collectDecorations(
           },
         });
         return;
+      case 'Chain':
+        visitChain(e);
+        return;
       case 'Unary':
         visitExpr(e.operand); return;
       case 'Binary':
@@ -199,6 +342,13 @@ function collectDecorations(
     switch (s.kind) {
       case 'Assign':
         visitVarRef(s.target);
+        visitExpr(s.value);
+        return;
+      case 'ChainAssign':
+        // The LHS is a chain expression — emit its decoration
+        // (which is anchored at its last segment) and walk the
+        // RHS for any inner pills.
+        visitChain(s.target);
         visitExpr(s.value);
         return;
       case 'If':
@@ -272,6 +422,13 @@ function isUnknownAt(d: Decoration, env: Environment): boolean {
   if (d.payload.kind === 'var') {
     const v = env.get(d.payload.nameLower);
     return v?.kind === 'unknown';
+  }
+  if (d.payload.kind === 'chain') {
+    // Chain decorations always sit on an unknown base — that's
+    // the whole point of the chain shape. Confirm anyway in case
+    // the env got out of sync with the parsed program.
+    const base = env.get(d.payload.baseLower);
+    return base?.kind === 'unknown';
   }
   const obj = env.get(d.payload.objectLower);
   return obj?.kind === 'unknown';
@@ -347,7 +504,7 @@ interface PillData {
   /** What kind of poke the editor will perform when the user
    *  commits. null when this pill isn't pokeable at all (FB
    *  instance bare ref, FB-known-member). */
-  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member' | null;
+  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member' | 'chain' | null;
 }
 
 function gatherPillData(
@@ -406,6 +563,32 @@ function gatherPillData(
       isMissing: false,
       isUnknownTyped: false,
       pokeKind: 'scalar',
+    };
+  }
+
+  if (d.payload.kind === 'chain') {
+    // Chain pill. The base must be unknown (the parser only
+    // emits ChainExpr against unknown bases at runtime — see
+    // evalChain). We read whatever was poked under the chain's
+    // key. The chain key uniquely identifies this chain shape
+    // across all its uses in the source, so a single poke applies
+    // everywhere the same chain expression appears.
+    const stored = readChain(env, d.payload.baseLower, d.payload.chainKey);
+    if (!stored) {
+      return {
+        ...empty,
+        formattedValue: '?',
+        isUnknownTyped: true,
+        pokeKind: 'chain',
+      };
+    }
+    return {
+      formattedValue: formatRuntimeValue(stored),
+      pillType: stored.type,
+      isBoolTrue: stored.type === 'BOOL' && stored.value === true,
+      isMissing: false,
+      isUnknownTyped: true,
+      pokeKind: 'chain',
     };
   }
 
@@ -475,23 +658,35 @@ function renderPill(
 ): React.ReactNode {
   const data = gatherPillData(d, env);
 
-  // Identify "is this pill being edited right now". For
-  // bare-variable pills (var-payload AND unknown-var poke kind),
-  // `memberLower` on the editing target is null. For unknown-FB
-  // member pills it's the lowercased member name.
-  const editTargetMemberLower =
-    d.payload.kind === 'member' && data.pokeKind === 'unknown-member'
-      ? d.payload.memberLower
-      : null;
-  const editTargetNameLower =
-    d.payload.kind === 'member' ? d.payload.objectLower : d.payload.nameLower;
+  // Identify "is this pill being edited right now". The triple
+  // (nameLower, memberLower, chainKey) uniquely identifies a poke
+  // target across all three payload shapes:
+  //   - var pill          → nameLower set, others null
+  //   - unknown-member    → nameLower=base, memberLower=field, chainKey=null
+  //   - chain pill        → nameLower=base, memberLower=null, chainKey=segments
+  let editTargetNameLower: string;
+  let editTargetMemberLower: string | null = null;
+  let editTargetChainKey: string | null = null;
+  if (d.payload.kind === 'var') {
+    editTargetNameLower = d.payload.nameLower;
+  } else if (d.payload.kind === 'member') {
+    editTargetNameLower = d.payload.objectLower;
+    if (data.pokeKind === 'unknown-member') {
+      editTargetMemberLower = d.payload.memberLower;
+    }
+  } else {
+    // chain
+    editTargetNameLower = d.payload.baseLower;
+    editTargetChainKey = d.payload.chainKey;
+  }
 
   const isEditing =
     editing !== null && data.pokeKind !== null &&
     editing.line === lineNum &&
     editing.column === d.column &&
     editing.nameLower === editTargetNameLower &&
-    editing.memberLower === editTargetMemberLower;
+    editing.memberLower === editTargetMemberLower &&
+    editing.chainKey === editTargetChainKey;
 
   if (isEditing) {
     return (
@@ -499,6 +694,7 @@ function renderPill(
         key={key}
         nameLower={editTargetNameLower}
         memberLower={editTargetMemberLower}
+        chainKey={editTargetChainKey}
         pokeKind={data.pokeKind!}
         currentText={data.formattedValue.replace(/^'|'$/g, '')}
         env={env}
@@ -542,13 +738,21 @@ function renderPill(
         ? `${v.typeName} (unknown — poked value)`
         : data.pillType ?? '?';
     tooltip = `${d.payload.name} : ${typeLabel}`;
-  } else {
+  } else if (d.payload.kind === 'member') {
     const obj = env.get(d.payload.objectLower);
     const typeLabel =
       obj?.kind === 'unknown'
         ? `member of ${obj.typeName} (unknown — poked value)`
         : data.pillType ?? '?';
     tooltip = `${d.payload.objectName}.${d.payload.memberName} : ${typeLabel}`;
+  } else {
+    // chain
+    const base = env.get(d.payload.baseLower);
+    const typeLabel =
+      base?.kind === 'unknown'
+        ? `result of chain on ${base.typeName} (unknown — poked value)`
+        : data.pillType ?? '?';
+    tooltip = `${d.payload.displayPath} : ${typeLabel}`;
   }
   if (canToggleBool) {
     tooltip += ' — double-click to toggle, click to edit';
@@ -564,13 +768,15 @@ function renderPill(
           column: d.column,
           nameLower: editTargetNameLower,
           memberLower: editTargetMemberLower,
+          chainKey: editTargetChainKey,
         });
       }
     : undefined;
 
   // Double-click handler: BOOL pills toggle directly. Routed
-  // through pokeVariable / pokeMember as appropriate so unknown
-  // BOOLs (poked-as-BOOL) toggle the same way as declared BOOLs.
+  // through the matching poke API (pokeVariable / pokeMember /
+  // pokeChain) so unknown BOOLs (poked-as-BOOL) and chain BOOLs
+  // toggle the same way as declared BOOLs.
   const handleDoubleClick = canToggleBool
     ? (e: React.MouseEvent) => {
         e.preventDefault();
@@ -579,13 +785,17 @@ function renderPill(
         const newVal: ScalarValue = {
           kind: 'scalar', type: 'BOOL', value: flipped,
         };
-        let result;
-        if (data.pokeKind === 'unknown-member') {
-          result = pokeMember(env, editTargetNameLower, editTargetMemberLower!, newVal, 0);
+        let success = false;
+        if (data.pokeKind === 'chain') {
+          success = pokeChain(env, editTargetNameLower, editTargetChainKey!, newVal);
+        } else if (data.pokeKind === 'unknown-member') {
+          const result = pokeMember(env, editTargetNameLower, editTargetMemberLower!, newVal, 0);
+          success = result.ok;
         } else {
-          result = pokeVariable(env, editTargetNameLower, newVal, 0);
+          const result = pokeVariable(env, editTargetNameLower, newVal, 0);
+          success = result.ok;
         }
-        if (result.ok) {
+        if (success) {
           setEditing(null);
           forceRender();
         }
@@ -608,11 +818,13 @@ function renderPill(
 }
 
 export function PillEditor({
-  nameLower, memberLower, pokeKind, currentText, env, onCommit,
+  nameLower, memberLower, chainKey, pokeKind, currentText, env, onCommit,
 }: {
   nameLower: string;
   memberLower: string | null;
-  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member';
+  /** Set when poking a chain expression; null otherwise. */
+  chainKey: string | null;
+  pokeKind: 'scalar' | 'unknown-var' | 'unknown-member' | 'chain';
   currentText: string;
   env: Environment;
   onCommit(success: boolean): void;
@@ -629,8 +841,8 @@ export function PillEditor({
   }, []);
 
   // For known scalars we need the declared type to drive
-  // parsePokeInput — for unknowns we use the inference parser
-  // and there's no declared type to check.
+  // parsePokeInput — for unknowns and chains we use the inference
+  // parser and there's no declared type to check.
   let targetType: ScalarTypeName | null = null;
   if (pokeKind === 'scalar') {
     const v = env.get(nameLower);
@@ -651,6 +863,18 @@ export function PillEditor({
       setError(parsed.error);
       return;
     }
+    // Route to the matching poke API. Chain pokes use pokeChain
+    // with the pre-built segment key; unknown-member pokes use
+    // pokeMember; everything else uses pokeVariable.
+    if (pokeKind === 'chain') {
+      const ok = pokeChain(env, nameLower, chainKey!, parsed.value);
+      if (!ok) {
+        setError(`base "${nameLower}" is no longer an unknown FB instance`);
+        return;
+      }
+      onCommit(true);
+      return;
+    }
     const result = pokeKind === 'unknown-member'
       ? pokeMember(env, nameLower, memberLower!, parsed.value, 0)
       : pokeVariable(env, nameLower, parsed.value, 0);
@@ -661,14 +885,23 @@ export function PillEditor({
     onCommit(true);
   }
 
-  // Tooltip differs by poke kind: for known scalars we can show
-  // the declared type, for unknowns we just say "unknown".
+  // Tooltip differs by poke kind. Chains get a `…` shorthand
+  // since the full segment list would be noisy in a tooltip.
   const tooltipBase =
     pokeKind === 'scalar'
       ? `${nameLower} : ${targetType}`
       : pokeKind === 'unknown-member'
         ? `${nameLower}.${memberLower} : (unknown — type inferred from input)`
-        : `${nameLower} : (unknown — type inferred from input)`;
+        : pokeKind === 'chain'
+          ? `${nameLower}.… : (unknown — type inferred from input)`
+          : `${nameLower} : (unknown — type inferred from input)`;
+
+  // ARIA label — chain pokes label by the chain key (lowercased
+  // segment shape) so screen readers say something meaningful.
+  const ariaLabel =
+    pokeKind === 'chain'
+      ? `Edit ${nameLower}.${chainKey}`
+      : `Edit ${nameLower}${memberLower ? '.' + memberLower : ''}`;
 
   return (
     <span className="nc-runtime-pill nc-runtime-pill-editing">
@@ -702,7 +935,7 @@ export function PillEditor({
           }
         }}
         title={error ?? tooltipBase}
-        aria-label={`Edit ${nameLower}${memberLower ? '.' + memberLower : ''}`}
+        aria-label={ariaLabel}
       />
     </span>
   );
