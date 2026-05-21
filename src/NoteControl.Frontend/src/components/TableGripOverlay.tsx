@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Editor } from '@tiptap/core';
-import { CellSelection, TableMap } from '@tiptap/pm/tables';
 
 /**
  * Grip overlay for tables.
@@ -14,9 +13,10 @@ import { CellSelection, TableMap } from '@tiptap/pm/tables';
  *       * one in the TOP-LEFT corner of the table (selects the whole table)
  *
  *   - Clicking a grip:
- *       * runs the matching TipTap command (selectRow / selectColumn /
- *         selectTable) — this also tints all cells in the selection
- *         via the existing `.selectedCell` CSS rule
+ *       * positions the editor's cursor inside the first cell of the
+ *         target row/column/table — this is what subsequent commands
+ *         (addRowBefore, deleteColumn, updateAttributes('table', ...))
+ *         act on
  *       * raises a window event `nc:table-popup-open` with the selection
  *         scope (`row`, `column`, `table`). The TablePopup component
  *         listens for this event and renders itself.
@@ -26,30 +26,28 @@ import { CellSelection, TableMap } from '@tiptap/pm/tables';
  *     selection stays visible (a small "you are here" affordance).
  *     The popup tells us via `nc:table-popup-close` when it closes.
  *
+ * Why cursor-positioning (not a true CellSelection):
+ *
+ *   prosemirror-tables exposes CellSelection for "all cells in this
+ *   row are visually selected with a blue tint", but reaching that
+ *   API safely across TipTap minor versions adds an import path we
+ *   don't otherwise need (@tiptap/pm/tables may not be exported in
+ *   every release; it failed to load in earlier testing). The
+ *   structural commands the popup runs — addRowBefore, deleteColumn,
+ *   updateAttributes('table', ...), toggleHeaderRow, etc — all work
+ *   correctly when the cursor is in ANY cell of the affected row/
+ *   column. The trade-off is purely visual: the user sees only the
+ *   focused cell highlighted, not all cells in the scope. The
+ *   popup's own "Row 2 / Column 3 / Table" header makes the scope
+ *   obvious anyway.
+ *
  * Positioning model:
  *
- *   The overlay is a single fixed-position div covering the viewport.
- *   Inside it we render absolutely-positioned grip elements whose
- *   coordinates come from `getBoundingClientRect()` on the active
- *   table and each of its <tr>/<td>/<th> children. We recompute the
- *   coordinates on:
- *     - pointermove inside the editor (cheap — only when over a table)
+ *   Hoveredtable is the live DOM element. Grip coordinates come from
+ *   getBoundingClientRect on each <tr>/<td>/<th>. Recomputed on:
+ *     - hover entry / table switch (mousemove)
  *     - editor.on('transaction') (table mutations may add/remove rows)
  *     - window scroll (capture-phase) and resize
- *
- *   The cost of `getBoundingClientRect` is fine for the row/column
- *   counts a markdown note holds (rarely more than 30 cells), and the
- *   hover-only model means we don't pay anything when the user isn't
- *   pointing at a table.
- *
- * Why a single component (not one per table):
- *
- *   ProseMirror reconstructs the DOM on every transaction; binding
- *   React state to individual <table> nodes via portals is fragile.
- *   Listening once on the editor root, tracking "currently hovered
- *   table" as a single piece of state, and re-deriving grip positions
- *   from that table's live rect on every recompute is simpler and
- *   survives DOM rebuilds for free.
  */
 export interface TableGripOverlayProps {
   editor: Editor | null;
@@ -59,14 +57,12 @@ type SelectionScope = 'row' | 'column' | 'table';
 
 interface ActiveSelection {
   scope: SelectionScope;
-  // For row/column: the 0-based index of the selected row/column. For
-  // table: undefined. The popup uses this for its title; the grip
-  // overlay uses it to highlight which grip is "the active one".
+  // For row/column: the 0-based index. For 'table': undefined.
+  // Used as a label by the popup and for highlighting the active grip.
   index?: number;
 }
 
 interface GripGeometry {
-  tableRect: DOMRect;
   rowRects: DOMRect[];   // one per <tr>
   colXs: number[];       // x-position of each column's left edge (viewport)
   colWidths: number[];   // width of each column
@@ -79,51 +75,36 @@ interface GripGeometry {
 // via padding on the button so clicking is still easy.
 const GRIP_SIZE = 8;
 
-// How far OUTSIDE the table edge the grips render. Negative means
-// "outside the table". A few pixels of gap reads better than touching
-// the border.
+// How far OUTSIDE the table edge the grips render. A small gap reads
+// better than touching the border.
 const GRIP_OFFSET = 4;
 
 export function TableGripOverlay({ editor }: TableGripOverlayProps) {
-  // The <table> element the pointer is currently over. Null when the
-  // pointer isn't over any table. State (not ref) because the render
-  // depends on it — we mount grips only when this is non-null.
   const [hoveredTable, setHoveredTable] = useState<HTMLTableElement | null>(null);
-
-  // Geometry derived from hoveredTable. Recomputed on every event that
-  // could move the table. Stored in state so React re-renders the
-  // positioned grips when it changes.
   const [geometry, setGeometry] = useState<GripGeometry | null>(null);
-
-  // Active selection (driven by clicks on grips). Persists past the
-  // hover-out — that's the whole point: clicking a grip "pins" the
-  // selection so the popup has something to act on.
   const [active, setActive] = useState<ActiveSelection | null>(null);
 
-  // We keep a ref of the active state too, so handlers reading it
-  // inside event listeners (which capture stale closures otherwise)
-  // see the latest value.
+  // Mirror active in a ref so document-level event handlers can read
+  // the latest value without re-binding when active changes.
   const activeRef = useRef<ActiveSelection | null>(null);
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
+  useEffect(() => { activeRef.current = active; }, [active]);
 
-  // Recompute the geometry for the currently hovered table. Bails out
-  // if the table is gone (DOM rebuild between mouseover and recompute).
+  // Compute grip positions for a given table. Returns null on bad
+  // input (table detached, etc).
   const recomputeGeometry = useCallback((tbl: HTMLTableElement | null) => {
     if (!tbl || !tbl.isConnected) {
       setGeometry(null);
       return;
     }
     const tableRect = tbl.getBoundingClientRect();
-    const rows = Array.from(tbl.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr'));
+    const rows = Array.from(
+      tbl.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr'),
+    );
     const rowRects = rows.map((tr) => (tr as HTMLElement).getBoundingClientRect());
 
-    // Column geometry: take the first row's cells as the column model.
-    // Cells with colspan > 1 split into multiple column slots; we
-    // approximate by taking each cell's left/width as its primary
-    // column. For merged cells this gives a slightly wider grip — a
-    // tolerable trade-off for the rare merged-header case.
+    // Column geometry from the first row's cells. Merged cells in
+    // row 0 will produce a slightly off-centre column grip — rare in
+    // practice; tolerable cost.
     const firstRow = rows[0] as HTMLElement | undefined;
     const cellEls = firstRow
       ? Array.from(firstRow.querySelectorAll(':scope > td, :scope > th'))
@@ -137,7 +118,6 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     }
 
     setGeometry({
-      tableRect,
       rowRects,
       colXs,
       colWidths,
@@ -146,14 +126,12 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     });
   }, []);
 
-  // Wire pointer detection. We listen on `document` (not just the
-  // editor root) because grips render OUTSIDE the editor DOM (as
-  // fixed-position siblings), and using editor-only listeners would
-  // drop the hover state the moment the pointer moved toward a grip
-  // — the grips would disappear before the user could click them.
-  // The document-level check finds whichever of {table cell, grip,
-  // popup} the pointer is over and treats those three as "still
-  // engaged with the table".
+  // Pointer detection at the document level. Document (not editor
+  // root) so that hovering a grip — which renders OUTSIDE the editor
+  // DOM as a fixed-position sibling — doesn't trigger a hover-out
+  // that drops the grips before the user can click. The closest()
+  // checks identify which "engaged" surface the pointer is on:
+  // table cell, grip, or popup.
   useEffect(() => {
     if (!editor) return;
     const editorRoot = editor.view.dom; // .ProseMirror
@@ -162,32 +140,26 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
       const target = e.target as HTMLElement | null;
       if (!target) return;
 
-      // First priority: pointer is on a table cell INSIDE the editor.
+      // 1. Over a table cell inside the editor.
       const tbl = target.closest('table') as HTMLTableElement | null;
       if (tbl && editorRoot.contains(tbl)) {
         if (tbl !== hoveredTable) {
-          // Table identity changed (just entered, or switched between
-          // two tables). Recompute geometry to position grips.
+          // Table identity changed (just entered, or switched tables).
+          // Recompute geometry once.
           setHoveredTable(tbl);
           recomputeGeometry(tbl);
         }
-        // Same table as before — geometry is already cached. The
-        // separate transaction/scroll/resize listeners handle any
-        // case where the cached geometry could go stale. Skipping
-        // the recompute here keeps mousemove handling free for the
-        // common "just typing in a cell" case.
+        // Same table as before — geometry is cached and refreshed by
+        // the transaction/scroll/resize listeners. No work here.
         return;
       }
 
-      // Second priority: pointer is on a grip or the popup. Keep
-      // whatever we had — these elements are part of the "table
-      // editing surface" from the user's perspective.
+      // 2. Over a grip or the popup itself. Keep the state.
       if (target.closest('.nc-table-grip') || target.closest('.nc-table-popup')) {
         return;
       }
 
-      // Otherwise: pointer is elsewhere. Drop hover unless the popup
-      // is currently pinning the state.
+      // 3. Anywhere else. Drop hover unless pinned by an open popup.
       if (!activeRef.current && hoveredTable) {
         setHoveredTable(null);
         setGeometry(null);
@@ -200,11 +172,10 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     };
   }, [editor, hoveredTable, recomputeGeometry]);
 
-  // Recompute geometry on transactions (e.g. add/remove row), scroll,
-  // resize. Cheap — only runs when there's an active table.
+  // Geometry refresh on editor / window changes while a table is
+  // active. Cheap — only bound when hoveredTable exists.
   useEffect(() => {
-    if (!editor) return;
-    if (!hoveredTable) return;
+    if (!editor || !hoveredTable) return;
 
     function refresh() {
       recomputeGeometry(hoveredTable);
@@ -213,7 +184,6 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     editor.on('transaction', refresh);
     window.addEventListener('scroll', refresh, true);
     window.addEventListener('resize', refresh);
-
     return () => {
       editor.off('transaction', refresh);
       window.removeEventListener('scroll', refresh, true);
@@ -221,16 +191,11 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     };
   }, [editor, hoveredTable, recomputeGeometry]);
 
-  // Listen for popup close events so we can drop the "pinned" state.
-  // The popup raises this when the user clicks outside / presses Esc /
-  // selects an action that should dismiss.
+  // Popup-close listener — drop the "pinned" state when the popup
+  // closes (Esc, click-outside, action that dismisses).
   useEffect(() => {
     function onClose() {
       setActive(null);
-      // Re-evaluate whether to keep the grips up: if the pointer is
-      // still over the table we kept the geometry for, leave it. The
-      // next mousemove will refresh. Easier: drop everything; next
-      // pointermove rebuilds it within ~16ms.
       setHoveredTable(null);
       setGeometry(null);
     }
@@ -238,150 +203,46 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     return () => window.removeEventListener('nc:table-popup-close', onClose);
   }, []);
 
-  // Re-acquire the table after the editor finishes a transaction that
-  // replaces the table's DOM node. The DOM identity changes but the
-  // cursor / selection lives on. If we still have an "active" pin but
-  // the old hoveredTable element was removed, look it up again from
-  // the selection.
-  useEffect(() => {
-    if (!editor) return;
-    if (!active) return;
+  // ---- click handlers --------------------------------------------
 
-    function syncFromSelection() {
-      if (!editor) return;
-      const view = editor.view;
-      const { from } = editor.state.selection;
-      let domNode: Node | null;
-      try {
-        domNode = view.domAtPos(from).node;
-      } catch {
-        return;
-      }
-      let el: HTMLElement | null = domNode instanceof HTMLElement
-        ? domNode
-        : (domNode?.parentElement ?? null);
-      while (el && el.tagName !== 'TABLE') el = el.parentElement;
-      if (el && el !== hoveredTable) {
-        setHoveredTable(el as HTMLTableElement);
-        recomputeGeometry(el as HTMLTableElement);
-      } else if (el) {
-        recomputeGeometry(el as HTMLTableElement);
-      }
-    }
-
-    editor.on('transaction', syncFromSelection);
-    return () => {
-      editor.off('transaction', syncFromSelection);
-    };
-  }, [editor, active, hoveredTable, recomputeGeometry]);
-
-  // Helpers to fire selection commands. Each builds a CellSelection
-  // directly via prosemirror-tables — the upstream @tiptap/extension-
-  // table doesn't expose selectRow/selectColumn/selectTable as
-  // editor commands (only the structural ones like addRowBefore,
-  // deleteColumn, etc), so we work at the ProseMirror layer.
-  //
-  // The flow for all three is:
-  //   1. find a DOM cell inside the target row/column/table
-  //   2. translate that DOM cell to a ProseMirror position
-  //   3. build the appropriate CellSelection
-  //   4. dispatch a transaction that sets the selection
-  // After dispatch, prosemirror-tables paints `.selectedCell` on every
-  // cell in the selection (the CSS rule at styles.css already handles
-  // the visual highlight), and the rest of the popup machinery acts
-  // on whatever editor.state.selection is.
+  // Position the editor's cursor inside the first cell of the row at
+  // `index`, then signal the popup to open in row scope.
   function selectRow(index: number) {
     if (!editor || !hoveredTable) return;
-    const rows = Array.from(hoveredTable.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr'));
+    const rows = Array.from(
+      hoveredTable.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr'),
+    );
     const targetRow = rows[index] as HTMLElement | undefined;
     const firstCell = targetRow?.querySelector(':scope > td, :scope > th') as HTMLElement | undefined;
-    if (!firstCell) return;
-
-    const cellPos = posOfCell(editor, firstCell);
-    if (cellPos == null) return;
-
-    const view = editor.view;
-    const $cell = view.state.doc.resolve(cellPos);
-    const rowSel = CellSelection.rowSelection($cell);
-    view.dispatch(view.state.tr.setSelection(rowSel));
-    view.focus();
-
+    moveCursorInto(editor, firstCell);
     setActive({ scope: 'row', index });
     fireOpen('row', index);
   }
 
   function selectColumn(index: number) {
     if (!editor || !hoveredTable) return;
-    const firstRow = hoveredTable.querySelector(':scope > tbody > tr, :scope > thead > tr, :scope > tr') as HTMLElement | null;
+    const firstRow = hoveredTable.querySelector(
+      ':scope > tbody > tr, :scope > thead > tr, :scope > tr',
+    ) as HTMLElement | null;
     const targetCell = firstRow?.querySelectorAll(':scope > td, :scope > th')[index] as HTMLElement | undefined;
-    if (!targetCell) return;
-
-    const cellPos = posOfCell(editor, targetCell);
-    if (cellPos == null) return;
-
-    const view = editor.view;
-    const $cell = view.state.doc.resolve(cellPos);
-    const colSel = CellSelection.colSelection($cell);
-    view.dispatch(view.state.tr.setSelection(colSel));
-    view.focus();
-
+    moveCursorInto(editor, targetCell);
     setActive({ scope: 'column', index });
     fireOpen('column', index);
   }
 
   function selectTable() {
     if (!editor || !hoveredTable) return;
-
-    // Find first and last cell DOM nodes so we can span the whole
-    // table. The TableMap-based approach below is more robust if the
-    // table has merged cells; we fall back to first/last cell traversal
-    // for the simple path.
-    const firstCellDom = hoveredTable.querySelector('td, th') as HTMLElement | null;
-    if (!firstCellDom) return;
-
-    const firstCellPos = posOfCell(editor, firstCellDom);
-    if (firstCellPos == null) return;
-
-    const view = editor.view;
-    const $first = view.state.doc.resolve(firstCellPos);
-
-    // Walk up from the resolved cell pos to find the table node and
-    // use TableMap to enumerate all cells. Selecting from the first
-    // cell to the last cell gives us the whole table.
-    let tableDepth = -1;
-    for (let d = $first.depth; d >= 0; d--) {
-      if ($first.node(d).type.name === 'table') {
-        tableDepth = d;
-        break;
-      }
-    }
-    if (tableDepth < 0) return;
-
-    const tableNode = $first.node(tableDepth);
-    const tableStart = $first.start(tableDepth);
-    const map = TableMap.get(tableNode);
-    if (map.map.length === 0) return;
-
-    // First cell at map index 0; last cell at map index length-1.
-    // The map stores absolute positions within the table node, so
-    // we add tableStart to map them to document positions.
-    const firstPos = tableStart + map.map[0];
-    const lastPos = tableStart + map.map[map.map.length - 1];
-
-    const $a = view.state.doc.resolve(firstPos);
-    const $b = view.state.doc.resolve(lastPos);
-    const tableSel = new CellSelection($a, $b);
-    view.dispatch(view.state.tr.setSelection(tableSel));
-    view.focus();
-
+    const firstCell = hoveredTable.querySelector('td, th') as HTMLElement | null;
+    moveCursorInto(editor, firstCell ?? undefined);
     setActive({ scope: 'table' });
     fireOpen('table');
   }
 
+  // ---- render -----------------------------------------------------
+
   if (!editor) return null;
   if (!hoveredTable || !geometry) return null;
 
-  // Row grips: one per row, on the left edge.
   const rowGrips = geometry.rowRects.map((r, i) => {
     const isActive = active?.scope === 'row' && active.index === i;
     const top = r.top + (r.height - GRIP_SIZE) / 2;
@@ -400,7 +261,6 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     );
   });
 
-  // Column grips: one per column, on the top edge.
   const colGrips = geometry.colXs.map((x, i) => {
     const isActive = active?.scope === 'column' && active.index === i;
     const top = geometry.topY - GRIP_SIZE - GRIP_OFFSET;
@@ -419,7 +279,6 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     );
   });
 
-  // Corner grip: top-left of the table, selects the whole table.
   const cornerActive = active?.scope === 'table';
   const cornerTop = geometry.topY - GRIP_SIZE - GRIP_OFFSET;
   const cornerLeft = geometry.leftX - GRIP_SIZE - GRIP_OFFSET;
@@ -442,47 +301,32 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
   );
 }
 
-// ----- prosemirror position helpers --------------------------------
+// ----- helpers -----------------------------------------------------
 
 /**
- * Translate a DOM <td> / <th> element into the ProseMirror document
- * position OF the cell node. We compute this by mapping the cell's
- * DOM position to a pm pos via view.posAtDOM, then walking up the
- * resolved position until we hit a node with type 'tableCell' or
- * 'tableHeader' — that node's `before()` position is the position
- * of the cell node itself, which is what CellSelection wants for
- * its anchors.
- *
- * Returns null on failure (DOM detached, posAtDOM threw, no cell
- * ancestor found).
+ * Position the editor's cursor inside the given cell DOM element. No-
+ * op if the element isn't found or the mapping throws. Using
+ * setTextSelection (rather than building a CellSelection) keeps this
+ * file's dependencies to @tiptap/core only — no @tiptap/pm subpaths.
  */
-function posOfCell(editor: Editor, cellEl: HTMLElement): number | null {
+function moveCursorInto(editor: Editor, cellEl: HTMLElement | undefined): void {
+  if (!cellEl) return;
   try {
     const view = editor.view;
-    // posAtDOM with offset 0 gives a position inside the cell. We
-    // then resolve and walk up to the cell node itself.
-    const inside = view.posAtDOM(cellEl, 0);
-    const $p = view.state.doc.resolve(inside);
-    for (let d = $p.depth; d >= 0; d--) {
-      const n = $p.node(d);
-      if (n.type.name === 'tableCell' || n.type.name === 'tableHeader') {
-        return $p.before(d);
-      }
-    }
-    return null;
+    const pos = view.posAtDOM(cellEl, 0);
+    editor.chain().focus().setTextSelection(pos).run();
   } catch {
-    return null;
+    // posAtDOM can throw if the DOM-to-pm mapping isn't stable; fall
+    // through silently. The popup will still open and act on whatever
+    // selection the editor currently has.
   }
 }
 
 /**
- * Raise the "popup should open with this scope" event. TablePopup
- * listens for this and renders itself. We use a window event rather
- * than a shared context because the popup and the grip overlay are
- * mounted independently inside the editor shell; an event keeps them
- * decoupled.
+ * Raise the popup-open event. TablePopup listens on the window and
+ * mounts itself; we keep the two components decoupled.
  */
-function fireOpen(scope: SelectionScope, index?: number) {
+function fireOpen(scope: SelectionScope, index?: number): void {
   window.dispatchEvent(
     new CustomEvent('nc:table-popup-open', {
       detail: { scope, index },
