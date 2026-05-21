@@ -3459,27 +3459,37 @@ body.nc-dragging * {
    provide visuals. */
 
 .nc-table-grip {
-  /* The button itself is 8x8; the hit-target is enlarged via padding
-     so a careful click is still easy on touch screens. */
-  width: 8px;
-  height: 8px;
+  /* IMPORTANT: explicit content-box. The global rule sets
+     `*, *::before, *::after { box-sizing: border-box }`, which would
+     make width/height include the padding — leaving a 0x0 visible
+     content area and an invisible button. We override that so width
+     and height refer to the COLOURED pill, and padding adds an
+     invisible click-target halo around it. */
+  box-sizing: content-box;
+  /* The coloured pill is 10x10. */
+  width: 10px;
+  height: 10px;
+  /* The hit-target gets an extra 4px halo of empty padding around
+     the pill, so a finger or imprecise click still lands on the
+     button without enlarging the visible chrome. Background-clip
+     keeps the colour inside the content area only. */
   padding: 4px;
-  /* Compensate the padding so the visible pill stays 8x8 visually
-     centered on the position the React component computed. */
+  /* Centre the visible pill on the (top, left) the React component
+     computed: the component placed the box at that coordinate, but
+     padding pushes the visible pill 4px down-right of that. Compensate
+     with a negative margin so the pill sits exactly on the computed
+     coordinate. */
   margin: -4px;
   background: var(--nc-accent);
+  background-clip: content-box;
   border: none;
   border-radius: 999px;
   cursor: pointer;
   z-index: 49;
-  /* Fade-in feels lighter than a hard pop, and the user is already
-     mid-hover so they're not waiting on us. 80ms is barely
-     perceptible but smooths the edges. */
+  /* A baseline 0.55 opacity reads as "available but quiet"; full
+     opacity on hover signals interactivity without being loud. */
   opacity: 0.55;
   transition: opacity 80ms ease-out, transform 80ms ease-out;
-  /* Background-clip leaves a transparent halo around the visible
-     pill, so the larger hit-target doesn't bleed past it. */
-  background-clip: content-box;
 }
 .nc-table-grip:hover {
   opacity: 1;
@@ -3490,9 +3500,8 @@ body.nc-dragging * {
   background-color: var(--nc-accent);
 }
 
-/* The corner grip is a square (visually) rather than a pill, since
-   it represents "the table" as a whole. We square the border-radius
-   off; everything else stays the same. */
+/* The corner grip is a square (visually) rather than a pill — it
+   represents "the table" as a whole. */
 .nc-table-grip-corner {
   border-radius: 2px;
 }
