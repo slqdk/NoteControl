@@ -48,21 +48,36 @@ export function FolderPage() {
 
   const [notes, setNotes] = useState<NoteSummaryDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Cover image URL, populated from the (non-recursive) folder
+   * listing fetch below. Server-built and already cache-busted via
+   * `?v=<unix-ms>`; we just drop it into `<img src>`. Null means
+   * "no cover" — render nothing above the search.
+   */
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   // -------------------------------------------------------------------
   // Listing of the CURRENT folder (not the recursive flat list above).
-  // We need this for two reasons:
+  // We need this for three reasons:
   //   1. Duplicate-name validation in the Add composer — checking
   //      against `notes` above wouldn't catch a clash because that
   //      list is recursive (a note named "foo" deep in a subfolder
   //      doesn't clash with a new "foo" at this level).
   //   2. To know what folders already exist at this level for the
   //      "new folder name" dup check.
+  //   3. To pick up the per-folder cover URL (FolderListingDto.coverUrl)
+  //      and render the cover banner above the search. (Cover URL is
+  //      on FolderListingDto rather than the recursive endpoint —
+  //      that one returns a flat note list, not a folder summary.)
   //
-  // Loaded once per folderPath change. Errors from this fetch are
-  // silently dropped — the composer falls back to "trust the server"
-  // (the create endpoint will reject duplicates with a clear error
-  // message) so a transient listing failure doesn't block creation.
+  // The sibling-name lists are only consumed by the mobile Add
+  // composer, but the listing call itself runs on both desktop and
+  // mobile now — the cover URL is needed everywhere. Loaded once per
+  // folderPath change. Errors from this fetch are silently dropped —
+  // the composer falls back to "trust the server" (the create endpoint
+  // will reject duplicates with a clear error message) so a transient
+  // listing failure doesn't block creation or hide the recursive note
+  // list above; it just means no cover banner this paint.
   // -------------------------------------------------------------------
   const [siblingNoteNames, setSiblingNoteNames] = useState<string[]>([]);
   const [siblingFolderNames, setSiblingFolderNames] = useState<string[]>([]);
@@ -90,20 +105,28 @@ export function FolderPage() {
     };
   }, [vaultId, folderPath]);
 
-  // Separate effect for the (non-recursive) immediate-children listing,
-  // used by the mobile Add composer for dup validation. We could combine
-  // it with the effect above, but recursive vs flat listings are two
-  // different API calls and conflating them muddies the loading state
-  // (the flat list drives the "Loading…" UI; the immediate listing
-  // shouldn't).
+  // Non-recursive listing — drives the mobile Add-composer's dup
+  // validation AND the cover-banner state for both desktop and mobile.
+  // We could combine it with the recursive effect above, but recursive
+  // vs flat are two different API calls and conflating them muddies
+  // the loading state (the flat list drives the "Loading…" UI; the
+  // immediate listing shouldn't gate that paint).
+  //
+  // listenerToken (refreshTick) bumps whenever the PropertiesPanel
+  // notifies the page that a cover has changed, so we re-fetch and
+  // the banner updates without a page reload. The event is documented
+  // alongside the dispatch (see PropertiesPanel folder-cover handlers).
+  const [coverRefreshTick, setCoverRefreshTick] = useState(0);
   useEffect(() => {
     if (!vaultId) return;
-    if (!isMobile) return;  // composer only runs on mobile; skip otherwise
     let cancelled = false;
     (async () => {
       try {
         const listing = await notesApi.listFolder(vaultId, folderPath);
         if (cancelled) return;
+        setCoverUrl(listing.coverUrl ?? null);
+        // Sibling-name lists are only consumed by the mobile composer
+        // but cheap to compute either way (small array transforms).
         // Lowercased for case-insensitive dup checks (the server is
         // case-sensitive but most filesystems aren't; matching the
         // user's mental model is more important than matching the
@@ -118,13 +141,33 @@ export function FolderPage() {
         );
       } catch {
         // Swallow — the create endpoint will surface real conflicts.
-        // We just lose the inline pre-submit warning in this case.
+        // We just lose the inline pre-submit warning AND the cover
+        // banner in this case. Both are non-blocking concerns.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [vaultId, folderPath, isMobile]);
+  }, [vaultId, folderPath, coverRefreshTick]);
+
+  // Listen for cover-changed dispatches from the PropertiesPanel.
+  // Dispatched after a successful upload OR delete; carries the
+  // affected folderPath in detail so we only refetch when it matches
+  // the folder we're currently rendering (prevents cross-folder
+  // flicker if the user uploads a cover for folder A while viewing
+  // folder B in another window-state and then nav-back).
+  useEffect(() => {
+    function onChanged(e: Event) {
+      const detail = (e as CustomEvent<{ folderPath: string }>).detail;
+      if (detail && detail.folderPath === folderPath) {
+        setCoverRefreshTick((t) => t + 1);
+      }
+    }
+    window.addEventListener('nc:folder-cover-changed', onChanged);
+    return () => {
+      window.removeEventListener('nc:folder-cover-changed', onChanged);
+    };
+  }, [folderPath]);
 
   if (!vaultId) {
     return null;
@@ -137,6 +180,26 @@ export function FolderPage() {
       </h1>
 
       {error && <div className="nc-form-error">{error}</div>}
+
+      {/*
+        Per-folder cover banner. Renders ONLY when the server told us
+        there's a cover for this folder. Image displays at its
+        natural intrinsic size (max-width capped at 100% so a wider
+        image scales down to the content column, preserving aspect
+        ratio via height: auto in CSS). No fallback / placeholder
+        when there's no cover — the layout simply has no banner.
+      */}
+      {coverUrl && (
+        <div className="nc-folder-cover">
+          <img
+            src={coverUrl}
+            alt=""
+            // Mark decorative — the cover is visual context, not
+            // information conveyed only by the image. Empty alt is
+            // the correct ARIA hint here.
+          />
+        </div>
+      )}
 
       <div className="nc-folder-search">
         <SearchBox

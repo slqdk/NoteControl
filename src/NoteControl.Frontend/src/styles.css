@@ -1617,6 +1617,82 @@ body.nc-dragging * {
 
 .nc-page-title { font-size: 22px; font-weight: 600; margin: 0 0 20px; }
 
+/* ---------- Folder cover banner (FolderPage) ----------------------
+   Renders between the page title and the search box when the folder
+   has a cover image uploaded. The user's requirement: image displays
+   at its natural intrinsic size unless wider than the content area,
+   in which case it shrinks to fit (preserving aspect ratio).
+
+   Implementation:
+   - The wrapper has NO width constraint — its parent .nc-page is
+     already 960px max, and we let the wrapper inherit that. We give
+     it bottom margin to space it off the search box; top margin is
+     already provided by the page-title's bottom margin.
+   - The <img> uses `max-width: 100%` so it scales DOWN when the
+     natural width exceeds the column width, and `height: auto` so
+     it scales proportionally (aspect ratio preserved). No fixed
+     width or height — images smaller than the column render at
+     their natural intrinsic size, as asked.
+   - `display: block` so there's no inline-image baseline gap.
+*/
+.nc-folder-cover {
+  margin: 0 0 20px;
+}
+.nc-folder-cover img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  /* Subtle rounding + border to match the rest of the chrome's
+     visual idiom (cards, blocks, etc. in this app share these
+     tokens). The border is 1px so it doesn't visually compete with
+     the image content. */
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+}
+
+/* ---------- Folder cover editor (PropertiesPanel) -----------------
+   The control inside the panel's "Cover" row. Stacks a small
+   thumbnail (when one exists) above a button row, then any error
+   message. The hidden file input stays in the DOM (not display:none)
+   so keyboard focus order isn't broken if anything ever tabs through
+   it (tabIndex={-1} keeps it out of the natural tab sequence). */
+.nc-folder-cover-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nc-folder-cover-input {
+  /* Visually hide but stay in the layout tree so focus-management
+     and form semantics aren't surprising. The button next to it is
+     the real trigger. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.nc-folder-cover-thumb img {
+  display: block;
+  max-width: 100%;
+  /* Cap the thumbnail height so a very tall image doesn't make the
+     properties panel scroll forever. The user's "real" view is the
+     FolderPage banner; this is just a preview/identity check. */
+  max-height: 120px;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--nc-border);
+  border-radius: 4px;
+}
+.nc-folder-cover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .nc-section { margin: 24px 0; }
 .nc-section-heading {
   font-size: 13px;

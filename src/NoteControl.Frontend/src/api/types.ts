@@ -152,6 +152,21 @@ export interface FolderListingDto {
   subfolders: FolderSummaryDto[];
   notes: NoteSummaryDto[];
   recentlyUpdated: NoteSummaryDto[];
+  /**
+   * Server-built cover image URL when this folder has a cover, or
+   * null/undefined when it doesn't. The URL embeds the file's mtime
+   * as `?v=<unix-ms>` so a re-upload always produces a different URL
+   * (defeats the browser cache without needing no-store headers on
+   * the GET endpoint).
+   */
+  coverUrl?: string | null;
+}
+
+/** Response from POST /api/vaults/{id}/folder/cover (multipart upload). */
+export interface FolderCoverUploadResponse {
+  coverUrl: string;
+  contentType: string;
+  sizeBytes: number;
 }
 
 // ---------------------------------------------------------------- Search

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { ApiError, foldersApi, notesApi } from '../api/client';
 import type { FolderListingDto, NoteDto, NoteHistoryInfo } from '../api/types';
@@ -802,6 +802,24 @@ export function PropertiesPanel({
 
             <dt>Notes here</dt>
             <dd>{folder.notes.length}</dd>
+
+            {/*
+              Folder cover image (Ship N). Renders inline above the
+              search on the FolderPage. The editor below handles
+              upload/replace/delete and dispatches
+              nc:folder-cover-changed on success so any open
+              FolderPage refetches and shows the new state without a
+              reload.
+            */}
+            <dt>Cover</dt>
+            <dd>
+              <FolderCoverEditor
+                vaultId={vaultId}
+                folderPath={selection.path}
+                coverUrl={folder.coverUrl ?? null}
+                onChanged={() => setRefreshTick((t) => t + 1)}
+              />
+            </dd>
           </dl>
         )}
 
@@ -1011,5 +1029,184 @@ function DashboardProperties({
         </button>
       </div>
     </>
+  );
+}
+
+// ============================================================ FolderCoverEditor
+
+interface FolderCoverEditorProps {
+  vaultId: string;
+  /** Canonical folder path. Empty string is the vault root. */
+  folderPath: string;
+  /** Current cover URL from the listing, or null when no cover exists. */
+  coverUrl: string | null;
+  /**
+   * Called after a successful upload or delete so the panel re-fetches
+   * the folder listing (and the thumbnail above reflects the new URL).
+   * The panel uses this to bump its own refreshTick.
+   */
+  onChanged: () => void;
+}
+
+/**
+ * Per-folder cover image control. Three states:
+ *
+ *   - **No cover** → "Upload cover" button only. Picks a file via a
+ *     hidden <input type=file>; uploads on selection.
+ *   - **Has cover** → thumbnail preview + Replace + Delete buttons.
+ *     Replace reuses the upload path; Delete confirms with
+ *     window.confirm before calling the API.
+ *   - **Busy** (uploading/deleting) → the action button shows the
+ *     in-flight verb and both buttons disable so the user can't
+ *     fire concurrent requests.
+ *
+ * Why dispatch a window event instead of a callback prop straight to
+ * FolderPage?
+ * FolderPage and the PropertiesPanel are siblings under VaultLayout
+ * with no direct prop wiring between them. The existing pattern for
+ * the editor (nc:note-reload-body, nc:note-undo-state) uses window
+ * events for exactly this reason. The local `onChanged` prop is just
+ * to refresh the panel's own folder listing — the cross-component
+ * refresh on FolderPage is event-driven.
+ */
+function FolderCoverEditor({
+  vaultId,
+  folderPath,
+  coverUrl,
+  onChanged,
+}: FolderCoverEditorProps) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<'upload' | 'delete' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function openPicker() {
+    if (busy) return;
+    setError(null);
+    fileRef.current?.click();
+  }
+
+  async function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Always reset the input value so picking the same file twice in
+    // a row still fires onChange. (Native quirk: an unchanged value
+    // is treated as "no change.")
+    e.target.value = '';
+    if (!file) return;
+
+    setBusy('upload');
+    setError(null);
+    try {
+      await foldersApi.uploadCover(vaultId, folderPath, file);
+      // Tell the open FolderPage (if any) to refetch the listing and
+      // repaint the banner. Detail carries the folder path so other
+      // FolderPages (in different routes / cached) don't repaint
+      // unnecessarily.
+      window.dispatchEvent(
+        new CustomEvent('nc:folder-cover-changed', {
+          detail: { folderPath },
+        }),
+      );
+      onChanged();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+          ? err.message
+          : 'Upload failed.',
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDelete() {
+    if (busy) return;
+    const ok = window.confirm(
+      'Remove the cover image for this folder?\n\nThis cannot be undone.',
+    );
+    if (!ok) return;
+
+    setBusy('delete');
+    setError(null);
+    try {
+      await foldersApi.deleteCover(vaultId, folderPath);
+      window.dispatchEvent(
+        new CustomEvent('nc:folder-cover-changed', {
+          detail: { folderPath },
+        }),
+      );
+      onChanged();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+          ? err.message
+          : 'Delete failed.',
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="nc-folder-cover-editor">
+      {/*
+        Hidden file input. The accept attribute is a hint — the
+        server is the authority on what's accepted (image-only,
+        size limit). Browsers vary on whether `accept` actually
+        filters; SVG in particular sometimes shows up under "all
+        files." The server returns 415 with a clear message if a
+        non-image slips through, surfaced via setError below.
+      */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml"
+        onChange={onFilePicked}
+        className="nc-folder-cover-input"
+        tabIndex={-1}
+      />
+
+      {coverUrl && (
+        <div className="nc-folder-cover-thumb">
+          <img src={coverUrl} alt="" />
+        </div>
+      )}
+
+      <div className="nc-folder-cover-actions">
+        <button
+          type="button"
+          className="nc-btn"
+          onClick={openPicker}
+          disabled={busy !== null}
+          title={
+            coverUrl
+              ? 'Replace this folder’s cover image'
+              : 'Upload a cover image for this folder'
+          }
+        >
+          {busy === 'upload'
+            ? 'Uploading…'
+            : coverUrl
+            ? '🖼 Replace…'
+            : '🖼 Upload cover…'}
+        </button>
+        {coverUrl && (
+          <button
+            type="button"
+            className="nc-btn nc-btn-danger"
+            onClick={onDelete}
+            disabled={busy !== null}
+            title="Remove the cover (with confirmation)"
+          >
+            {busy === 'delete' ? 'Deleting…' : '🗑 Delete cover'}
+          </button>
+        )}
+      </div>
+
+      {error && <div className="nc-form-error">{error}</div>}
+    </div>
   );
 }

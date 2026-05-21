@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using NoteControl.Server.Data;
+using NoteControl.Server.Folders.Services;
 using NoteControl.Server.Notes.Frontmatter;
 using NoteControl.Server.Search.Services;
 using NoteControl.Server.Vaults.Services;
@@ -79,19 +80,26 @@ public sealed class NoteService : INoteService
     private readonly INotePathResolver _notePaths;
     private readonly TimeProvider _clock;
     private readonly INoteIndexer _indexer;
+    // Used by ListFolderAsync to populate FolderListingDto.CoverUrl
+    // when a cover image is present in the folder. Kept here (rather
+    // than fetched separately by the client) so a single listing
+    // request returns everything FolderPage needs to paint.
+    private readonly IFolderCoverService _folderCovers;
 
     public NoteService(
         ServerDbContext db,
         IVaultPathResolver vaultPaths,
         INotePathResolver notePaths,
         TimeProvider clock,
-        INoteIndexer indexer)
+        INoteIndexer indexer,
+        IFolderCoverService folderCovers)
     {
         _db = db;
         _vaultPaths = vaultPaths;
         _notePaths = notePaths;
         _clock = clock;
         _indexer = indexer;
+        _folderCovers = folderCovers;
     }
 
     public async Task<NoteDto?> GetAsync(Guid vaultId, string notePath, CancellationToken ct = default)
@@ -640,11 +648,28 @@ public sealed class NoteService : INoteService
                 info.Length));
         }
 
+        // Cover image probe (Ship N: per-folder cover above the
+        // search box on FolderPage). The probe is cheap — File.Exists
+        // on a handful of candidate names — and we do it inline rather
+        // than as a separate round-trip so the listing response has
+        // everything FolderPage needs to paint without a second fetch.
+        // mtime is embedded in the URL as `?v=<unix-ms>` so re-uploads
+        // bypass the browser cache without needing no-store headers
+        // on the GET endpoint.
+        string? coverUrl = null;
+        if (_folderCovers.TryGetExistingCover(vaultRoot, canonical, out _, out var coverMtime))
+        {
+            var ms = new DateTimeOffset(coverMtime, TimeSpan.Zero).ToUnixTimeMilliseconds();
+            coverUrl =
+                $"/api/vaults/{vaultId}/folder/cover?path={Uri.EscapeDataString(canonical)}&v={ms}";
+        }
+
         return new FolderListingDto(
             Path: canonical,
             Subfolders: subfolders.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList(),
             Notes: notes.OrderBy(n => n.Name, StringComparer.OrdinalIgnoreCase).ToList(),
-            RecentlyUpdated: recentlyUpdated);
+            RecentlyUpdated: recentlyUpdated,
+            CoverUrl: coverUrl);
     }
 
     public async Task<NoteHistoryInfoDto> GetHistoryInfoAsync(

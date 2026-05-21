@@ -267,6 +267,13 @@ try
     // scoped ServerDbContext (vault root lookup).
     builder.Services.AddScoped<IFolderService, FolderService>();
 
+    // Per-folder cover image storage (ShipN). Same scoping rationale
+    // as FolderService — needs the scoped ServerDbContext for vault
+    // root lookup. Reuses the same AssetOptions section for the
+    // upload size cap (covers and note assets share the limit; one
+    // knob, one number to tune).
+    builder.Services.AddScoped<IFolderCoverService, FolderCoverService>();
+
     // Asset services (image/video/file paste storage).
     builder.Services.Configure<AssetOptions>(builder.Configuration.GetSection("Assets"));
     builder.Services.AddScoped<IAssetService, AssetService>();
@@ -726,6 +733,7 @@ try
     app.MapNoteExportEndpoints();
     app.MapNoteImportEndpoints();
     app.MapFolderEndpoints();
+    app.MapFolderCoverEndpoints();
     app.MapSearchEndpoints();
     app.MapFolderRecursiveEndpoints();
     app.MapAssetEndpoints();

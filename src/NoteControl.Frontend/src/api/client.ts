@@ -6,6 +6,7 @@ import type {
   AssignmentsConfigDto,
   CreateNoteRequest,
   FeedDto,
+  FolderCoverUploadResponse,
   FolderListingDto,
   LinkPreviewDto,
   NoteDto,
@@ -569,6 +570,79 @@ export const foldersApi = {
       method: 'PUT',
       body: { oldPath, newPath },
     }),
+
+  // ---------------------------------------------------------------- Cover
+
+  /**
+   * POST /api/vaults/{id}/folder/cover?path=... (multipart/form-data)
+   *
+   * Upload (or replace) the cover image for a folder. Empty path =
+   * vault root. Image-only on the server side (PNG/JPEG/GIF/WebP/
+   * BMP/SVG); other types return 415. Returns a cache-busted URL
+   * the caller can drop into `<img src>` immediately.
+   *
+   * Mirrors assetsApi.upload's CSRF + Content-Type handling — the
+   * browser sets the multipart boundary, so we don't set
+   * Content-Type ourselves.
+   */
+  async uploadCover(
+    vaultId: string,
+    folderPath: string,
+    file: File | Blob,
+    fileName?: string,
+  ): Promise<FolderCoverUploadResponse> {
+    const form = new FormData();
+    const effectiveName =
+      fileName ?? (file instanceof File ? file.name : 'cover.png');
+    form.append('file', file, effectiveName);
+
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+
+    const response = await fetch(
+      `/api/vaults/${vaultId}/folder/cover?path=${encodeURIComponent(folderPath)}`,
+      {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: form,
+      },
+    );
+
+    if (!response.ok) {
+      let problem: ProblemDetails | null = null;
+      try {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('json')) {
+          problem = (await response.json()) as ProblemDetails;
+        }
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(
+        response.status,
+        problem,
+        `Cover upload failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as FolderCoverUploadResponse;
+  },
+
+  /**
+   * DELETE /api/vaults/{id}/folder/cover?path=...
+   * Idempotent — 204 whether or not a cover existed.
+   */
+  deleteCover: (vaultId: string, folderPath: string) =>
+    request<void>(
+      `/api/vaults/${vaultId}/folder/cover?path=${encodeURIComponent(folderPath)}`,
+      { method: 'DELETE' },
+    ),
 };
 
 // ============================================================== TEMPLATES

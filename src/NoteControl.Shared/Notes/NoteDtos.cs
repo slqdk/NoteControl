@@ -120,12 +120,18 @@ public sealed record FolderSummaryDto(
 /// GET /api/vaults/{id}/folder — what's at this path.
 /// Recently-updated lists notes from this folder *and all descendants*,
 /// most recent first, capped at 10 (spec's "recent" rule).
+///
+/// <see cref="CoverUrl"/> is non-null when this folder has a cover image
+/// uploaded via <c>POST /folder/cover</c>; it embeds a cache-busting
+/// mtime so a re-upload produces a different URL. Null means the folder
+/// has no cover and the frontend should render nothing.
 /// </summary>
 public sealed record FolderListingDto(
     string Path,                      // "" for vault root
     IReadOnlyList<FolderSummaryDto> Subfolders,
     IReadOnlyList<NoteSummaryDto> Notes,
-    IReadOnlyList<NoteSummaryDto> RecentlyUpdated);
+    IReadOnlyList<NoteSummaryDto> RecentlyUpdated,
+    string? CoverUrl = null);
 
 /// <summary>
 /// GET /api/vaults/{id}/note/history?path= — a summary of how much
