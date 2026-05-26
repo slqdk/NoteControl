@@ -571,7 +571,7 @@ export function TreeView({
           depth={depth}
           initialName={stripMdExtension(note.name)}
           siblingNames={siblingNames}
-          icon={noteIcon(variant)}
+          icon="📄"
           onCancel={rename.cancel}
           onSubmit={async (newName) => {
             await onRenameNote(note.path, newName);
@@ -590,7 +590,7 @@ export function TreeView({
         depth={depth}
         hasChevron={false}
         isSelected={isSelected}
-        icon={noteIcon(variant)}
+        icon={noteIcon(variant, note.state)}
         onRowClick={() => {
           const sel: TreeSelection = { kind: 'note', path: note.path, name: note.name };
           void navigateToNote(note.path, sel);
@@ -703,8 +703,39 @@ function folderIcon(_variant: TreeVariant, expanded: boolean, folderPath: string
   return expanded ? '📂' : '📁';
 }
 
-function noteIcon(_variant: TreeVariant): string {
-  return '📄';
+function noteIcon(_variant: TreeVariant, state?: string): ReactNode {
+  // State badge in the icon's lower-right corner: a yellow dot for
+  // notes under development, a green tick for released notes, nothing
+  // for unversioned notes (the common case — keep it clean).
+  const badge =
+    state === 'released'
+      ? (
+          <span
+            className="nc-note-badge nc-note-badge-released"
+            aria-label="Released"
+            title="Released"
+          >
+            ✓
+          </span>
+        )
+      : state === 'development'
+        ? (
+            <span
+              className="nc-note-badge nc-note-badge-dev"
+              aria-label="Under development"
+              title="Under development"
+            />
+          )
+        : null;
+
+  if (!badge) return '📄';
+
+  return (
+    <span className="nc-note-icon-wrap">
+      <span className="nc-note-icon-glyph">📄</span>
+      {badge}
+    </span>
+  );
 }
 
 function stripMdExtension(name: string): string {

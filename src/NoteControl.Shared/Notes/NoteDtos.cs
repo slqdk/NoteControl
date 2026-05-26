@@ -136,7 +136,14 @@ public sealed record NoteSummaryDto(
     string Path,
     string Name,                      // filename without .md
     DateTimeOffset LastModified,
-    long SizeBytes);
+    long SizeBytes,
+    // Versioning surface for the tree's per-note state badge. Defaulted so
+    // callers that don't cheaply have these (e.g. the index-backed
+    // recursive listing) can omit them — they then read as an unversioned
+    // note (no badge), which is the safe default.
+    int VersionMajor = 0,
+    int VersionMinor = 0,
+    string State = "not-versioned");
 
 /// <summary>
 /// One subfolder of a folder listing.

@@ -163,6 +163,15 @@ export interface NoteSummaryDto {
   path: string;
   name: string;
   lastModified: string;
+  /**
+   * Per-note version + lifecycle state, used by the tree to render a
+   * state badge on the note icon (yellow dot = development, green tick
+   * = released, nothing = not-versioned). The index-backed recursive
+   * listing omits these, so they default to an unversioned note.
+   */
+  versionMajor?: number;
+  versionMinor?: number;
+  state?: string;
 }
 
 /**

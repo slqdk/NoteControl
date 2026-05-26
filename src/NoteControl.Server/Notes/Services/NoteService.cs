@@ -779,7 +779,8 @@ public sealed class NoteService : INoteService
                 ? Path.GetFileName(file)
                 : $"{canonical}/{Path.GetFileName(file)}";
             var info = new FileInfo(file);
-            notes.Add(new NoteSummaryDto(rel, name, info.LastWriteTimeUtc, info.Length));
+            var (vMaj, vMin, state) = await ReadVersionStateAsync(file, ct);
+            notes.Add(new NoteSummaryDto(rel, name, info.LastWriteTimeUtc, info.Length, vMaj, vMin, state));
         }
 
         // Recently-updated, recursive across this folder and descendants,
@@ -791,11 +792,13 @@ public sealed class NoteService : INoteService
         {
             var info = new FileInfo(file);
             var rel = Path.GetRelativePath(vaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+            var (vMaj, vMin, state) = await ReadVersionStateAsync(file, ct);
             recentlyUpdated.Add(new NoteSummaryDto(
                 rel,
                 Path.GetFileNameWithoutExtension(file),
                 info.LastWriteTimeUtc,
-                info.Length));
+                info.Length,
+                vMaj, vMin, state));
         }
 
         // Cover image probe (Ship N: per-folder cover above the
@@ -1209,6 +1212,50 @@ public sealed class NoteService : INoteService
             // Best-effort. A lingering stash file is harmless — it's only
             // consulted on a released->development transition, which
             // overwrites/clears it next time anyway.
+        }
+    }
+
+    /// <summary>
+    /// Cheaply read a note's version + lifecycle state from its
+    /// frontmatter without loading a (potentially large) body. Reads a
+    /// bounded prefix — comfortably more than any realistic frontmatter
+    /// block — and runs it through the codec. A file with no, truncated,
+    /// or garbled frontmatter reads as an unversioned note (0.0 /
+    /// not-versioned), the safe default that renders no tree badge.
+    ///
+    /// Called once per note in a folder listing, so it must stay light:
+    /// one bounded read, no full-file load.
+    /// </summary>
+    private static async Task<(int Major, int Minor, string State)> ReadVersionStateAsync(
+        string absoluteFile,
+        CancellationToken ct)
+    {
+        const int prefixCap = 8 * 1024;
+        try
+        {
+            string prefix;
+            await using (var fs = new FileStream(
+                absoluteFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                var len = (int)Math.Min(fs.Length, prefixCap);
+                if (len == 0)
+                {
+                    return (0, 0, FrontmatterCodec.StateNotVersioned);
+                }
+                var buf = new byte[len];
+                var read = await fs.ReadAsync(buf.AsMemory(0, len), ct);
+                // Strip a leading BOM if an externally-edited file has one;
+                // our own writes never do.
+                prefix = Encoding.UTF8.GetString(buf, 0, read).TrimStart('\uFEFF');
+            }
+            var (fm, _) = FrontmatterCodec.Split(prefix);
+            return (fm.VersionMajor, fm.VersionMinor, fm.State);
+        }
+        catch
+        {
+            // Unreadable / locked / mid-write — treat as unversioned. The
+            // listing must not fail because one note couldn't be sniffed.
+            return (0, 0, FrontmatterCodec.StateNotVersioned);
         }
     }
 

@@ -1258,6 +1258,47 @@ body.nc-dragging * {
   text-align: center;
 }
 
+/* Per-note state badge in the icon's lower-right corner. The glyph is
+   wrapped so the badge can be absolutely positioned over it. */
+.nc-note-icon-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 1;
+}
+.nc-note-icon-glyph {
+  display: inline-block;
+}
+.nc-note-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  /* A thin ring in the surrounding background colour lifts the badge
+     off the emoji so it reads clearly against any icon. */
+  border: 1px solid var(--nc-bg);
+  pointer-events: none;
+}
+/* Under development — solid amber dot. */
+.nc-note-badge-dev {
+  background: #e6a700;
+}
+/* Released — green disc with a small white tick. */
+.nc-note-badge-released {
+  background: #2e9e44;
+  color: #fff;
+  width: 11px;
+  height: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .nc-tree-label {
   flex: 1 1 auto;
   overflow: hidden;

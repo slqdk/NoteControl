@@ -131,8 +131,14 @@ export function VersionStateEditor({
           value={draftMajor}
           min={major}
           disabled={busy}
-          onChange={(v) => setDraftMajor(v)}
-          onStep={(v) => void commitVersion(v, draftMinor)}
+          onChange={(v) => {
+            setDraftMajor(v);
+            // Bumping the major resets the minor (semver-style): going
+            // from 0.x up a major should land on M.0, not carry the old
+            // minor up to M.x.
+            if (v > major) setDraftMinor(0);
+          }}
+          onStep={(v) => void commitVersion(v, 0)}
           onCommit={() => void commitVersion(draftMajor, draftMinor)}
         />
         <span className="nc-version-dot">.</span>
