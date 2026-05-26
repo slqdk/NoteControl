@@ -127,8 +127,8 @@ public sealed class ServerConfigStore : IServerConfigStore
             foreach (var (name, value) in sections)
             {
                 // Overwrite the whole section — partial merging
-                // would surprise the user (e.g. typing a different
-                // SMTP host but keeping the password they cleared).
+                // would surprise the user (e.g. clearing a field in
+                // the UI but having the old value linger on disk).
                 // Reassigning a JsonNode that already has a parent
                 // throws, so deep-clone first.
                 root[name] = value.DeepClone();

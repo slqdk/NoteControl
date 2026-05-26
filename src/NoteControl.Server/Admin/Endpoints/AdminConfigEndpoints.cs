@@ -13,7 +13,6 @@ namespace NoteControl.Server.Admin.Endpoints;
 /// <list type="bullet">
 ///   <item><c>GET  /api/admin/server/config</c> — current effective config</item>
 ///   <item><c>PUT  /api/admin/server/config</c> — replace + persist</item>
-///   <item><c>POST /api/admin/server/smtp/test</c> — send a test mail</item>
 /// </list>
 /// </para>
 /// <para>
@@ -32,7 +31,6 @@ public static class AdminConfigEndpoints
 
         group.MapGet("/config", GetConfigAsync);
         group.MapPut("/config", UpdateConfigAsync);
-        group.MapPost("/smtp/test", TestSmtpAsync);
 
         return app;
     }
@@ -72,35 +70,19 @@ public static class AdminConfigEndpoints
                 title: "Configuration is invalid.");
         }
 
-        // Audit AFTER success. Step 19 backfill — settings save was
-        // not audited in step 16. We don't log the new values
-        // verbatim (they include SMTP usernames + similar) — just
-        // the section names that were touched.
+        // Audit AFTER success. We don't log the new values verbatim
+        // (they may include credentials + similar) — just the section
+        // names that were touched.
         var user = http.RequireUser();
         await audit.WriteAsync(
             AuditEventTypes.ServerConfigUpdated,
             user.Id,
             http.GetClientIp(),
-            new { sections = new[] { "Auth", "Smtp", "Backup", "Logging" } },
+            new { sections = new[] { "Auth", "Backup", "Logging", "Network" } },
             ct);
 
         // Return the FRESH effective config so the UI reflects what
-        // the server actually saved (including the password-elision
-        // logic on SMTP).
+        // the server actually saved.
         return Results.Ok(config.GetCurrent());
-    }
-
-    private static async Task<IResult> TestSmtpAsync(
-        [FromBody] TestSmtpRequest request,
-        ISmtpTester tester,
-        CancellationToken ct)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.To))
-        {
-            return Results.Problem(statusCode: 400, title: "Recipient address is required.");
-        }
-
-        var (sent, error) = await tester.SendTestAsync(request.To, ct);
-        return Results.Ok(new TestSmtpResponse(sent, error));
     }
 }

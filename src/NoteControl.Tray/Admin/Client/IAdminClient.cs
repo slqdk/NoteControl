@@ -77,7 +77,6 @@ public interface IAdminClient
     // -- Server config (step 16) --
     Task<ServerConfigDto> GetServerConfigAsync(CancellationToken ct = default);
     Task<ServerConfigDto> UpdateServerConfigAsync(ServerConfigDto config, CancellationToken ct = default);
-    Task<TestSmtpResponse> TestSmtpAsync(string to, CancellationToken ct = default);
 
     // -- Backups (step 18) --
     Task<BackupStatusDto> GetBackupStatusAsync(CancellationToken ct = default);

@@ -10,7 +10,7 @@ namespace NoteControl.Tray.Admin.Windows;
 /// <summary>
 /// Tabbed editor for the Server Settings file. Loads the current
 /// effective config from the server, lets the admin tweak Auth,
-/// SMTP, Backup and Logging sections, and writes back. Storage and
+/// Backup and Logging sections, and writes back. Storage and
 /// Network tabs are read-only — see the explanations on each tab.
 /// </summary>
 public partial class ServerSettingsWindow : Window
@@ -104,19 +104,6 @@ public partial class ServerSettingsWindow : Window
         LoginAttemptsAccountBox.Text = c.Auth.LoginAttemptsPerAccountPerHour.ToString(CultureInfo.InvariantCulture);
         LockoutMinutesBox.Text = c.Auth.AccountLockoutMinutes.ToString(CultureInfo.InvariantCulture);
 
-        // SMTP
-        SmtpEnabledBox.IsChecked = c.Smtp.Enabled;
-        SmtpHostBox.Text = c.Smtp.Host;
-        SmtpPortBox.Text = c.Smtp.Port.ToString(CultureInfo.InvariantCulture);
-        SmtpSecurityBox.SelectedItem = FindComboItem(SmtpSecurityBox, c.Smtp.Security);
-        SmtpUsernameBox.Text = c.Smtp.Username;
-        SmtpPasswordBox.Password = "";
-        SmtpPasswordHint.Text = c.Smtp.HasPassword
-            ? "(leave blank to keep current password)"
-            : "(no password stored)";
-        SmtpFromBox.Text = c.Smtp.FromAddress;
-        SmtpFromNameBox.Text = c.Smtp.FromDisplayName;
-
         // Backup
         BackupEnabledBox.IsChecked = c.Backup.Enabled;
         BackupTargetBox.Text = c.Backup.TargetPath;
@@ -162,17 +149,6 @@ public partial class ServerSettingsWindow : Window
                 LoginAttemptsPerAccountPerHour: ParseInt(LoginAttemptsAccountBox, "Login attempts per account"),
                 AccountLockoutMinutes: ParseInt(LockoutMinutesBox, "Lockout duration"));
 
-            var smtp = new SmtpConfigDto(
-                Enabled: SmtpEnabledBox.IsChecked == true,
-                Host: SmtpHostBox.Text.Trim(),
-                Port: ParseInt(SmtpPortBox, "SMTP port"),
-                Security: GetComboString(SmtpSecurityBox, "STARTTLS"),
-                Username: SmtpUsernameBox.Text.Trim(),
-                Password: SmtpPasswordBox.Password,    // empty = preserve
-                HasPassword: false,                    // ignored on the wire
-                FromAddress: SmtpFromBox.Text.Trim(),
-                FromDisplayName: SmtpFromNameBox.Text.Trim());
-
             var backup = new BackupConfigDto(
                 Enabled: BackupEnabledBox.IsChecked == true,
                 TargetPath: BackupTargetBox.Text.Trim(),
@@ -214,7 +190,7 @@ public partial class ServerSettingsWindow : Window
             // Storage is read-only; pass it through unchanged.
             return new ServerConfigDto(
                 _current.Storage, network,
-                auth, smtp, backup, logging);
+                auth, backup, logging);
         }
         catch (FormatException ex)
         {
@@ -251,7 +227,7 @@ public partial class ServerSettingsWindow : Window
         try
         {
             // Server returns the fresh effective config — re-bind so
-            // SMTP HasPassword / Password elision stays in sync.
+            // the UI reflects exactly what was persisted.
             _current = await _client.UpdateServerConfigAsync(dto);
             ApplyToUi(_current);
             // Network changes need a server restart -- Kestrel binds at
@@ -269,47 +245,6 @@ public partial class ServerSettingsWindow : Window
             MessageBox.Show(this, "Save failed: " + ex.Message, "NoteControl",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // SMTP test
-    // ---------------------------------------------------------------
-
-    private async void TestSmtpButton_Click(object sender, RoutedEventArgs e)
-    {
-        var to = SmtpTestToBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(to) || !to.Contains('@'))
-        {
-            SmtpTestResultText.Text = "Enter a recipient address first.";
-            SmtpTestResultText.Foreground = System.Windows.Media.Brushes.OrangeRed;
-            return;
-        }
-
-        // Save first so the server is testing the on-disk config,
-        // not whatever was there before the user tweaked the form.
-        if (!await SaveAsync()) return;
-
-        SmtpTestResultText.Text = "Sending…";
-        SmtpTestResultText.Foreground = System.Windows.Media.Brushes.Gray;
-        try
-        {
-            var result = await _client.TestSmtpAsync(to);
-            if (result.Sent)
-            {
-                SmtpTestResultText.Text = "✓ Sent. Check the inbox.";
-                SmtpTestResultText.Foreground = System.Windows.Media.Brushes.SeaGreen;
-            }
-            else
-            {
-                SmtpTestResultText.Text = "✗ " + (result.Error ?? "Unknown error");
-                SmtpTestResultText.Foreground = System.Windows.Media.Brushes.OrangeRed;
-            }
-        }
-        catch (AdminClientException ex)
-        {
-            SmtpTestResultText.Text = "✗ " + ex.Message;
-            SmtpTestResultText.Foreground = System.Windows.Media.Brushes.OrangeRed;
         }
     }
 

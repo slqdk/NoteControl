@@ -16,7 +16,6 @@ public sealed record ServerConfigDto(
     StorageConfigDto Storage,
     NetworkConfigDto Network,
     AuthConfigDto Auth,
-    SmtpConfigDto Smtp,
     BackupConfigDto Backup,
     LoggingConfigDto Logging);
 
@@ -69,23 +68,6 @@ public sealed record AuthConfigDto(
     int AccountLockoutMinutes);
 
 /// <summary>
-/// Editable. Password is write-only on the wire — GET returns
-/// empty string regardless of stored value (so a UI screenshot
-/// can't leak it). PUT with empty string preserves the existing
-/// password; PUT with a non-empty string replaces it.
-/// </summary>
-public sealed record SmtpConfigDto(
-    bool Enabled,
-    string Host,
-    int Port,
-    string Security,         // "STARTTLS" | "SSL" | "None"
-    string Username,
-    string Password,         // write-only; GET returns ""
-    bool HasPassword,        // GET sets this to true if a password is stored
-    string FromAddress,
-    string FromDisplayName);
-
-/// <summary>
 /// Editable. Persists today; backup execution comes in the next
 /// ship's Backups window.
 /// </summary>
@@ -100,9 +82,3 @@ public sealed record BackupConfigDto(
 public sealed record LoggingConfigDto(
     string MinimumLevel,     // Verbose | Debug | Information | Warning | Error | Fatal
     int RetainDays);
-
-/// <summary>Request payload for the SMTP test-send endpoint.</summary>
-public sealed record TestSmtpRequest(string To);
-
-/// <summary>Result of a test-send.</summary>
-public sealed record TestSmtpResponse(bool Sent, string? Error);

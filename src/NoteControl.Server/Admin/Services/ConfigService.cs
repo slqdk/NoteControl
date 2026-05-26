@@ -49,11 +49,6 @@ public sealed class ConfigValidationException : Exception
 
 public sealed class ConfigService : IConfigService
 {
-    private static readonly HashSet<string> ValidSecurity = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "STARTTLS", "SSL", "None",
-    };
-
     private static readonly HashSet<string> ValidLogLevels = new(StringComparer.OrdinalIgnoreCase)
     {
         "Verbose", "Debug", "Information", "Warning", "Error", "Fatal",
@@ -61,7 +56,6 @@ public sealed class ConfigService : IConfigService
 
     private readonly IOptionsMonitor<StorageOptions> _storage;
     private readonly IOptionsMonitor<AuthOptions> _auth;
-    private readonly IOptionsMonitor<SmtpOptions> _smtp;
     private readonly IOptionsMonitor<BackupOptions> _backup;
     private readonly IOptionsMonitor<LoggingOptions> _logging;
     private readonly IOptionsMonitor<NetworkOptions> _network;
@@ -90,7 +84,6 @@ public sealed class ConfigService : IConfigService
     public ConfigService(
         IOptionsMonitor<StorageOptions> storage,
         IOptionsMonitor<AuthOptions> auth,
-        IOptionsMonitor<SmtpOptions> smtp,
         IOptionsMonitor<BackupOptions> backup,
         IOptionsMonitor<LoggingOptions> logging,
         IOptionsMonitor<NetworkOptions> network,
@@ -102,7 +95,6 @@ public sealed class ConfigService : IConfigService
     {
         _storage = storage;
         _auth = auth;
-        _smtp = smtp;
         _backup = backup;
         _logging = logging;
         _network = network;
@@ -117,7 +109,6 @@ public sealed class ConfigService : IConfigService
     {
         var storage = _storage.CurrentValue;
         var auth = _auth.CurrentValue;
-        var smtp = _smtp.CurrentValue;
         var backup = _backup.CurrentValue;
         var logging = _logging.CurrentValue;
         var network = _network.CurrentValue;
@@ -172,16 +163,6 @@ public sealed class ConfigService : IConfigService
                 LoginAttemptsPerIpPerMinute: auth.LoginAttemptsPerIpPerMinute,
                 LoginAttemptsPerAccountPerHour: auth.LoginAttemptsPerAccountPerHour,
                 AccountLockoutMinutes: auth.AccountLockoutMinutes),
-            Smtp: new SmtpConfigDto(
-                Enabled: smtp.Enabled,
-                Host: smtp.Host,
-                Port: smtp.Port,
-                Security: smtp.Security,
-                Username: smtp.Username,
-                Password: "",                              // never echoed
-                HasPassword: !string.IsNullOrEmpty(smtp.Password),
-                FromAddress: smtp.FromAddress,
-                FromDisplayName: smtp.FromDisplayName),
             Backup: new BackupConfigDto(
                 Enabled: backup.Enabled,
                 TargetPath: backup.TargetPath,
@@ -206,14 +187,6 @@ public sealed class ConfigService : IConfigService
         // appsettings.json (intentionally — see ServerSettingsWindow
         // for the user-facing explanation), and Kestrel binding is
         // outside this layer's scope.
-        //
-        // For SMTP password: empty string from the wire means
-        // "preserve existing". A non-empty string replaces it.
-        var existingSmtpPassword = _smtp.CurrentValue.Password;
-        var newSmtpPassword = string.IsNullOrEmpty(config.Smtp.Password)
-            ? existingSmtpPassword
-            : config.Smtp.Password;
-
         var sections = new Dictionary<string, JsonNode>(StringComparer.Ordinal)
         {
             [AuthOptions.SectionName] = JsonSerializer.SerializeToNode(new
@@ -225,17 +198,6 @@ public sealed class ConfigService : IConfigService
                 config.Auth.LoginAttemptsPerIpPerMinute,
                 config.Auth.LoginAttemptsPerAccountPerHour,
                 config.Auth.AccountLockoutMinutes,
-            })!,
-            [SmtpOptions.SectionName] = JsonSerializer.SerializeToNode(new
-            {
-                config.Smtp.Enabled,
-                config.Smtp.Host,
-                config.Smtp.Port,
-                config.Smtp.Security,
-                config.Smtp.Username,
-                Password = newSmtpPassword,
-                config.Smtp.FromAddress,
-                config.Smtp.FromDisplayName,
             })!,
             [BackupOptions.SectionName] = JsonSerializer.SerializeToNode(new
             {
@@ -493,20 +455,6 @@ public sealed class ConfigService : IConfigService
             errors["Auth.LoginAttemptsPerAccountPerHour"] = "Must be between 1 and 1000.";
         if (config.Auth.AccountLockoutMinutes < 1 || config.Auth.AccountLockoutMinutes > 60 * 24 * 7)
             errors["Auth.AccountLockoutMinutes"] = "Must be between 1 and 10080.";
-
-        // SMTP
-        if (config.Smtp.Enabled)
-        {
-            if (string.IsNullOrWhiteSpace(config.Smtp.Host))
-                errors["Smtp.Host"] = "Required when SMTP is enabled.";
-            if (config.Smtp.Port < 1 || config.Smtp.Port > 65535)
-                errors["Smtp.Port"] = "Must be between 1 and 65535.";
-            if (string.IsNullOrWhiteSpace(config.Smtp.FromAddress) ||
-                !config.Smtp.FromAddress.Contains('@'))
-                errors["Smtp.FromAddress"] = "Required when SMTP is enabled, must be an email address.";
-        }
-        if (!ValidSecurity.Contains(config.Smtp.Security))
-            errors["Smtp.Security"] = "Must be STARTTLS, SSL, or None.";
 
         // Backup
         if (config.Backup.Enabled && string.IsNullOrWhiteSpace(config.Backup.TargetPath))

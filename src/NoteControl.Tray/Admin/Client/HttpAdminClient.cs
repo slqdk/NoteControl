@@ -399,18 +399,6 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
             ?? throw new AdminClientException("Server returned an empty config payload.");
     }
 
-    public async Task<TestSmtpResponse> TestSmtpAsync(string to, CancellationToken ct = default)
-    {
-        using var response = await SendJsonAsync(
-            HttpMethod.Post,
-            "/api/admin/server/smtp/test",
-            new TestSmtpRequest(to),
-            ct);
-        await EnsureSuccessAsync(response, ct);
-        return await response.Content.ReadFromJsonAsync<TestSmtpResponse>(JsonOptions, ct)
-            ?? throw new AdminClientException("Server returned an empty SMTP test response.");
-    }
-
     // -----------------------------------------------------------------
     // Backups (step 18)
     // -----------------------------------------------------------------

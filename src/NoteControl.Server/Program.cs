@@ -173,14 +173,9 @@ try
         .ValidateDataAnnotations()
         .ValidateOnStart();
 
-    // Smtp / Backup / Logging — new in step 16. These are bound but
-    // not validated on start because empty/disabled defaults are
-    // acceptable; validation is enforced by ConfigService when the
-    // admin saves changes.
-    builder.Services
-        .AddOptions<SmtpOptions>()
-        .Bind(builder.Configuration.GetSection(SmtpOptions.SectionName));
-
+    // Backup / Logging — bound but not validated on start because
+    // empty/disabled defaults are acceptable; validation is enforced
+    // by ConfigService when the admin saves changes.
     builder.Services
         .AddOptions<BackupOptions>()
         .Bind(builder.Configuration.GetSection(BackupOptions.SectionName));
@@ -337,8 +332,6 @@ try
         NoteControl.Server.Configuration.ServerConfigStore>();
     builder.Services.AddScoped<NoteControl.Server.Admin.Services.IConfigService,
         NoteControl.Server.Admin.Services.ConfigService>();
-    builder.Services.AddSingleton<NoteControl.Server.Admin.Services.ISmtpTester,
-        NoteControl.Server.Admin.Services.SmtpTester>();
 
     // Ship 93: Caddy integration. CaddyConfigWriter is a thin
     // singleton wrapping (a) atomic file write of the generated
