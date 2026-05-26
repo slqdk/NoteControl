@@ -38,6 +38,7 @@ auth:          https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/a
 vaults:        https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/vaults.md
 notes:         https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/notes.md
 frontend:      https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/frontend.md
+st-sandbox:    https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/st-sandbox.md
 tray:          https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/tray.md
 api:           https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/api.md
 storage:       https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/storage.md
@@ -158,6 +159,7 @@ docs. If a doc is out of date, the code review missed a step.
 | [vaults.md](vaults.md) | Changing how vaults are created, owned, shared, or how their visual identity (icon, colour) works. |
 | [notes.md](notes.md) | Changing notes, folders, daily notes, templates, drag-and-drop, the editor, the slash menu, paste handling, or the tree view. |
 | [frontend.md](frontend.md) | Changing routes, top-bar layout, the properties panel, sticky notes, RSS blocks, the startpage, settings, keyboard shortcuts, or the appearance system. |
+| [st-sandbox.md](st-sandbox.md) | Changing the in-browser Structured Text runtime: the run modal, the parser/interpreter under `src/runtime/`, value pills, poking, the permissive-unknown model, or the built-in FBs (TON/TOF/R_TRIG/F_TRIG). |
 | [tray.md](tray.md) | Changing the tray menu, the Settings tabs, the Users/Vaults/Logs/Backups admin windows, the tray's update mechanism, or the local tray token flow. |
 | [api.md](api.md) | Adding, removing, or changing the shape of an HTTP endpoint. (Documents only behavioural contract — exact JSON shapes live in `NoteControl.Shared/`.) |
 | [storage.md](storage.md) | Changing the on-disk file layout, the per-vault `.notesapp/` index DB, the `.server/` folder, asset storage, or anything under DataRoot. |

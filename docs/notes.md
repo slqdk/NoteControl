@@ -81,7 +81,9 @@ The editor is TipTap-based. What it supports out of the box:
 - **Code blocks** with editable language tag. Syntax
   highlighting via lowlight, with a custom **Structured Text
   (TwinCAT 3 ST)** language registered — the keywords for ST
-  are recognised case-insensitively.
+  are recognised case-insensitively. ST blocks also get a **▶**
+  affordance that opens the in-browser ST runtime; see
+  `st-sandbox.md`.
 - **Tables** (3×3 default, header row). See the **Table editing**
   section below for selection grips, the unified popup, and row
   height.
