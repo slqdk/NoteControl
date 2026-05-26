@@ -184,12 +184,9 @@ position; the order is fixed:
 4. **Authentication** — session timeouts, password rules,
    rate-limiting knobs, bootstrap admin section
    (display-only after first start).
-5. **Email (SMTP)** — SMTP enable + host/port/security/credentials
-   + From address. A "Send test email" button POSTs to
-   `/api/admin/server/smtp/test`.
-6. **Backups** — backup target path, daily run time, retention
+5. **Backups** — backup target path, daily run time, retention
    counts (daily, weekly).
-7. **Logging** — minimum log level, retention days for the
+6. **Logging** — minimum log level, retention days for the
    `notecontrol-*.log` rolling files.
 
 Save persists to `appsettings.json` (server-side rewrite). Most
