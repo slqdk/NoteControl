@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { ApiError, foldersApi, notesApi } from '../api/client';
-import type { FolderListingDto, NoteDto, NoteHistoryInfo } from '../api/types';
+import type { FolderListingDto, NoteDto, NoteHistoryInfo, ReleaseInfo } from '../api/types';
 import type { TreeSelection } from './TreeView';
 import { formatNoteTimestamp } from '../utils/time';
 import type { TreeVariant } from '../tree/treeStyles';
@@ -9,7 +9,7 @@ import { EditableName } from './EditableName';
 import { EditableTags } from './EditableTags';
 import { EditableLocked } from './EditableLocked';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
-import { EditableVersion } from './EditableVersion';
+import { VersionStateEditor, type VersionStatePatch } from './VersionStateEditor';
 
 /**
  * Visual Studio-style properties panel.
@@ -203,6 +203,7 @@ export function PropertiesPanel({
   // is selected; a zero count means snapshots exist but the count is
   // legitimately 0 (a brand-new note with no body changes yet).
   const [historyInfo, setHistoryInfo] = useState<NoteHistoryInfo | null>(null);
+  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
 
   useEffect(() => {
     setNote(null);
@@ -220,6 +221,7 @@ export function PropertiesPanel({
     setCanUndo(false);
     setCanRedo(false);
     setHistoryInfo(null);
+    setReleaseInfo(null);
     if (!selection) return;
 
     let cancelled = false;
@@ -243,6 +245,22 @@ export function PropertiesPanel({
             // Best-effort. A failure here just leaves the Revert
             // button disabled, which is the safe default.
             if (!cancelled) setHistoryInfo({ count: 0, latest: null });
+          }
+          // Release info: also a cheap, best-effort fetch. Drives the
+          // version editor's recall line.
+          try {
+            const rel = await notesApi.getRelease(vaultId, selection.path);
+            if (!cancelled) setReleaseInfo(rel);
+          } catch {
+            if (!cancelled) {
+              setReleaseInfo({
+                exists: false,
+                versionMajor: 0,
+                versionMinor: 0,
+                savedAt: null,
+                developmentStashed: false,
+              });
+            }
           }
         } else {
           const f = await notesApi.listFolder(vaultId, selection.path);
@@ -328,18 +346,20 @@ export function PropertiesPanel({
   }
 
   /**
-   * Ship 68: save the per-note version. Free-text; server interprets
-   * empty string as "reset to default v0.0" rather than "remove",
-   * so a successful save with empty input will round-trip back as
-   * "v0.0" (which the EditableVersion useEffect picks up after the
-   * refreshTick re-reads the note).
+   * Save a version and/or state change. Sends only the fields in the
+   * patch (server treats missing fields as "leave alone"); never sends
+   * body. A state change between development/released drives the
+   * server's release-copy swap. After the save we bump refreshTick,
+   * which refetches the note + release info so the editor reflects the
+   * canonical version/state.
    */
-  async function saveVersion(version: string) {
+  async function saveVersionState(patch: VersionStatePatch) {
     if (!selection || selection.kind !== 'note' || !note) return;
     try {
-      // See header doc: property saves never send `body`.
       await notesApi.update(vaultId, selection.path, {
-        version,
+        versionMajor: patch.versionMajor,
+        versionMinor: patch.versionMinor,
+        state: patch.state,
       });
       setRefreshTick((t) => t + 1);
     } catch (e) {
@@ -636,9 +656,12 @@ export function PropertiesPanel({
 
             <dt>Version</dt>
             <dd>
-              <EditableVersion
-                value={note.frontmatter.version}
-                onSave={saveVersion}
+              <VersionStateEditor
+                major={note.frontmatter.versionMajor}
+                minor={note.frontmatter.versionMinor}
+                state={note.frontmatter.state}
+                release={releaseInfo}
+                onSave={saveVersionState}
               />
             </dd>
 

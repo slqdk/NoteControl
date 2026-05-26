@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, notesApi } from '../api/client';
-import type { NoteDto } from '../api/types';
+import type { NoteDto, ReleaseInfo } from '../api/types';
 import { formatNoteTimestamp } from '../utils/time';
 import { EditableName } from './EditableName';
 import { EditableTags } from './EditableTags';
 import { EditableLocked } from './EditableLocked';
-import { EditableVersion } from './EditableVersion';
+import { VersionStateEditor, type VersionStatePatch } from './VersionStateEditor';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
 
 /**
@@ -81,6 +81,7 @@ export function MobileNoteProperties({
   const [note, setNote] = useState<NoteDto>(initialNote);
   const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
 
   // Resync the local note when the route changes to a different
   // note (parent passes a fresh initialNote). Without this the
@@ -102,6 +103,32 @@ export function MobileNoteProperties({
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof ApiError ? e.message : 'Could not refresh.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTick, vaultId, notePath]);
+
+  // Frozen-release info for the version editor's recall line. Fetched
+  // on mount and after each save (refreshTick) and when the route note
+  // changes. Best-effort — a failure just hides the recall line.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rel = await notesApi.getRelease(vaultId, notePath);
+        if (!cancelled) setReleaseInfo(rel);
+      } catch {
+        if (!cancelled) {
+          setReleaseInfo({
+            exists: false,
+            versionMajor: 0,
+            versionMinor: 0,
+            savedAt: null,
+            developmentStashed: false,
+          });
         }
       }
     })();
@@ -165,10 +192,12 @@ export function MobileNoteProperties({
     }
   }
 
-  async function saveVersion(version: string) {
+  async function saveVersionState(patch: VersionStatePatch) {
     try {
       await notesApi.update(vaultId, notePath, {
-        version,
+        versionMajor: patch.versionMajor,
+        versionMinor: patch.versionMinor,
+        state: patch.state,
       });
       setRefreshTick((t) => t + 1);
     } catch (e) {
@@ -319,9 +348,12 @@ export function MobileNoteProperties({
 
                 <dt>Version</dt>
                 <dd>
-                  <EditableVersion
-                    value={note.frontmatter.version}
-                    onSave={saveVersion}
+                  <VersionStateEditor
+                    major={note.frontmatter.versionMajor}
+                    minor={note.frontmatter.versionMinor}
+                    state={note.frontmatter.state}
+                    release={releaseInfo}
+                    onSave={saveVersionState}
                   />
                 </dd>
 

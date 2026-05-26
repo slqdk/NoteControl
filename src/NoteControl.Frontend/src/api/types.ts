@@ -62,11 +62,16 @@ export interface FrontmatterDto {
   fontSize: number | null;
   width: number | null;
   /**
-   * Ship 68: free-text per-note version. Always non-empty on the
-   * wire — the server fills in "v0.0" if the note's frontmatter
-   * doesn't have a version key. The Properties panel surfaces this
-   * for editing; the docx export renders it in the page-top header.
+   * Versioning: a note's version is two integers, monotonic (the server
+   * rejects any save that lowers it). `state` is the lifecycle state —
+   * "not-versioned" (only at 0.0), "development", or "released"
+   * (selectable only at version >= 1.0). `version` is a derived
+   * "major.minor" string for read-only display / the docx header; the
+   * two integer fields are the source of truth.
    */
+  versionMajor: number;
+  versionMinor: number;
+  state: string;
   version: string;
 }
 
@@ -108,11 +113,35 @@ export interface UpdateNoteRequest {
   fontSize?: number | null;
   width?: number | null;
   /**
-   * Ship 68: free-text per-note version. null/undefined = leave alone,
-   * any string = replace. Empty string is treated by the server as
-   * "reset to default v0.0" (not "remove the field").
+   * Versioning. null/undefined = leave alone, non-null = set. The server
+   * enforces the invariants and rejects bad changes with 400: version is
+   * monotonic (can't go below current; equal is allowed for a pure state
+   * change), "released" requires version >= 1.0, and no lifecycle state
+   * is accepted at version 0.0. Changing `state` between development and
+   * released drives the release-copy swap server-side.
    */
-  version?: string | null;
+  versionMajor?: number | null;
+  versionMinor?: number | null;
+  state?: string | null;
+}
+
+/**
+ * Info about a note's single frozen released copy. Mirrors
+ * ReleaseInfoDto in the C# server. Drives the Properties panel's recall
+ * affordance.
+ *
+ * `exists` is false when the note has never been released. When true,
+ * versionMajor/versionMinor are the frozen copy's own version, `savedAt`
+ * is when it was last written, and `developmentStashed` is true while
+ * the note is currently showing the release live (so switching back to
+ * development restores the parked work).
+ */
+export interface ReleaseInfo {
+  exists: boolean;
+  versionMajor: number;
+  versionMinor: number;
+  savedAt: string | null;
+  developmentStashed: boolean;
 }
 
 /**

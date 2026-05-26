@@ -1504,6 +1504,125 @@ body.nc-dragging * {
   cursor: pointer;
 }
 
+/* Version + lifecycle-state editor (Properties panel). Two numeric
+   steppers (major.minor), a state select, and a recall line. */
+.nc-version {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.nc-version-numbers {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.nc-version-dot {
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  padding: 0 1px;
+}
+.nc-version-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  overflow: hidden;
+  background: var(--nc-bg);
+}
+.nc-version-stepper:focus-within {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+}
+.nc-version-step {
+  font: inherit;
+  line-height: 1;
+  border: none;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  padding: 0 9px;
+  cursor: pointer;
+  user-select: none;
+}
+.nc-version-step:hover:not(:disabled) {
+  background: var(--nc-accent-bg-soft);
+}
+.nc-version-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* The number input sits flush between the steppers — drop its own
+   border/radius/focus ring (the stepper wrapper owns those). */
+.nc-version-input.nc-prop-input {
+  width: 3.2em;
+  text-align: center;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--nc-border);
+  border-right: 1px solid var(--nc-border);
+  padding: 3px 2px;
+}
+.nc-version-input.nc-prop-input:focus {
+  outline: none;
+  border-color: var(--nc-border);
+}
+/* Hide the native spin buttons; our +/- steppers replace them. */
+.nc-version-input::-webkit-outer-spin-button,
+.nc-version-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.nc-version-input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.nc-version-state-select {
+  width: auto;
+  min-width: 11em;
+}
+.nc-version-state-label {
+  font-size: 0.85em;
+}
+.nc-version-state-none {
+  color: var(--nc-fg-muted);
+  font-style: italic;
+}
+
+.nc-version-recall {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82em;
+}
+.nc-version-recall-info {
+  color: var(--nc-fg-muted);
+}
+.nc-version-recall-hint {
+  color: var(--nc-fg-muted);
+  line-height: 1.35;
+}
+.nc-version-recall-btn {
+  align-self: flex-start;
+  font: inherit;
+  font-size: inherit;
+  padding: 3px 8px;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-version-recall-btn:hover:not(:disabled) {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+}
+.nc-version-recall-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Editable tag area — chips wrap and the input follows them inline. */
 .nc-prop-tags {
   align-items: flex-start;

@@ -13,6 +13,7 @@ import type {
   NoteHistoryInfo,
   NoteSummaryDto,
   ProblemDetails,
+  ReleaseInfo,
   SearchResponseDto,
   StartpageConfigDto,
   UpdateNoteRequest,
@@ -296,6 +297,17 @@ export const notesApi = {
     request<NoteDto>(
       `/api/vaults/${vaultId}/note/history/pop?path=${encodeURIComponent(notePath)}`,
       { method: 'POST' },
+    ),
+
+  /**
+   * GET /api/vaults/{id}/note/release?path=...
+   * Info about the note's single frozen released copy (if any). The
+   * Properties panel calls this on mount + after each state change to
+   * label the recall affordance.
+   */
+  getRelease: (vaultId: string, notePath: string) =>
+    request<ReleaseInfo>(
+      `/api/vaults/${vaultId}/note/release?path=${encodeURIComponent(notePath)}`,
     ),
 
   /** GET /api/vaults/{id}/folder?path=... — list one folder. */
