@@ -48,6 +48,13 @@ public static class NoteEndpoints
         app.MapPost("/api/vaults/{vaultId:guid}/note/history/pop", PopNoteHistoryAsync)
             .RequireVault(VaultService.RoleEditor);
 
+        // Per-note frozen-release info. Drives the Properties panel's
+        // recall affordance (does a release exist, what version, when
+        // saved, is dev work currently parked). Editor role to match the
+        // history endpoints' rationale.
+        app.MapGet("/api/vaults/{vaultId:guid}/note/release", GetNoteReleaseAsync)
+            .RequireVault(VaultService.RoleEditor);
+
         return app;
     }
 
@@ -229,6 +236,27 @@ public static class NoteEndpoints
         try
         {
             var info = await notes.GetHistoryInfoAsync(vaultId, path, ct);
+            return Results.Ok(info);
+        }
+        catch (NoteException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+    }
+
+    private static async Task<IResult> GetNoteReleaseAsync(
+        Guid vaultId,
+        string path,
+        INoteService notes,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Results.Problem(statusCode: 400, title: "?path= is required.");
+        }
+        try
+        {
+            var info = await notes.GetReleaseInfoAsync(vaultId, path, ct);
             return Results.Ok(info);
         }
         catch (NoteException ex)

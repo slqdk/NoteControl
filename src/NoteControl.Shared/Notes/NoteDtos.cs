@@ -178,3 +178,27 @@ public sealed record FolderListingDto(
 public sealed record NoteHistoryInfoDto(
     int Count,
     DateTimeOffset? Latest);
+
+/// <summary>
+/// GET /api/vaults/{id}/note/release?path= — info about the single
+/// frozen released copy a note may carry. Drives the Properties panel's
+/// "recall the released version" affordance.
+///
+/// A note has at most ONE released copy (the frozen snapshot taken when
+/// it was released). <see cref="Exists"/> is false when the note has
+/// never been released. When true, <see cref="VersionMajor"/> /
+/// <see cref="VersionMinor"/> are the released copy's own version and
+/// <see cref="SavedAt"/> is when the frozen copy was last written.
+///
+/// <see cref="DevelopmentStashed"/> is true while the note is currently
+/// showing the released copy live and the user's development copy is
+/// parked in the dev stash — i.e. switching the state back to
+/// development will restore that parked work rather than continue from
+/// the released content.
+/// </summary>
+public sealed record ReleaseInfoDto(
+    bool Exists,
+    int VersionMajor,
+    int VersionMinor,
+    DateTimeOffset? SavedAt,
+    bool DevelopmentStashed);

@@ -50,6 +50,13 @@ public interface INoteService
     /// the new <see cref="NoteDto"/> reflecting the restored content.
     /// </summary>
     Task<NoteDto> PopHistoryAsync(Guid vaultId, string notePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Info about the note's single frozen released copy, if any. Drives
+    /// the Properties panel's recall affordance. See
+    /// <see cref="ReleaseInfoDto"/>.
+    /// </summary>
+    Task<ReleaseInfoDto> GetReleaseInfoAsync(Guid vaultId, string notePath, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -68,6 +75,19 @@ public sealed class NoteService : INoteService
     private const string AppFolder = ".notesapp";
     private const string TrashFolder = "trash";
     private const string HistoryFolder = "history";
+
+    /// <summary>Per-note frozen-release folder under .notesapp/releases/.</summary>
+    private const string ReleasesFolder = "releases";
+
+    /// <summary>The single frozen released copy of a note.</summary>
+    private const string ReleasedFileName = "released.md";
+
+    /// <summary>
+    /// The parked development copy, present only while a note is currently
+    /// showing its released copy live (state == released). Restored to the
+    /// live note when the user switches back to development.
+    /// </summary>
+    private const string DevStashFileName = "development.md";
 
     /// <summary>
     /// Per-note snapshot cap. Each save that changes the body writes one
@@ -217,54 +237,147 @@ public sealed class NoteService : INoteService
         }
 
         var (fm, existingBody) = FrontmatterCodec.Split(existingRaw);
-        try
-        {
-            FrontmatterCodec.ApplyUpdate(
-                fm,
-                _clock.GetUtcNow(),
-                request.Tags,
-                request.Locked,
-                // Step 14: optional appearance overrides. ApplyUpdate handles
-                // the sentinel semantics (empty string / 0 = clear).
-                request.Font,
-                request.FontSize,
-                request.Width,
-                // Versioning: major/minor/state drive the per-note version
-                // state machine. null = leave alone. ApplyUpdate enforces the
-                // invariants (monotonic version, released >= 1.0, no lifecycle
-                // state at 0.0) and throws FrontmatterValidationException on a
-                // violation, which we surface as a 400 below. The release-copy
-                // snapshot on a released->development transition is NOT done
-                // here — that lands in a later ship.
-                request.VersionMajor,
-                request.VersionMinor,
-                request.State);
-        }
-        catch (FrontmatterValidationException ex)
-        {
-            throw new NoteException(ex.Message, statusCode: 400);
-        }
 
-        // Body resolution (the property-save data-loss fix):
+        // Pre-update lifecycle state, used to detect transitions below.
+        var oldState = fm.State;
+
+        // Resolved by the version-state logic. bodyToWrite defaults to the
+        // property-save path ("leave the body alone"); freezeReleaseAfterWrite
+        // mirrors the live note into the single frozen release slot after the
+        // write when the note is (and stays) released.
+        string bodyToWrite;
+        var freezeReleaseAfterWrite = false;
+
+        var touchesVersionState =
+            request.VersionMajor.HasValue
+            || request.VersionMinor.HasValue
+            || request.State is not null;
+
+        // null request.State = keep the current state (a version-only bump
+        // doesn't change state).
+        var targetState = request.State is null
+            ? oldState
+            : FrontmatterCodec.NormaliseState(
+                request.VersionMajor ?? fm.VersionMajor,
+                request.VersionMinor ?? fm.VersionMinor,
+                request.State);
+
+        var releasedPath = ReleasedFilePath(vaultRoot, canonical);
+        var devStashPath = DevStashFilePath(vaultRoot, canonical);
+
+        // --- Lifecycle transitions (the two-slot release model) --------
         //
-        //   request.Body == null  → "leave body alone". We keep the body
-        //                           we just parsed off disk verbatim.
-        //                           This is the path the Properties panel
-        //                           uses for Locked / Tags / Version /
-        //                           appearance saves — none of which
-        //                           should touch the body.
+        // A note carries at most ONE frozen released copy plus, while it is
+        // currently showing that release live, a parked development copy.
+        // The live .md is whichever the current state points at; switching
+        // state swaps the live content and preserves the other side so the
+        // user can flip back and forth without losing either:
         //
-        //   request.Body != null  → "this is the new body". The editor's
-        //                           own save flow takes this path,
-        //                           paired with an ETag.
+        //   dev -> released, no frozen release yet : promote — the current
+        //       content becomes the release (frozen after the write).
+        //   dev -> released, release already frozen: recall — park the dev
+        //       copy, load the frozen release into the live note.
+        //   released -> development                : freeze a fresh copy of
+        //       the released content (the "save the released version"
+        //       trigger), then restore the parked dev copy if one exists,
+        //       else continue development from the released content.
         //
-        // The bug this fixes: the panel used to send `body: note.body`
-        // where `note.body` was the panel's last-fetched snapshot. If the
-        // editor had autosaved newer content since then (or had unsaved
-        // changes in memory), the property save would silently truncate
-        // the file to the panel's stale view. A real user lost a whole
-        // program this way.
-        var bodyToWrite = request.Body ?? existingBody;
+        // Recall / restore load a stored slot verbatim and deliberately
+        // bypass ApplyUpdate's monotonic check: the version they carry comes
+        // from the slot, which is a legitimate switch, not a user lowering
+        // the number.
+
+        var enteringReleased =
+            touchesVersionState
+            && targetState == FrontmatterCodec.StateReleased
+            && oldState != FrontmatterCodec.StateReleased;
+
+        var leavingReleased =
+            touchesVersionState
+            && oldState == FrontmatterCodec.StateReleased
+            && targetState == FrontmatterCodec.StateDevelopment;
+
+        if (enteringReleased && File.Exists(releasedPath))
+        {
+            // Recall: park the current development copy, then load the
+            // frozen release into the live note verbatim.
+            await SafeWriteSlotAsync(devStashPath, existingRaw, ct);
+            var releasedRaw = await File.ReadAllTextAsync(releasedPath, Encoding.UTF8, ct);
+            var (relFm, relBody) = FrontmatterCodec.Split(releasedRaw);
+            fm = relFm;
+            bodyToWrite = relBody;
+        }
+        else if (leavingReleased)
+        {
+            // Freeze a fresh copy of the released content (in case it was
+            // edited while released) — the confirmed "save the released
+            // version" trigger.
+            await SafeWriteSlotAsync(releasedPath, existingRaw, ct);
+
+            if (File.Exists(devStashPath))
+            {
+                // Restore the parked development copy and clear the stash.
+                var devRaw = await File.ReadAllTextAsync(devStashPath, Encoding.UTF8, ct);
+                var (devFm, devBody) = FrontmatterCodec.Split(devRaw);
+                fm = devFm;
+                bodyToWrite = devBody;
+                TryDeleteFile(devStashPath);
+            }
+            else
+            {
+                // No parked dev copy (leaving the very first release):
+                // continue development from the released content.
+                try
+                {
+                    FrontmatterCodec.ApplyUpdate(
+                        fm, _clock.GetUtcNow(),
+                        request.Tags, request.Locked,
+                        request.Font, request.FontSize, request.Width,
+                        request.VersionMajor, request.VersionMinor,
+                        FrontmatterCodec.StateDevelopment);
+                }
+                catch (FrontmatterValidationException ex)
+                {
+                    throw new NoteException(ex.Message, statusCode: 400);
+                }
+                bodyToWrite = request.Body ?? existingBody;
+            }
+        }
+        else
+        {
+            // Ordinary update: tags / locked / appearance / body and/or a
+            // version bump or a promote-to-release. ApplyUpdate enforces the
+            // invariants (monotonic version, released >= 1.0, no lifecycle
+            // state at 0.0) and throws FrontmatterValidationException -> 400.
+            //
+            // Body resolution (the property-save data-loss fix): request.Body
+            // == null means "leave the body alone" (the panel's path for
+            // Locked / Tags / Version / State / appearance); non-null is the
+            // editor's "this is the new body", paired with an ETag.
+            try
+            {
+                FrontmatterCodec.ApplyUpdate(
+                    fm, _clock.GetUtcNow(),
+                    request.Tags, request.Locked,
+                    request.Font, request.FontSize, request.Width,
+                    request.VersionMajor, request.VersionMinor,
+                    request.State);
+            }
+            catch (FrontmatterValidationException ex)
+            {
+                throw new NoteException(ex.Message, statusCode: 400);
+            }
+
+            bodyToWrite = request.Body ?? existingBody;
+
+            // Keep the single frozen release in step with the live note while
+            // the note is released: a first promote freezes the new release;
+            // a save while released refreshes it.
+            if (string.Equals(fm.State, FrontmatterCodec.StateReleased, StringComparison.Ordinal))
+            {
+                freezeReleaseAfterWrite = true;
+            }
+        }
 
         // Undo-history snapshot: if this save is replacing the body
         // (i.e. the editor is saving content, not the panel toggling a
@@ -311,6 +424,15 @@ public sealed class NoteService : INoteService
 
         var newText = FrontmatterCodec.Combine(fm, bodyToWrite);
         await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);
+
+        // Mirror the live note into the single frozen release slot when the
+        // note is released (first promote, or a save while released). Recall
+        // / restore transitions leave this false — they don't change the
+        // frozen release.
+        if (freezeReleaseAfterWrite)
+        {
+            await SafeWriteSlotAsync(releasedPath, newText, ct);
+        }
 
         var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
         await _indexer.OnNoteSavedAsync(
@@ -432,6 +554,23 @@ public sealed class NoteService : INoteService
             catch
             {
                 // History orphaned at the old name. Note itself is fine.
+            }
+        }
+
+        // Move the .notesapp/releases/<encoded>/ folder (frozen release +
+        // dev stash) the same way, so the release copy follows the note
+        // under its new identity. Best-effort; failure just orphans it.
+        var oldReleaseFolder = ReleaseFolderFor(vaultRoot, oldCanonical);
+        if (Directory.Exists(oldReleaseFolder))
+        {
+            var newReleaseFolder = ReleaseFolderFor(vaultRoot, newCanonical);
+            try
+            {
+                Directory.Move(oldReleaseFolder, newReleaseFolder);
+            }
+            catch
+            {
+                // Release folder orphaned at the old name. Note is fine.
             }
         }
 
@@ -1031,6 +1170,77 @@ public sealed class NoteService : INoteService
         return Path.Combine(
             vaultRoot, AppFolder, HistoryFolder,
             EncodeHistoryFolderName(canonical));
+    }
+
+    /// <summary>
+    /// The per-note release folder (<c>.notesapp/releases/encoded/</c>),
+    /// home of the single frozen release copy and the parked dev stash.
+    /// Reuses the same path encoding as history so rename handling is
+    /// symmetric.
+    /// </summary>
+    private static string ReleaseFolderFor(string vaultRoot, string canonical)
+        => Path.Combine(vaultRoot, AppFolder, ReleasesFolder, EncodeHistoryFolderName(canonical));
+
+    private static string ReleasedFilePath(string vaultRoot, string canonical)
+        => Path.Combine(ReleaseFolderFor(vaultRoot, canonical), ReleasedFileName);
+
+    private static string DevStashFilePath(string vaultRoot, string canonical)
+        => Path.Combine(ReleaseFolderFor(vaultRoot, canonical), DevStashFileName);
+
+    /// <summary>
+    /// Write a release-slot file (frozen release or dev stash), creating the
+    /// per-note release folder on demand. UTF-8 without BOM, like every
+    /// other note write.
+    /// </summary>
+    private async Task SafeWriteSlotAsync(string path, string content, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, content, NoBomUtf8, ct);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Best-effort. A lingering stash file is harmless — it's only
+            // consulted on a released->development transition, which
+            // overwrites/clears it next time anyway.
+        }
+    }
+
+    public async Task<ReleaseInfoDto> GetReleaseInfoAsync(
+        Guid vaultId,
+        string notePath,
+        CancellationToken ct = default)
+    {
+        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
+        string canonical;
+        try
+        {
+            canonical = _notePaths.CanonicalizeNote(notePath);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new NoteException(ex.Message);
+        }
+
+        var releasedPath = ReleasedFilePath(vaultRoot, canonical);
+        if (!File.Exists(releasedPath))
+        {
+            return new ReleaseInfoDto(false, 0, 0, null, false);
+        }
+
+        var raw = await File.ReadAllTextAsync(releasedPath, Encoding.UTF8, ct);
+        var (fm, _) = FrontmatterCodec.Split(raw);
+        var savedAt = new DateTimeOffset(new FileInfo(releasedPath).LastWriteTimeUtc, TimeSpan.Zero);
+        var devStashed = File.Exists(DevStashFilePath(vaultRoot, canonical));
+
+        return new ReleaseInfoDto(
+            true, fm.VersionMajor, fm.VersionMinor, savedAt, devStashed);
     }
 
     /// <summary>
