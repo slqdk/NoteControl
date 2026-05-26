@@ -12,12 +12,26 @@ namespace NoteControl.Shared.Notes;
 /// width) — the server doesn't enforce a minimum, just round-trips
 /// the value.
 ///
-/// Ship 68: Version is a free-text per-note string surfaced in the
-/// Properties panel and rendered into the docx export header. Defaults
-/// to "v0.0" if the on-disk frontmatter doesn't have it (the codec
-/// fills the default on Split, so the wire DTO always has a value).
-/// Free text by design — the user might use "v0.0", "1.2.3-rc1",
-/// "draft", or even TwinCAT-style "PRJ-22.A" identifiers.
+/// Versioning (replaces Ship 68's free-text version): a note's version
+/// is two non-negative integers, <see cref="VersionMajor"/> and
+/// <see cref="VersionMinor"/>, persisted on disk as a bare "major.minor"
+/// string (e.g. `version: 1.2`). Defaults to 0.0 when the frontmatter
+/// has no `version` key. The version is monotonic — the server rejects
+/// any save that lowers it.
+///
+/// <see cref="State"/> is the note's lifecycle state, one of:
+/// <list type="bullet">
+///   <item><c>"not-versioned"</c> — the only valid state at version 0.0.
+///     Derived, never user-selectable. The tree renders the plain note
+///     icon.</item>
+///   <item><c>"development"</c> — any version &gt; 0.0 that isn't
+///     Released. Tree icon gets a yellow dot.</item>
+///   <item><c>"released"</c> — selectable only at version &ge; 1.0. Tree
+///     icon gets a green tick.</item>
+/// </list>
+/// <see cref="Version"/> is a derived "major.minor" convenience string
+/// for read-only display and the docx export header — the two integer
+/// fields are the source of truth.
 /// </summary>
 public sealed record FrontmatterDto(
     DateTimeOffset? Created,
@@ -27,6 +41,9 @@ public sealed record FrontmatterDto(
     string? Font,
     int? FontSize,
     int? Width,
+    int VersionMajor,
+    int VersionMinor,
+    string State,
     string Version,
     IReadOnlyDictionary<string, string> Extra);
 
@@ -83,11 +100,22 @@ public sealed record CreateNoteRequest(
 /// previously-set value, send an empty string for Font, or 0 for FontSize /
 /// Width — the server treats those as "remove from frontmatter".
 ///
-/// Ship 68: Version is the free-text per-note version string. Same null
-/// semantics — null = leave alone, non-null = replace. Empty string is
-/// treated as "reset to default v0.0" rather than "remove": the field is
-/// always present on disk after a write (that's the backfill contract:
-/// any save persists v0.0 to a previously-unversioned note).
+/// Versioning (replaces Ship 68's free-text version): VersionMajor /
+/// VersionMinor / State drive the per-note version state machine. Same
+/// null semantics as the other property fields — null = leave alone,
+/// non-null = set. The server enforces the invariants and rejects bad
+/// transitions with 400:
+/// <list type="bullet">
+///   <item>Version is monotonic: a (major, minor) pair lower than the
+///     note's current version is rejected. Equal is allowed (used for a
+///     pure state change).</item>
+///   <item>At version 0.0 the state is always "not-versioned"; sending
+///     "development" or "released" at 0.0 is rejected.</item>
+///   <item>"released" requires version &ge; 1.0.</item>
+/// </list>
+/// State is a free string on the wire (one of "not-versioned",
+/// "development", "released") to avoid enum-serialisation coupling;
+/// unknown values are rejected.
 /// </summary>
 public sealed record UpdateNoteRequest(
     string? Body = null,
@@ -97,7 +125,9 @@ public sealed record UpdateNoteRequest(
     string? Font = null,
     int? FontSize = null,
     int? Width = null,
-    string? Version = null);
+    int? VersionMajor = null,
+    int? VersionMinor = null,
+    string? State = null);
 
 /// <summary>
 /// One row in a folder listing.

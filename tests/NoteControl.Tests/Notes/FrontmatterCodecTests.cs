@@ -160,15 +160,12 @@ public sealed class FrontmatterCodecTests
     }
 
     // -------------------------------------------------------------
-    // Ship 68: version field
+    // Versioning: major.minor + lifecycle state
     // -------------------------------------------------------------
 
     [Fact]
-    public void Split_backfills_default_version_when_yaml_has_no_version_key()
+    public void Split_defaults_to_zero_and_not_versioned_without_version_key()
     {
-        // Pre-Ship-68 frontmatter: no `version` line. Split should
-        // surface DefaultVersion in fm.Version so the wire DTO and
-        // the Properties panel always see a value.
         const string input = """
             ---
             tags: []
@@ -178,129 +175,196 @@ public sealed class FrontmatterCodecTests
             Body.
             """;
         var (fm, _) = FrontmatterCodec.Split(input);
-        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+        fm.VersionMajor.Should().Be(0);
+        fm.VersionMinor.Should().Be(0);
+        fm.State.Should().Be(FrontmatterCodec.StateNotVersioned);
+        fm.Version.Should().Be("0.0");
     }
 
     [Fact]
-    public void Split_preserves_explicit_version()
+    public void Split_parses_bare_major_minor_and_defaults_state_to_development()
     {
-        // When the YAML has version, we keep it verbatim (after trim).
         const string input = """
             ---
             tags: []
             locked: false
-            version: 1.2.3-rc1
+            version: 1.2
             ---
 
             Body.
             """;
         var (fm, _) = FrontmatterCodec.Split(input);
-        fm.Version.Should().Be("1.2.3-rc1");
+        fm.VersionMajor.Should().Be(1);
+        fm.VersionMinor.Should().Be(2);
+        // No `state` key, but version > 0.0 -> development.
+        fm.State.Should().Be(FrontmatterCodec.StateDevelopment);
+    }
+
+    [Theory]
+    [InlineData("v0.1", 0, 1)]   // legacy Ship-68 prefix form
+    [InlineData("1", 1, 0)]      // missing minor
+    [InlineData("1.2.3-rc1", 1, 2)] // extra components ignored
+    [InlineData("draft", 0, 0)]  // junk -> zero
+    public void Split_parses_legacy_and_messy_versions(string raw, int major, int minor)
+    {
+        var input = $"---\ntags: []\nlocked: false\nversion: {raw}\n---\n\nBody.\n";
+        var (fm, _) = FrontmatterCodec.Split(input);
+        fm.VersionMajor.Should().Be(major);
+        fm.VersionMinor.Should().Be(minor);
     }
 
     [Fact]
-    public void Split_treats_blank_version_as_default()
+    public void Split_reads_released_state_at_one_zero()
     {
-        // YAML with `version:` (no value) shouldn't end up as empty
-        // string in fm.Version — the post-parse backfill heals it.
         const string input = """
             ---
             tags: []
             locked: false
-            version:
+            version: 1.0
+            state: released
             ---
 
             Body.
             """;
         var (fm, _) = FrontmatterCodec.Split(input);
-        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+        fm.State.Should().Be(FrontmatterCodec.StateReleased);
     }
 
     [Fact]
-    public void Combine_always_emits_version_key()
+    public void Split_clamps_released_below_one_zero_to_development()
     {
-        // Ship 68 contract: every saved note has `version:` on disk.
+        // Inconsistent on-disk data: released at 0.5 is impossible.
+        const string input = """
+            ---
+            tags: []
+            locked: false
+            version: 0.5
+            state: released
+            ---
+
+            Body.
+            """;
+        var (fm, _) = FrontmatterCodec.Split(input);
+        fm.State.Should().Be(FrontmatterCodec.StateDevelopment);
+    }
+
+    [Fact]
+    public void Combine_emits_bare_version_and_no_state_when_unversioned()
+    {
+        var fm = new ParsedFrontmatter { Tags = new List<string>(), Locked = false };
+        var output = FrontmatterCodec.Combine(fm, "Body.");
+        output.Should().Contain("version: 0.0");
+        output.Should().NotContain("state:");
+    }
+
+    [Fact]
+    public void Combine_emits_state_when_versioned()
+    {
         var fm = new ParsedFrontmatter
         {
             Tags = new List<string>(),
             Locked = false,
-            Version = "v9.1",
+            VersionMajor = 2,
+            VersionMinor = 0,
+            State = FrontmatterCodec.StateReleased,
         };
         var output = FrontmatterCodec.Combine(fm, "Body.");
-        output.Should().Contain("version: v9.1");
+        output.Should().Contain("version: 2.0");
+        output.Should().Contain("state: released");
     }
 
     [Fact]
-    public void Combine_falls_back_to_default_when_version_is_empty()
-    {
-        // Defensive: if a caller hand-builds ParsedFrontmatter with an
-        // empty Version (skipping ApplyUpdate's safety net), the
-        // emitter still writes a sensible value. Avoids `version:`
-        // bare-key in the file.
-        var fm = new ParsedFrontmatter
-        {
-            Tags = new List<string>(),
-            Locked = false,
-            Version = "",
-        };
-        var output = FrontmatterCodec.Combine(fm, "Body.");
-        output.Should().Contain("version: " + FrontmatterCodec.DefaultVersion);
-    }
-
-    [Fact]
-    public void ApplyUpdate_sets_version_when_provided()
+    public void ApplyUpdate_sets_version_and_defaults_state_to_development()
     {
         var fm = new ParsedFrontmatter();
         var now = DateTimeOffset.UtcNow;
 
-        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "v2.0");
-        fm.Version.Should().Be("v2.0");
-    }
-
-    [Fact]
-    public void ApplyUpdate_resets_to_default_on_empty_version()
-    {
-        // Empty string isn't "delete" for version (unlike Font / FontSize /
-        // Width). It means "reset to v0.0".
-        var fm = new ParsedFrontmatter { Version = "v3.5" };
-        var now = DateTimeOffset.UtcNow;
-
-        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "");
-        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+        FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null, newMajor: 2, newMinor: 0);
+        fm.VersionMajor.Should().Be(2);
+        fm.VersionMinor.Should().Be(0);
+        fm.State.Should().Be(FrontmatterCodec.StateDevelopment);
     }
 
     [Fact]
     public void ApplyUpdate_leaves_version_alone_when_null()
     {
-        var fm = new ParsedFrontmatter { Version = "v3.5" };
-        var now = DateTimeOffset.UtcNow;
-
-        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: null);
-        fm.Version.Should().Be("v3.5");
-    }
-
-    [Fact]
-    public void ApplyUpdate_backfills_default_when_existing_version_is_empty()
-    {
-        // The "added on first save" backfill: even if the caller didn't
-        // pass newVersion, ApplyUpdate ensures fm.Version is non-empty
-        // by the time it returns. So saving any pre-Ship-68 note
-        // (where fm.Version somehow ended up blank) lands DefaultVersion.
-        var fm = new ParsedFrontmatter { Version = "" };
+        var fm = new ParsedFrontmatter
+        {
+            VersionMajor = 3, VersionMinor = 5, State = FrontmatterCodec.StateDevelopment,
+        };
         var now = DateTimeOffset.UtcNow;
 
         FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null);
-        fm.Version.Should().Be(FrontmatterCodec.DefaultVersion);
+        fm.VersionMajor.Should().Be(3);
+        fm.VersionMinor.Should().Be(5);
     }
 
     [Fact]
-    public void ApplyUpdate_trims_version_whitespace()
+    public void ApplyUpdate_rejects_lowering_version()
     {
-        // Defensive trim — pasted values often have trailing spaces.
+        var fm = new ParsedFrontmatter
+        {
+            VersionMajor = 2, VersionMinor = 0, State = FrontmatterCodec.StateDevelopment,
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        var act = () => FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null, newMajor: 1, newMinor: 9);
+        act.Should().Throw<FrontmatterValidationException>();
+    }
+
+    [Fact]
+    public void ApplyUpdate_allows_equal_version_for_pure_state_change()
+    {
+        var fm = new ParsedFrontmatter
+        {
+            VersionMajor = 1, VersionMinor = 0, State = FrontmatterCodec.StateDevelopment,
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null,
+            newMajor: 1, newMinor: 0, newState: FrontmatterCodec.StateReleased);
+        fm.State.Should().Be(FrontmatterCodec.StateReleased);
+    }
+
+    [Fact]
+    public void ApplyUpdate_rejects_release_below_one_zero()
+    {
+        var fm = new ParsedFrontmatter
+        {
+            VersionMajor = 0, VersionMinor = 5, State = FrontmatterCodec.StateDevelopment,
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        var act = () => FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null, newState: FrontmatterCodec.StateReleased);
+        act.Should().Throw<FrontmatterValidationException>();
+    }
+
+    [Fact]
+    public void ApplyUpdate_rejects_setting_state_at_zero_zero()
+    {
         var fm = new ParsedFrontmatter();
         var now = DateTimeOffset.UtcNow;
 
-        FrontmatterCodec.ApplyUpdate(fm, now, newTags: null, newLocked: null, newVersion: "  v1.0  ");
-        fm.Version.Should().Be("v1.0");
+        var act = () => FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null, newState: FrontmatterCodec.StateDevelopment);
+        act.Should().Throw<FrontmatterValidationException>();
+    }
+
+    [Fact]
+    public void ApplyUpdate_rejects_unknown_state()
+    {
+        var fm = new ParsedFrontmatter
+        {
+            VersionMajor = 1, VersionMinor = 0, State = FrontmatterCodec.StateDevelopment,
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        var act = () => FrontmatterCodec.ApplyUpdate(
+            fm, now, newTags: null, newLocked: null, newState: "frozen");
+        act.Should().Throw<FrontmatterValidationException>();
     }
 }

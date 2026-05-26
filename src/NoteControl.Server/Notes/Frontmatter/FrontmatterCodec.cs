@@ -7,6 +7,18 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace NoteControl.Server.Notes.Frontmatter;
 
 /// <summary>
+/// Thrown by <see cref="FrontmatterCodec.ApplyUpdate"/> when a requested
+/// version/state change violates an invariant (version lowered, releasing
+/// below 1.0, setting a lifecycle state at version 0.0, unknown state
+/// string). <see cref="NoteControl.Server.Notes.Services.NoteService"/>
+/// catches this and surfaces it as a 400 to the caller.
+/// </summary>
+public sealed class FrontmatterValidationException : Exception
+{
+    public FrontmatterValidationException(string message) : base(message) { }
+}
+
+/// <summary>
 /// In-memory representation of parsed frontmatter. Created/Updated/Tags/Locked
 /// + Font/FontSize/Width are the well-known fields. Extra holds anything else
 /// from the YAML, with values typed as YamlDotNet's untyped graph
@@ -33,15 +45,31 @@ public sealed class ParsedFrontmatter
     public int? Width { get; set; }
 
     /// <summary>
-    /// Ship 68: free-text per-note version string. Defaults to
-    /// <see cref="FrontmatterCodec.DefaultVersion"/> ("v0.0") for notes
-    /// whose YAML frontmatter doesn't carry a `version` key — the codec
-    /// fills the default during Split so consumers always see a value.
-    /// On write, EmitYaml always emits the key (so once a note is saved
-    /// after Ship 68 it has v0.0 persisted). Free-text by design — the
-    /// user picks the format.
+    /// Version major component. Persisted on disk as the integer part of
+    /// the bare "major.minor" `version` string. Defaults to 0.
     /// </summary>
-    public string Version { get; set; } = FrontmatterCodec.DefaultVersion;
+    public int VersionMajor { get; set; }
+
+    /// <summary>
+    /// Version minor component. Persisted as the fractional part of the
+    /// bare "major.minor" `version` string. Defaults to 0.
+    /// </summary>
+    public int VersionMinor { get; set; }
+
+    /// <summary>
+    /// Lifecycle state: one of <see cref="FrontmatterCodec.StateNotVersioned"/>,
+    /// <see cref="FrontmatterCodec.StateDevelopment"/>,
+    /// <see cref="FrontmatterCodec.StateReleased"/>. At version 0.0 the state
+    /// is always "not-versioned" (the parser/normaliser enforces this); the
+    /// `state` YAML key is only emitted for development/released notes.
+    /// </summary>
+    public string State { get; set; } = FrontmatterCodec.StateNotVersioned;
+
+    /// <summary>
+    /// Derived "major.minor" string — the source of truth is the two int
+    /// fields. Used by the docx export header and any read-only display.
+    /// </summary>
+    public string Version => $"{VersionMajor}.{VersionMinor}";
 
     /// <summary>
     /// Unknown YAML keys preserved verbatim. Insertion order is preserved.
@@ -70,7 +98,7 @@ public sealed class ParsedFrontmatter
         return new FrontmatterDto(
             Created, Updated, Tags.ToList(), Locked,
             Font, FontSize, Width,
-            Version,
+            VersionMajor, VersionMinor, State, Version,
             extraStrings);
     }
 }
@@ -84,15 +112,18 @@ public static class FrontmatterCodec
 {
     private const string Delim = "---";
 
-    /// <summary>
-    /// Ship 68: every note has a free-text version string. New notes
-    /// and pre-Ship-68 notes that have no `version` YAML key both
-    /// default to this value. The constant lives here (single source
-    /// of truth) so the parser, emitter, ApplyUpdate, and any future
-    /// caller that needs to pre-fill a sensible default all read it
-    /// from one place.
-    /// </summary>
-    public const string DefaultVersion = "v0.0";
+    // ---------------------------------------------------------------
+    // Version / state model
+    // ---------------------------------------------------------------
+
+    /// <summary>The only valid state at version 0.0. Not user-selectable.</summary>
+    public const string StateNotVersioned = "not-versioned";
+
+    /// <summary>Any version &gt; 0.0 that isn't Released.</summary>
+    public const string StateDevelopment = "development";
+
+    /// <summary>Selectable only at version &ge; 1.0.</summary>
+    public const string StateReleased = "released";
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(NullNamingConvention.Instance)
@@ -161,20 +192,27 @@ public static class FrontmatterCodec
 
     /// <summary>
     /// Apply create/update semantics: bump Updated to now; set Created if
-    /// missing; replace Tags / Locked / Font / FontSize / Width / Version
-    /// if the request supplied them; leave Extra alone.
+    /// missing; replace Tags / Locked / Font / FontSize / Width if the
+    /// request supplied them; leave Extra alone.
     ///
     /// Empty-string Font, or 0 FontSize / Width, are interpreted as
     /// "remove this field" — the codec will then emit no key for them.
-    /// This is how the frontend clears a previously-set value without a
-    /// separate "delete" verb.
     ///
-    /// Ship 68: Version is treated differently — it's never "removed".
-    /// Empty-string newVersion resets to <see cref="DefaultVersion"/>
-    /// rather than deleting the YAML key. Null/whitespace on the
-    /// existing fm.Version is also healed to the default here, which
-    /// is the backfill mechanism for pre-Ship-68 notes: any save
-    /// (tags, locked, body, etc.) lands a v0.0 in their frontmatter.
+    /// Version / state: newMajor / newMinor / newState are null = "leave
+    /// alone", non-null = set. After resolving the target values the method
+    /// enforces the invariants and throws
+    /// <see cref="FrontmatterValidationException"/> on a violation:
+    ///   - target version may not be lower than the current version
+    ///     (monotonic; equal is fine for a pure state change);
+    ///   - at target version 0.0 the state is forced to "not-versioned"
+    ///     and supplying any other state is an error;
+    ///   - "released" requires target major &ge; 1;
+    ///   - the only accepted state strings are the three constants.
+    ///
+    /// NOTE: this method does NOT take the release-copy snapshot on a
+    /// released-&gt;development transition — that's the service layer's job
+    /// (it needs the on-disk file + vault root). ApplyUpdate only validates
+    /// and mutates the in-memory frontmatter.
     /// </summary>
     public static void ApplyUpdate(
         ParsedFrontmatter fm,
@@ -184,7 +222,9 @@ public static class FrontmatterCodec
         string? newFont = null,
         int? newFontSize = null,
         int? newWidth = null,
-        string? newVersion = null)
+        int? newMajor = null,
+        int? newMinor = null,
+        string? newState = null)
     {
         fm.Created ??= now;
         fm.Updated = now;
@@ -206,24 +246,82 @@ public static class FrontmatterCodec
             fm.Width = newWidth.Value <= 0 ? null : newWidth.Value;
         }
 
-        // Version: explicit value -> trim and set; empty -> reset to
-        // default (NOT delete); null -> don't touch.
-        if (newVersion is not null)
+        // --- Version / state ---------------------------------------
+
+        var curMajor = fm.VersionMajor;
+        var curMinor = fm.VersionMinor;
+
+        var tgtMajor = newMajor ?? curMajor;
+        var tgtMinor = newMinor ?? curMinor;
+
+        if (tgtMajor < 0 || tgtMinor < 0)
         {
-            var trimmed = newVersion.Trim();
-            fm.Version = trimmed.Length == 0 ? DefaultVersion : trimmed;
+            throw new FrontmatterValidationException("Version components cannot be negative.");
         }
 
-        // Backfill safety net: if the note has no version (pre-Ship-68
-        // file just read off disk where Split couldn't fill it because
-        // someone constructed ParsedFrontmatter manually, or the
-        // string field somehow ended up empty), make sure we write
-        // SOMETHING sensible. This is what "v0.0 added on first save"
-        // refers to in the user's spec.
-        if (string.IsNullOrWhiteSpace(fm.Version))
+        // Monotonic check (major first, then minor). Equal is allowed so a
+        // pure state change can be sent with the same version.
+        if (Compare(tgtMajor, tgtMinor, curMajor, curMinor) < 0)
         {
-            fm.Version = DefaultVersion;
+            throw new FrontmatterValidationException(
+                $"Version cannot be lowered (currently {curMajor}.{curMinor}, requested {tgtMajor}.{tgtMinor}).");
         }
+
+        var targetZero = tgtMajor == 0 && tgtMinor == 0;
+        string tgtState;
+
+        if (targetZero)
+        {
+            // At 0.0 the only valid state is not-versioned. A caller that
+            // explicitly asked for development/released here is wrong.
+            if (newState is not null
+                && !string.Equals(NormaliseStateString(newState), StateNotVersioned, StringComparison.Ordinal))
+            {
+                throw new FrontmatterValidationException(
+                    "A note can only be set to Under Development or Released once its version is above 0.0.");
+            }
+            tgtState = StateNotVersioned;
+        }
+        else if (newState is not null)
+        {
+            var s = NormaliseStateString(newState);
+            if (s is null)
+            {
+                throw new FrontmatterValidationException(
+                    $"Unknown state '{newState}'. Expected '{StateDevelopment}' or '{StateReleased}'.");
+            }
+            if (string.Equals(s, StateNotVersioned, StringComparison.Ordinal))
+            {
+                throw new FrontmatterValidationException(
+                    "'not-versioned' is only valid at version 0.0; it cannot be set explicitly.");
+            }
+            if (string.Equals(s, StateReleased, StringComparison.Ordinal) && tgtMajor < 1)
+            {
+                throw new FrontmatterValidationException(
+                    "Releasing requires version 1.0 or higher.");
+            }
+            tgtState = s;
+        }
+        else
+        {
+            // No explicit state. Keep the current one, but a note that just
+            // crossed from 0.0 into a real version (or whose on-disk state
+            // was still not-versioned) becomes Under Development.
+            tgtState = string.Equals(fm.State, StateNotVersioned, StringComparison.Ordinal)
+                ? StateDevelopment
+                : fm.State;
+        }
+
+        // Defensive: a stored "released" below 1.0 is inconsistent on-disk
+        // data — clamp it down so we never emit an impossible combination.
+        if (string.Equals(tgtState, StateReleased, StringComparison.Ordinal) && tgtMajor < 1)
+        {
+            tgtState = StateDevelopment;
+        }
+
+        fm.VersionMajor = tgtMajor;
+        fm.VersionMinor = tgtMinor;
+        fm.State = tgtState;
     }
 
     private static ParsedFrontmatter ParseYaml(string yaml)
@@ -245,6 +343,8 @@ public static class FrontmatterCodec
         }
 
         if (graph is null) return fm;
+
+        string? rawState = null;
 
         foreach (var kvp in graph)
         {
@@ -275,10 +375,15 @@ public static class FrontmatterCodec
                     fm.Width = ReadOptionalInt(kvp.Value);
                     break;
                 case "version":
-                    // Ship 68: read free-text version. Empty/whitespace
-                    // becomes the default below — we don't preserve a
-                    // blank version key as "blank version".
-                    fm.Version = ReadOptionalString(kvp.Value) ?? string.Empty;
+                    // Parse leniently. Handles the bare "1.2" form we now
+                    // write, the legacy "v0.1" free-text form, and junk
+                    // ("draft" -> 0.0). See ParseVersion.
+                    var (maj, min) = ParseVersion(ReadOptionalString(kvp.Value));
+                    fm.VersionMajor = maj;
+                    fm.VersionMinor = min;
+                    break;
+                case "state":
+                    rawState = ReadOptionalString(kvp.Value);
                     break;
                 default:
                     fm.Extra[key] = kvp.Value;
@@ -286,18 +391,13 @@ public static class FrontmatterCodec
             }
         }
 
-        // Ship 68: backfill at READ time. If the on-disk frontmatter
-        // had no `version` key, fm.Version is still whatever the
-        // ParsedFrontmatter constructor set it to (DefaultVersion).
-        // If the key existed but was blank/whitespace, the case above
-        // wrote string.Empty — fix that up too. Either way, after
-        // ParseYaml returns the field is non-empty. The on-disk file
-        // ISN'T touched here; that happens whenever ApplyUpdate runs
-        // for any other reason ("on first save" semantics).
-        if (string.IsNullOrWhiteSpace(fm.Version))
-        {
-            fm.Version = DefaultVersion;
-        }
+        // Normalise state against the parsed version. At 0.0 the state is
+        // always not-versioned regardless of what was on disk; above 0.0 a
+        // missing/unknown state defaults to development, and a stored
+        // "released" below 1.0 (inconsistent data) is clamped to
+        // development. The on-disk file ISN'T rewritten here — that happens
+        // on the next ApplyUpdate-driven save.
+        fm.State = NormaliseState(fm.VersionMajor, fm.VersionMinor, rawState);
 
         return fm;
     }
@@ -321,24 +421,105 @@ public static class FrontmatterCodec
         if (fm.FontSize.HasValue) output["fontSize"] = fm.FontSize.Value;
         if (fm.Width.HasValue) output["width"] = fm.Width.Value;
 
-        // Ship 68: version is always emitted (unlike the appearance
-        // fields). A note that's been read or written under Ship 68+
-        // has fm.Version set — either from disk, from a user edit, or
-        // backfilled by ApplyUpdate. Always-emit means the file format
-        // is predictable: every saved note has a `version:` line.
-        // Defensive guard: if Version somehow ended up null/empty (a
-        // direct ParsedFrontmatter construction that bypassed
-        // ApplyUpdate, e.g.), fall back to the default rather than
-        // emitting `version:` with a blank value.
-        output["version"] = string.IsNullOrWhiteSpace(fm.Version)
-            ? DefaultVersion
-            : fm.Version;
+        // Version is always emitted as a bare "major.minor" string, so the
+        // file format is predictable (every saved note has a `version:`
+        // line). State is emitted only when the note is actually versioned
+        // — a 0.0 / not-versioned note carries no `state:` key, keeping the
+        // frontmatter minimal for the common unversioned case.
+        output["version"] = $"{fm.VersionMajor}.{fm.VersionMinor}";
+        var state = NormaliseState(fm.VersionMajor, fm.VersionMinor, fm.State);
+        if (!string.Equals(state, StateNotVersioned, StringComparison.Ordinal))
+        {
+            output["state"] = state;
+        }
 
         foreach (var kvp in fm.Extra)
         {
             output.TryAdd(kvp.Key, kvp.Value);
         }
         return Serializer.Serialize(output);
+    }
+
+    // ---------------------------------------------------------------
+    // version / state helpers
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Parse a frontmatter version value into (major, minor). Tolerant by
+    /// design so we can migrate Ship 68's free-text values:
+    ///   "1.2"        -> (1, 2)
+    ///   "v0.1"       -> (0, 1)   (a single leading v/V is stripped)
+    ///   "1"          -> (1, 0)
+    ///   "1.2.3-rc1"  -> (1, 2)   (first two numeric components)
+    ///   "draft" / "" -> (0, 0)
+    /// Negative or non-numeric components fall back to 0.
+    /// </summary>
+    public static (int Major, int Minor) ParseVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return (0, 0);
+        var s = value.Trim();
+        if (s.Length > 0 && (s[0] == 'v' || s[0] == 'V')) s = s[1..];
+
+        var parts = s.Split('.');
+        var major = ParseLeadingInt(parts.Length > 0 ? parts[0] : null);
+        var minor = parts.Length > 1 ? ParseLeadingInt(parts[1]) : 0;
+        return (major, minor);
+    }
+
+    /// <summary>
+    /// Resolve the on-disk / in-memory state to a valid value given the
+    /// version. 0.0 is always not-versioned; above 0.0 a null/unknown state
+    /// is development, and a "released" below 1.0 is clamped to development.
+    /// </summary>
+    public static string NormaliseState(int major, int minor, string? rawState)
+    {
+        if (major == 0 && minor == 0) return StateNotVersioned;
+
+        var s = NormaliseStateString(rawState);
+        if (s is null || string.Equals(s, StateNotVersioned, StringComparison.Ordinal))
+        {
+            return StateDevelopment;
+        }
+        if (string.Equals(s, StateReleased, StringComparison.Ordinal) && major < 1)
+        {
+            return StateDevelopment;
+        }
+        return s;
+    }
+
+    /// <summary>
+    /// Map a free-form state string to one of the three canonical constants,
+    /// or null if it isn't recognised. Case-insensitive; tolerates a couple
+    /// of friendly spellings ("under development", "under-development").
+    /// </summary>
+    private static string? NormaliseStateString(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().ToLowerInvariant().Replace(' ', '-');
+        return s switch
+        {
+            "not-versioned" or "notversioned" or "none" or "unversioned" => StateNotVersioned,
+            "development" or "under-development" or "dev" => StateDevelopment,
+            "released" or "release" => StateReleased,
+            _ => null,
+        };
+    }
+
+    private static int Compare(int aMajor, int aMinor, int bMajor, int bMinor)
+    {
+        if (aMajor != bMajor) return aMajor.CompareTo(bMajor);
+        return aMinor.CompareTo(bMinor);
+    }
+
+    private static int ParseLeadingInt(string? token)
+    {
+        if (string.IsNullOrEmpty(token)) return 0;
+        var i = 0;
+        while (i < token.Length && char.IsDigit(token[i])) i++;
+        if (i == 0) return 0;
+        return int.TryParse(token.AsSpan(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)
+            ? n
+            : 0;
     }
 
     // ---------------------------------------------------------------

@@ -217,22 +217,33 @@ public sealed class NoteService : INoteService
         }
 
         var (fm, existingBody) = FrontmatterCodec.Split(existingRaw);
-        FrontmatterCodec.ApplyUpdate(
-            fm,
-            _clock.GetUtcNow(),
-            request.Tags,
-            request.Locked,
-            // Step 14: optional appearance overrides. ApplyUpdate handles
-            // the sentinel semantics (empty string / 0 = clear).
-            request.Font,
-            request.FontSize,
-            request.Width,
-            // Ship 68: free-text version. Empty string resets to
-            // DefaultVersion (not delete); null = leave alone. The
-            // backfill of pre-Ship-68 notes is implicit: ApplyUpdate
-            // ensures fm.Version is non-empty regardless of what we
-            // pass in here.
-            request.Version);
+        try
+        {
+            FrontmatterCodec.ApplyUpdate(
+                fm,
+                _clock.GetUtcNow(),
+                request.Tags,
+                request.Locked,
+                // Step 14: optional appearance overrides. ApplyUpdate handles
+                // the sentinel semantics (empty string / 0 = clear).
+                request.Font,
+                request.FontSize,
+                request.Width,
+                // Versioning: major/minor/state drive the per-note version
+                // state machine. null = leave alone. ApplyUpdate enforces the
+                // invariants (monotonic version, released >= 1.0, no lifecycle
+                // state at 0.0) and throws FrontmatterValidationException on a
+                // violation, which we surface as a 400 below. The release-copy
+                // snapshot on a released->development transition is NOT done
+                // here — that lands in a later ship.
+                request.VersionMajor,
+                request.VersionMinor,
+                request.State);
+        }
+        catch (FrontmatterValidationException ex)
+        {
+            throw new NoteException(ex.Message, statusCode: 400);
+        }
 
         // Body resolution (the property-save data-loss fix):
         //
