@@ -7363,3 +7363,124 @@ a.nc-rss-item-title:hover {
     justify-content: flex-end;
   }
 }
+
+/* ===================================================================
+   Note widgets (Ship: note-widgets framework)
+
+   Widgets attached to a single note, rendered in the band above the
+   editor (above the note's top rule). The widget components are the
+   same ones the dashboard uses (RSS / Task / Links / Motion), which
+   are position:absolute on the dashboard canvas. Here they're hosted
+   in position:relative boxes that stack vertically, so the absolute
+   child pins to its host's top-left and the hosts flow normally.
+   =================================================================== */
+
+/* Vertical stack of widget hosts. Sits between the breadcrumb row and
+   the editor surface. Bottom margin separates the last widget from the
+   note's top rule. */
+.nc-note-widgets {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 4px 0 20px;
+}
+
+/* One widget's host. position:relative establishes the containing
+   block for the absolutely-positioned widget component inside it. The
+   inline style sets width/height to the widget's own size (capped to
+   100% so a wide dashboard default doesn't overflow a narrow note
+   column). When a widget has no intrinsic height the host collapses to
+   the child's height via min-height fallback. */
+.nc-note-widget-host {
+  /* position + sizing come from the component's inline style; these are
+     just the visual affordances that make the hosted block read as a
+     distinct card in the note band rather than floating chrome. */
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+  background: var(--nc-bg-elev-1, var(--nc-bg));
+  overflow: hidden;
+  min-height: 80px;
+}
+
+/* The hosted block components are position:absolute with left/top from
+   their (forced-to-0) x/y. Inside a note host we want them to fill the
+   host edge-to-edge rather than floating at an offset, so neutralise
+   the absolute offset to the host's padding box. The component still
+   reads width/height from its DTO for its own internal layout. */
+.nc-note-widget-host > .nc-rss-block,
+.nc-note-widget-host > .nc-task-area,
+.nc-note-widget-host > .nc-links-block,
+.nc-note-widget-host > .nc-motion-block {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Fill the host so resizing the host (driven by the widget's own
+     resize handle writing width/height back) keeps the block flush. */
+  width: 100%;
+  height: 100%;
+  /* The host already provides the border + radius + clip, so drop the
+     block's own free-floating-canvas border to avoid a double frame. */
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ----- "Add Note Widget" dropdown in the Properties panel ----------
+   Mirrors the generic .nc-account-popover dropdown (AccountMenu /
+   Widgets+) so it reads as the same control family. The trigger is a
+   plain .nc-btn; this wrapper just anchors the menu under it. */
+.nc-add-widget {
+  position: relative;
+}
+.nc-add-widget > .nc-btn {
+  width: 100%;
+}
+.nc-add-widget-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+  box-shadow: var(--nc-shadow-popover);
+  padding: 6px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nc-add-widget-menu > button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--nc-fg);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 80ms ease;
+}
+.nc-add-widget-menu > button:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-add-widget-menu > button:focus-visible {
+  outline: none;
+  background: var(--nc-bg-elev-2);
+  box-shadow: inset 0 0 0 1px var(--nc-accent);
+}
+/* Muted, non-interactive section label (e.g. "Motion calculator")
+   above the four Motion modes. Same role as .nc-account-username. */
+.nc-add-widget-label {
+  padding: 6px 10px 2px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-add-widget-sep {
+  height: 1px;
+  background: var(--nc-border);
+  margin: 4px -2px;
+}

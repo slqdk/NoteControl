@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 
-import { ApiError, notesApi } from '../api/client';
-import type { NoteDto } from '../api/types';
+import { ApiError, notesApi, noteWidgetsApi } from '../api/client';
+import type { NoteDto, NoteWidgetDto, NoteWidgetsConfigDto } from '../api/types';
 import {
   NoteEditor,
   type EditorUpload,
   type SaveNowOutcome,
 } from '../components/NoteEditor';
 import { MarkdownSourceView } from '../components/MarkdownSourceView';
+import { NoteWidgetStack } from '../components/NoteWidgetStack';
 import { SaveStatusIndicator, type SaveState } from '../components/SaveStatusIndicator';
 import { SaveFailedDialog } from '../components/SaveFailedDialog';
 import {
@@ -16,6 +17,12 @@ import {
   requestNavigation,
   type NavigationGuardVerdict,
 } from '../hooks/navigationGuard';
+import { useDebouncedSave } from '../hooks/useDebouncedSave';
+import {
+  NOTE_WIDGET_ADD_EVENT,
+  buildNoteWidget,
+  type NoteWidgetAddDetail,
+} from '../util/noteWidgets';
 import type { VaultLayoutContext } from '../components/VaultLayout';
 
 /**
@@ -109,6 +116,117 @@ export function EditorPage() {
   useEffect(() => {
     saveStateRef.current = saveState;
   }, [saveState]);
+
+  // ----------------------------------------------------------------
+  // Note widgets (the band above the editor).
+  //
+  // We load the WHOLE per-vault note-widgets map once per vault, keep
+  // it in state, and debounce-save it back — same shape and cadence
+  // the dashboard uses for its blocks. The map is keyed by note path;
+  // this page only renders the open note's slice but holds the whole
+  // map so add/edit/delete can write back without a read-modify-write
+  // round trip per change.
+  //
+  // Why the whole map and not a per-note GET: the sidecar is one file
+  // (note-widgets.json). A per-note endpoint would still have to load
+  // and rewrite that one file, so the single-user assumption makes the
+  // whole-map approach simpler and avoids cross-note write races.
+  const [widgetsConfig, setWidgetsConfig] = useState<NoteWidgetsConfigDto | null>(null);
+
+  // Load the map when the vault changes. Note changes don't refetch —
+  // the map covers every note in the vault, so switching notes just
+  // re-slices what we already have.
+  useEffect(() => {
+    if (!vaultId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cfg = await noteWidgetsApi.getConfig(vaultId);
+        if (!cancelled) setWidgetsConfig(cfg);
+      } catch {
+        // Non-fatal: a vault with no widgets yet, or a transient
+        // error. Fall back to an empty map so add still works (the
+        // first save creates the file). We deliberately don't surface
+        // this in the editor's save badge — widgets are auxiliary.
+        if (!cancelled) setWidgetsConfig({ version: 1, byNote: {} });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [vaultId]);
+
+  // Debounced save of the whole map, same 500ms cadence as the
+  // startpage/assignments. First render (initial load) doesn't save —
+  // the hook skips the first value it sees.
+  useDebouncedSave(widgetsConfig, 500, (cfg) => {
+    if (!vaultId || !cfg) return;
+    void noteWidgetsApi.saveConfig(vaultId, cfg).catch(() => {
+      // Swallow — widgets are auxiliary and the next edit retries.
+      // A hard failure here shouldn't block note editing.
+    });
+  });
+
+  // This note's widget slice. Empty array when the note has none.
+  const noteWidgets: NoteWidgetDto[] =
+    (notePath && widgetsConfig?.byNote[notePath]) || [];
+
+  // Replace this note's widget list inside the map immutably.
+  const setNoteWidgets = useCallback(
+    (next: NoteWidgetDto[]) => {
+      if (!notePath) return;
+      setWidgetsConfig((prev) => {
+        const base: NoteWidgetsConfigDto = prev ?? { version: 1, byNote: {} };
+        const byNote = { ...base.byNote };
+        if (next.length === 0) {
+          delete byNote[notePath];
+        } else {
+          byNote[notePath] = next;
+        }
+        return { ...base, byNote };
+      });
+    },
+    [notePath],
+  );
+
+  const updateNoteWidget = useCallback(
+    (widgetId: string, patch: Partial<NoteWidgetDto>) => {
+      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
+      const next = current.map((w) => {
+        if (w.id !== widgetId) return w;
+        // Merge the payload field that the patch carries. The stack
+        // sends a full replacement payload for the active kind, so a
+        // shallow spread of the patch onto the widget is correct —
+        // patch.rss / patch.task / etc. fully replace the field.
+        return { ...w, ...patch };
+      });
+      setNoteWidgets(next);
+    },
+    [notePath, widgetsConfig, setNoteWidgets],
+  );
+
+  const deleteNoteWidget = useCallback(
+    (widgetId: string) => {
+      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
+      setNoteWidgets(current.filter((w) => w.id !== widgetId));
+    },
+    [notePath, widgetsConfig, setNoteWidgets],
+  );
+
+  // Listen for the Properties panel's "Add Note Widget" event. Ignore
+  // events whose notePath doesn't match the open note (a stale panel
+  // selection mustn't drop a widget on the wrong note).
+  useEffect(() => {
+    const onAdd = (e: Event) => {
+      const detail = (e as CustomEvent<NoteWidgetAddDetail>).detail;
+      if (!detail || detail.notePath !== notePath) return;
+      const widget = buildNoteWidget(detail);
+      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
+      setNoteWidgets([...current, widget]);
+    };
+    window.addEventListener(NOTE_WIDGET_ADD_EVENT, onAdd);
+    return () => window.removeEventListener(NOTE_WIDGET_ADD_EVENT, onAdd);
+  }, [notePath, widgetsConfig, setNoteWidgets]);
 
   /**
    * The navigation guard. Returns:
@@ -384,6 +502,23 @@ export function EditorPage() {
       </div>
 
       {error && <div className="nc-form-error">{error}</div>}
+
+      {/*
+        Note widgets. Rendered in the band above the note's top rule,
+        for the open note only. Edits/deletes flow into the per-vault
+        map and debounce-save. Only shown in rendered mode — the source
+        view is a faithful markdown dump and widgets aren't part of the
+        markdown (they live in the .notesapp sidecar), so showing them
+        over raw source would be misleading.
+      */}
+      {note && vaultId && viewMode === 'rendered' && noteWidgets.length > 0 && (
+        <NoteWidgetStack
+          vaultId={vaultId}
+          widgets={noteWidgets}
+          onChange={updateNoteWidget}
+          onDelete={deleteNoteWidget}
+        />
+      )}
 
       {notFound && (
         <div className="nc-empty">

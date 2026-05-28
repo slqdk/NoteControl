@@ -1,0 +1,110 @@
+using NoteControl.Shared.Startpage;
+
+namespace NoteControl.Shared.NoteWidgets;
+
+/// <summary>
+/// Per-vault store of note-attached widgets. Persisted as
+/// <c>{vault}/.notesapp/note-widgets.json</c>. Loaded once when a
+/// note opens in the editor; saved (debounced ~500ms) whenever a
+/// widget is added, edited, or removed on any note.
+///
+/// Why a sidecar instead of inline-in-the-markdown:
+///   - Note widgets are interactive React surfaces (an animated
+///     motor compare, an RSS feed, a Motion calculator). They have
+///     no faithful markdown representation, so embedding them in the
+///     <c>.md</c> body would either bloat the file with serialized
+///     JSON-in-HTML or lose state on round-trip through the source
+///     view / docx export.
+///   - Keeping them out of the body removes the body-overwrite hazard
+///     the Properties panel already guards against (see
+///     UpdateNoteRequest.Body docs): widget edits never touch the
+///     note body or its etag, so a stale editor snapshot can't clobber
+///     a widget change and vice-versa.
+///
+/// Caveat (documented in the ship notes, surfaced to the user):
+/// because widgets live in the sidecar and NOT in the <c>.md</c>,
+/// they are invisible in the source view and in docx/.md export, and
+/// they do not travel if the bare <c>.md</c> file is copied out of the
+/// vault. They are bound to the note by its path — renaming/moving a
+/// note via the app re-keys this file (handled by the move flow);
+/// moving the file by hand on disk orphans its widgets.
+///
+/// Concurrency / atomic-write semantics mirror
+/// AssignmentsConfigService / StartpageConfigService (temp file +
+/// rename, single-user last-write-wins).
+/// </summary>
+public sealed record NoteWidgetsConfigDto(
+    /// <summary>
+    /// Schema version. Current value is 1. The server is the
+    /// authority — clients don't need to send the right value on
+    /// PUT; the server stamps it on write.
+    /// </summary>
+    int Version,
+
+    /// <summary>
+    /// Map of note path → that note's ordered widget list. The key
+    /// is the note's vault-relative path with <c>/</c> separators and
+    /// the <c>.md</c> extension, exactly as it appears elsewhere in
+    /// the API (see NoteDto.Path). Notes with no widgets are simply
+    /// absent from the map rather than carrying an empty array, so
+    /// the file stays small for vaults that barely use widgets.
+    /// </summary>
+    IReadOnlyDictionary<string, IReadOnlyList<NoteWidgetDto>> ByNote);
+
+/// <summary>
+/// One widget attached to a note, rendered in the note view above
+/// the editor (the band above the note's top rule). The widget's
+/// concrete payload is carried in exactly one of the typed payload
+/// fields, selected by <see cref="Kind"/>.
+///
+/// Why reuse the Startpage block DTOs as payloads rather than
+/// inventing fresh ones: the four existing widget types (RSS, Task,
+/// Links, Motion) already have battle-tested React components whose
+/// prop contract is <c>{ block/area, onChange(patch), onDelete }</c>.
+/// Embedding the same DTO lets the note-widget layer reuse those
+/// components verbatim — no second persistence shape, no second
+/// renderer. New note-native widgets (e.g. the motor compare) add a
+/// new <see cref="Kind"/> value and a new payload field; the older
+/// kinds are untouched.
+///
+/// The x/y/width/height the block DTOs carry are meaningful on the
+/// free-floating dashboard canvas but NOT in the note view, where
+/// widgets stack vertically. The note-widget renderer ignores x/y
+/// (no absolute positioning) and may still honour width/height for
+/// the widget's own sizing. The fields are kept on the payload so the
+/// same DTO and component work in both contexts; the note view simply
+/// doesn't position by them.
+/// </summary>
+public sealed record NoteWidgetDto(
+    /// <summary>
+    /// Stable id, generated client-side via crypto.randomUUID().
+    /// React key + identity for edit/delete. Server treats it as
+    /// opaque. Distinct from any id on the embedded payload — the
+    /// payload's own id is irrelevant in the note context but kept
+    /// intact so the shared component keys cleanly.
+    /// </summary>
+    string Id,
+
+    /// <summary>
+    /// Discriminator selecting which payload field is populated:
+    ///   <c>"rss"</c>    → <see cref="Rss"/>
+    ///   <c>"task"</c>   → <see cref="Task"/>
+    ///   <c>"links"</c>  → <see cref="Links"/>
+    ///   <c>"motion"</c> → <see cref="Motion"/>
+    /// Unknown kinds are stored verbatim and skipped by the client
+    /// renderer (forward-compat: a newer build can add a kind an
+    /// older build simply won't draw, rather than 500-ing).
+    /// </summary>
+    string Kind,
+
+    /// <summary>RSS feed payload. Non-null iff <see cref="Kind"/> is "rss".</summary>
+    RssBlockDto? Rss = null,
+
+    /// <summary>Task area payload. Non-null iff <see cref="Kind"/> is "task".</summary>
+    TaskAreaDto? Task = null,
+
+    /// <summary>Links block payload. Non-null iff <see cref="Kind"/> is "links".</summary>
+    LinkBlockDto? Links = null,
+
+    /// <summary>Motion calculator payload. Non-null iff <see cref="Kind"/> is "motion".</summary>
+    MotionBlockDto? Motion = null);

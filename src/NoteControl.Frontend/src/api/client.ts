@@ -12,6 +12,7 @@ import type {
   NoteDto,
   NoteHistoryInfo,
   NoteSummaryDto,
+  NoteWidgetsConfigDto,
   ProblemDetails,
   ReleaseInfo,
   SearchResponseDto,
@@ -920,6 +921,31 @@ export const assignmentsApi = {
   /** PUT /api/vaults/{id}/assignments */
   saveConfig: (vaultId: string, config: AssignmentsConfigDto) =>
     request<void>(`/api/vaults/${vaultId}/assignments`, {
+      method: 'PUT',
+      body: config,
+    }),
+};
+
+/**
+ * Per-vault note-widgets store. Route is the bare
+ * /api/vaults/{id}/note-widgets (no /config sub-route), same shape as
+ * assignmentsApi. GET reads the whole map (note path → widgets), PUT
+ * replaces it. The editor loads the map once when a note opens and
+ * PUTs the whole map back on a debounce — the single-user assumption
+ * makes whole-file replace safe.
+ *
+ * See server-side
+ * NoteControl.Server.NoteWidgets.Endpoints.NoteWidgetsEndpoints for
+ * the auth split (GET = viewer, PUT = editor).
+ */
+export const noteWidgetsApi = {
+  /** GET /api/vaults/{id}/note-widgets */
+  getConfig: (vaultId: string) =>
+    request<NoteWidgetsConfigDto>(`/api/vaults/${vaultId}/note-widgets`),
+
+  /** PUT /api/vaults/{id}/note-widgets */
+  saveConfig: (vaultId: string, config: NoteWidgetsConfigDto) =>
+    request<void>(`/api/vaults/${vaultId}/note-widgets`, {
       method: 'PUT',
       body: config,
     }),

@@ -313,6 +313,13 @@ try
     builder.Services.AddScoped<NoteControl.Server.Assignments.Services.IAssignmentsConfigService,
         NoteControl.Server.Assignments.Services.AssignmentsConfigService>();
 
+    // Note-widgets service. Per-vault JSON file at
+    // {vault}/.notesapp/note-widgets.json. Scoped for the same reason
+    // as the two services above — it depends on the scoped
+    // ServerDbContext for the vault-path lookup.
+    builder.Services.AddScoped<NoteControl.Server.NoteWidgets.Services.INoteWidgetsConfigService,
+        NoteControl.Server.NoteWidgets.Services.NoteWidgetsConfigService>();
+
     // Search / index services.
     //
     // Pool + build state are singletons because both keep per-vault data
@@ -741,6 +748,7 @@ try
     NoteControl.Server.DailyNotes.Endpoints.DailyNoteEndpoints.MapDailyNoteEndpoints(app);
     NoteControl.Server.Startpage.Endpoints.StartpageEndpoints.MapStartpageEndpoints(app);
     NoteControl.Server.Assignments.Endpoints.AssignmentsEndpoints.MapAssignmentsEndpoints(app);
+    NoteControl.Server.NoteWidgets.Endpoints.NoteWidgetsEndpoints.MapNoteWidgetsEndpoints(app);
     app.MapAdminConfigEndpoints();
     app.MapAdminBackupEndpoints();
     app.MapAdminAuditEndpoints();

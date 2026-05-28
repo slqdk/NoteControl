@@ -497,3 +497,57 @@ export interface AssignmentsConfigDto {
   /** All assignments in stored order. UI groups by category at render time. */
   assignments: AssignmentDto[];
 }
+
+/**
+ * One widget attached to a note, rendered in the note view above the
+ * editor. Mirrors NoteControl.Shared.NoteWidgets.NoteWidgetDto.
+ *
+ * The concrete payload lives in exactly one of the typed fields,
+ * selected by `kind`. These reuse the Startpage block DTOs verbatim
+ * so the note-widget renderer can mount the existing RSS / Task /
+ * Links / Motion components unchanged (their prop contract is
+ * { block|area, onChange(patch), onDelete }).
+ *
+ * The payload's x/y/width/height are meaningful on the dashboard
+ * canvas but NOT in the note view, which stacks widgets vertically
+ * and ignores absolute position. Width/height may still inform the
+ * widget's own sizing.
+ */
+export interface NoteWidgetDto {
+  /** Stable id, crypto.randomUUID(). React key + edit/delete identity. */
+  id: string;
+  /**
+   * Discriminator. Known values: 'rss' | 'task' | 'links' | 'motion'.
+   * Unknown kinds are stored verbatim and skipped by the renderer
+   * (forward-compat with newer builds).
+   */
+  kind: string;
+  /** RSS payload — present iff kind === 'rss'. */
+  rss?: RssBlockDto | null;
+  /** Task area payload — present iff kind === 'task'. */
+  task?: TaskAreaDto | null;
+  /** Links payload — present iff kind === 'links'. */
+  links?: LinkBlockDto | null;
+  /** Motion payload — present iff kind === 'motion'. */
+  motion?: MotionBlockDto | null;
+}
+
+/**
+ * Per-vault note-widgets store. Mirrors
+ * NoteControl.Shared.NoteWidgets.NoteWidgetsConfigDto.
+ *
+ * Persisted at {vault}/.notesapp/note-widgets.json. The endpoint is
+ * /api/vaults/{id}/note-widgets. `byNote` maps a note's vault-relative
+ * path (with .md, '/' separators) to that note's ordered widget list.
+ * Notes with no widgets are absent from the map.
+ *
+ * Caveat: widgets live in this sidecar, NOT in the .md body, so they
+ * do not appear in source view or docx/.md export and don't travel
+ * with a hand-copied .md file.
+ */
+export interface NoteWidgetsConfigDto {
+  /** Schema version. Current value is 1. Server is the authority. */
+  version: number;
+  /** note path → ordered widget list. */
+  byNote: Record<string, NoteWidgetDto[]>;
+}

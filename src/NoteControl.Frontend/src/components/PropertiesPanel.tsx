@@ -10,6 +10,11 @@ import { EditableTags } from './EditableTags';
 import { EditableLocked } from './EditableLocked';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
 import { VersionStateEditor, type VersionStatePatch } from './VersionStateEditor';
+import {
+  NOTE_WIDGET_ADD_EVENT,
+  type NoteWidgetAddDetail,
+  type NoteWidgetKind,
+} from '../util/noteWidgets';
 
 /**
  * Visual Studio-style properties panel.
@@ -899,6 +904,17 @@ export function PropertiesPanel({
                 >
                   📥 Export as .md
                 </a>
+                {/*
+                  Add Note Widget. Notes-only. Dispatches a window
+                  CustomEvent the EditorPage listens for and appends the
+                  chosen widget to this note's widget list (rendered in
+                  the band above the editor). Window event keeps the
+                  panel decoupled from the editor page — same pattern the
+                  dashboard's Widgets+ dropdown uses to talk to
+                  DashboardPage, and the same channel the view-mode
+                  toggle already uses (nc:note-view-mode-changed).
+                */}
+                <AddNoteWidgetMenu notePath={selection.path} />
               </>
             )}
             {showMoveButton && (
@@ -1230,6 +1246,93 @@ function FolderCoverEditor({
       </div>
 
       {error && <div className="nc-form-error">{error}</div>}
+    </div>
+  );
+}
+
+/**
+ * "Add Note Widget" dropdown for the Properties panel actions block.
+ *
+ * Notes-only. Renders a small menu of insertable widget kinds; picking
+ * one dispatches NOTE_WIDGET_ADD_EVENT with the target note path. The
+ * EditorPage listens and appends the widget to the note's widget list
+ * (the band above the editor). The panel deliberately knows nothing
+ * about how the widget is built or persisted — that lives next to the
+ * editor — it only names the note and the kind.
+ *
+ * Motion has four modes (A–D), same as the dashboard's Widgets+ →
+ * Motion submenu, so the Motion entry expands to the four modes rather
+ * than inserting a single default.
+ */
+function AddNoteWidgetMenu({ notePath }: { notePath: string }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / Escape — same lightweight pattern the
+  // other small popovers in this file use.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const add = (kind: NoteWidgetKind, motionMode?: NoteWidgetAddDetail['motionMode']) => {
+    const detail: NoteWidgetAddDetail = { notePath, kind, motionMode };
+    window.dispatchEvent(new CustomEvent(NOTE_WIDGET_ADD_EVENT, { detail }));
+    setOpen(false);
+  };
+
+  return (
+    <div className="nc-add-widget" ref={rootRef}>
+      <button
+        type="button"
+        className="nc-btn"
+        onClick={() => setOpen((v) => !v)}
+        title="Add an interactive widget to the top of this note"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        ＋ Add Note Widget
+      </button>
+      {open && (
+        <div className="nc-add-widget-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => add('rss')}>
+            📰 RSS feed
+          </button>
+          <button type="button" role="menuitem" onClick={() => add('task')}>
+            ✅ Task area
+          </button>
+          <button type="button" role="menuitem" onClick={() => add('links')}>
+            🔗 Links
+          </button>
+          <div className="nc-add-widget-sep" />
+          <div className="nc-add-widget-label">Motion calculator</div>
+          <button type="button" role="menuitem" onClick={() => add('motion', 'A')}>
+            Motion · A (Time → Dynamics)
+          </button>
+          <button type="button" role="menuitem" onClick={() => add('motion', 'B')}>
+            Motion · B (Dynamics → Time)
+          </button>
+          <button type="button" role="menuitem" onClick={() => add('motion', 'C')}>
+            Motion · C (Dynamics + Limits)
+          </button>
+          <button type="button" role="menuitem" onClick={() => add('motion', 'D')}>
+            Motion · D (Motor / Gear)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
