@@ -1,6 +1,7 @@
 import type {
   LinkBlockDto,
   MotionBlockDto,
+  MotorBlockDto,
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
@@ -22,7 +23,7 @@ import { MOTION_DEFAULTS } from '../components/MotionBlock';
  */
 export const NOTE_WIDGET_ADD_EVENT = 'nc:add-note-widget';
 
-export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion';
+export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor';
 
 export interface NoteWidgetAddDetail {
   /**
@@ -108,6 +109,24 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         showJerk: false,
       };
       return { id, kind: 'motion', motion };
+    }
+    case 'motor': {
+      const motor: MotorBlockDto = {
+        id: newId(),
+        x: 0,
+        y: 0,
+        width: 720,
+        height: 520,
+        // A 2-pole machine on 50 Hz → 3000 rpm synchronous, the
+        // textbook starting example. Half load, 6% rated slip (typical
+        // induction motor), running.
+        polePairs: 1,
+        frequencyHz: 50,
+        loadPct: 50,
+        ratedSlipPct: 6,
+        running: true,
+      };
+      return { id, kind: 'motor', motor };
     }
     default: {
       // Exhaustiveness guard — if a new kind is added to the union

@@ -14,6 +14,9 @@ import './runtime.css';
 // out of the giant styles.css and makes reverting one feature a
 // single-file delete + import-line removal.
 import './motion-block.css';
+// motor-block.css — same additive-feature pattern. The synchronous vs.
+// asynchronous motor compare widget (a note-native widget).
+import './motor-block.css';
 // KaTeX stylesheet — required for math nodes to render correctly.
 // Imported before our own math.css so any selectors in math.css
 // (specifically: tweaks to the .katex-display container's margin

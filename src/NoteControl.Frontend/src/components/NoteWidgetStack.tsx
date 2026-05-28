@@ -3,6 +3,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type {
   LinkBlockDto,
   MotionBlockDto,
+  MotorBlockDto,
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
@@ -11,6 +12,7 @@ import { RssBlock } from './RssBlock';
 import { TaskArea } from './TaskArea';
 import { LinksBlock } from './LinksBlock';
 import { MotionBlock } from './MotionBlock';
+import { MotorBlock } from './MotorBlock';
 
 /**
  * Renders the ordered list of widgets attached to a single note, in
@@ -68,6 +70,7 @@ const DEFAULT_HEIGHT: Record<string, number> = {
   task: 380,
   links: 320,
   motion: 460,
+  motor: 520,
 };
 
 /** Clamp host height to sane bounds so a drag can't collapse a widget
@@ -85,7 +88,7 @@ function clamp(n: number, lo: number, hi: number): number {
 
 /** The currently-stored payload for a widget, regardless of kind. */
 function payloadOf(w: NoteWidgetDto): { height?: number } | null {
-  return w.rss ?? w.task ?? w.links ?? w.motion ?? null;
+  return w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? null;
 }
 
 /** The default/reset height for a widget, accounting for Motion-D. */
@@ -197,6 +200,14 @@ function NoteWidgetItem({
     },
     [onChange, w.id, w.motion],
   );
+  const onChangeMotor = useCallback(
+    (patch: Partial<MotorBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      if (w.motor) onChange(w.id, { motor: { ...w.motor, ...rest } });
+    },
+    [onChange, w.id, w.motor],
+  );
 
   // Host resize handle → set the payload height (clamped + rounded).
   const setHeight = useCallback(
@@ -206,6 +217,7 @@ function NoteWidgetItem({
       else if (w.task) onChange(w.id, { task: { ...w.task, height: next } });
       else if (w.links) onChange(w.id, { links: { ...w.links, height: next } });
       else if (w.motion) onChange(w.id, { motion: { ...w.motion, height: next } });
+      else if (w.motor) onChange(w.id, { motor: { ...w.motor, height: next } });
     },
     [onChange, w],
   );
@@ -246,6 +258,14 @@ function NoteWidgetItem({
       <MotionBlock
         block={{ ...w.motion, mode: w.motion.mode ?? 'A', x: 0, y: 0, width, height }}
         onChange={onChangeMotion}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'motor' && w.motor) {
+    body = (
+      <MotorBlock
+        block={{ ...w.motor, x: 0, y: 0, width, height }}
+        onChange={onChangeMotor}
         onDelete={() => onDelete(w.id)}
       />
     );

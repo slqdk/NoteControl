@@ -530,6 +530,42 @@ export interface NoteWidgetDto {
   links?: LinkBlockDto | null;
   /** Motion payload — present iff kind === 'motion'. */
   motion?: MotionBlockDto | null;
+  /** Motor compare payload — present iff kind === 'motor'. */
+  motor?: MotorBlockDto | null;
+}
+
+/**
+ * Synchronous vs. asynchronous motor comparison widget config. Mirrors
+ * NoteControl.Shared.NoteWidgets.MotorBlockDto.
+ *
+ * A teaching animation: one rotating stator field drives a synchronous
+ * rotor (locked to the field) beside an asynchronous rotor (lagging by
+ * the slip, which grows with load). Both machines share pole-pairs and
+ * line frequency for a fair compare.
+ *
+ * Physics (simplified for intuition):
+ *   synchronous speed  n_s = 60·f / p   [rpm], p = pole pairs
+ *   slip               s   = (load/100) · (ratedSlipPct/100), clamped
+ *   async rotor speed  n_r = n_s · (1 − s)
+ *
+ * x/y ignored in the note stack; width/height drive layout.
+ */
+export interface MotorBlockDto {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Pole pairs (p), shared by both machines. 1..12. */
+  polePairs: number;
+  /** Line frequency in Hz, shared. 0..100. */
+  frequencyHz: number;
+  /** Mechanical load percent 0..100 — drives async slip. */
+  loadPct: number;
+  /** Rated slip percent at full load (typ. 1..6). */
+  ratedSlipPct: number;
+  /** Whether the animation is running. */
+  running: boolean;
 }
 
 /**

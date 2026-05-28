@@ -1,0 +1,262 @@
+/* ============================================================================
+ * motor-block.css — Synchronous vs. asynchronous motor compare widget
+ * (MotorBlock.tsx). A note-native widget (no dashboard counterpart),
+ * but it follows the same frame vocabulary as motion-block.css so the
+ * two read as siblings when stacked above a note.
+ *
+ * Separate file (loaded from main.tsx after styles.css) for the same
+ * reason motion-block.css is: additive feature, one-delete revert,
+ * explicit cascade order.
+ *
+ * Colour roles (match the legend and the teaching intent):
+ *   field  — blue  (the stator's rotating field, same for both motors)
+ *   sync   — amber (the magnetized rotor, locked to the field)
+ *   async  — green (the squirrel-cage rotor, lagging under load)
+ * ========================================================================== */
+
+.nc-motor-block {
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 360px;
+  min-height: 320px;
+}
+
+/* ----- Header ------------------------------------------------------------ */
+.nc-motor-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  user-select: none;
+}
+.nc-motor-block-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+.nc-motor-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+.nc-motor-block-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nc-motor-block-iconbtn:hover {
+  background: var(--nc-bg);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+/* ----- Body -------------------------------------------------------------- */
+.nc-motor-block-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow: auto;
+}
+
+/* ----- Controls ---------------------------------------------------------- */
+.nc-motor-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 18px;
+}
+.nc-motor-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-motor-control-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-motor-control-label strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+.nc-motor-control input[type='range'] {
+  width: 100%;
+  accent-color: var(--nc-accent);
+  cursor: pointer;
+}
+
+/* ----- Stage (the two machines) ------------------------------------------ */
+.nc-motor-stage {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+/* On a narrow note column the two panels stack. */
+@media (max-width: 560px) {
+  .nc-motor-stage {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nc-motor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+.nc-motor-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nc-motor-panel-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+}
+.nc-motor-panel-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-motor-panel-sync .nc-motor-panel-badge {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+}
+.nc-motor-panel-async .nc-motor-panel-badge {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.nc-motor-svg {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  display: block;
+}
+
+.nc-motor-panel-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nc-motor-panel-foot-label {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-motor-panel-foot-rpm {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- SVG element styling ----------------------------------------------- */
+.nc-motor-stator {
+  stroke: var(--nc-border);
+  stroke-width: 2;
+}
+/* Field — blue, same on both panels. */
+.nc-motor-field-line {
+  stroke: var(--nc-accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.nc-motor-field-dot {
+  fill: var(--nc-accent);
+}
+/* Sync rotor — amber magnet. */
+.nc-motor-magnet {
+  fill: #f59e0b;
+  stroke: #b45309;
+  stroke-width: 1.5;
+}
+.nc-motor-pole-text {
+  fill: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+/* Async rotor — green squirrel cage. */
+.nc-motor-cage-ring {
+  stroke: #22c55e;
+  stroke-width: 3;
+}
+.nc-motor-cage-bar {
+  fill: #22c55e;
+}
+.nc-motor-cage-marker {
+  stroke: #15803d;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.nc-motor-shaft {
+  fill: var(--nc-fg);
+}
+
+/* ----- Legend ------------------------------------------------------------ */
+.nc-motor-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-motor-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nc-motor-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+}
+.nc-motor-swatch-field {
+  background: var(--nc-accent);
+}
+.nc-motor-swatch-sync {
+  background: #f59e0b;
+}
+.nc-motor-swatch-async {
+  background: #22c55e;
+}

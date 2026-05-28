@@ -107,4 +107,69 @@ public sealed record NoteWidgetDto(
     LinkBlockDto? Links = null,
 
     /// <summary>Motion calculator payload. Non-null iff <see cref="Kind"/> is "motion".</summary>
-    MotionBlockDto? Motion = null);
+    MotionBlockDto? Motion = null,
+
+    /// <summary>
+    /// Synchronous/asynchronous motor-compare payload. Non-null iff
+    /// <see cref="Kind"/> is "motor". Unlike the other four payloads
+    /// this is a note-native widget (no dashboard counterpart), so its
+    /// DTO lives in this namespace rather than Startpage.
+    /// </summary>
+    MotorBlockDto? Motor = null);
+
+/// <summary>
+/// Configuration for the synchronous vs. asynchronous motor comparison
+/// widget. An interactive teaching animation: a rotating stator field
+/// drives a synchronous rotor (locked to the field, zero slip) beside
+/// an asynchronous rotor (lags the field by the slip, which grows with
+/// mechanical load).
+///
+/// The two machines share pole-pairs and line frequency so the
+/// comparison is fair — same field, same synchronous speed — and the
+/// only visible difference is the async rotor falling behind under
+/// load. Physics is intentionally simplified for intuition, not
+/// accuracy: synchronous speed n_s = 60·f / p [rpm] (p = pole pairs),
+/// and slip s = (load/100) · sRatedPct/100, clamped to [0, sMax]. The
+/// async rotor speed is n_r = n_s · (1 − s).
+///
+/// x/y/width/height mirror the other note widgets: x/y are ignored in
+/// the note stack, width/height drive the widget's own layout (the
+/// host measures width and owns the resize handle).
+/// </summary>
+public sealed record MotorBlockDto(
+    /// <summary>Stable id (client-generated). Opaque to the server.</summary>
+    string Id,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double X = 0,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double Y = 0,
+
+    /// <summary>Widget width in px (host overrides via measurement in-note).</summary>
+    double Width = 720,
+
+    /// <summary>Widget height in px.</summary>
+    double Height = 460,
+
+    /// <summary>Pole pairs (p). Shared by both machines. 1..12 in the UI.</summary>
+    int PolePairs = 1,
+
+    /// <summary>Line frequency in Hz. Shared. Slider 0..100.</summary>
+    double FrequencyHz = 50,
+
+    /// <summary>
+    /// Mechanical load as a percent 0..100. Drives the async slip via
+    /// the linear model; the sync machine ignores it (no slip).
+    /// </summary>
+    double LoadPct = 50,
+
+    /// <summary>
+    /// Rated slip percent at full load (typical real induction motors
+    /// sit at 1..6 %). The async slip scales linearly toward this with
+    /// load. Default 6.
+    /// </summary>
+    double RatedSlipPct = 6,
+
+    /// <summary>Whether the animation is currently running.</summary>
+    bool Running = true);
