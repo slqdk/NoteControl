@@ -70,7 +70,7 @@ const DEFAULT_HEIGHT: Record<string, number> = {
   task: 380,
   links: 320,
   motion: 460,
-  motor: 520,
+  motor: 420,
 };
 
 /** Clamp host height to sane bounds so a drag can't collapse a widget

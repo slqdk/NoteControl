@@ -171,29 +171,5 @@ public sealed record MotorBlockDto(
     /// </summary>
     double RatedSlipPct = 6,
 
-    /// <summary>
-    /// Where the stator field frequency comes from:
-    ///   "line"  — grid/line-fed: f is fixed (50 or 60 Hz) and the
-    ///             synchronous speed is whatever 60·f/p works out to.
-    ///             This is the classic textbook ceiling (3000 rpm at
-    ///             50 Hz, one pole pair).
-    ///   "drive" — inverter/servo-drive-fed: the user commands a target
-    ///             rpm (<see cref="CommandRpm"/>) and the drive
-    ///             synthesises whatever frequency is needed
-    ///             (f = n·p / 60). This is how a PM servomotor like the
-    ///             Beckhoff AM8xxx reaches 8000 rpm — the field isn't
-    ///             stuck at 50 Hz.
-    /// Unknown values are treated as "line".
-    /// </summary>
-    string Source = "line",
-
-    /// <summary>
-    /// Commanded synchronous speed in rpm, used only in
-    /// <see cref="Source"/> = "drive" mode. The displayed field
-    /// frequency is then f = CommandRpm · p / 60. Ignored in line mode
-    /// (where speed is derived from the fixed frequency instead).
-    /// </summary>
-    double CommandRpm = 1500,
-
     /// <summary>Whether the animation is currently running.</summary>
     bool Running = true);

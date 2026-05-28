@@ -116,7 +116,7 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         x: 0,
         y: 0,
         width: 720,
-        height: 520,
+        height: 420,
         // A 2-pole machine on 50 Hz → 3000 rpm synchronous, the
         // textbook starting example. Half load, 6% rated slip (typical
         // induction motor), running.
@@ -124,8 +124,6 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         frequencyHz: 50,
         loadPct: 50,
         ratedSlipPct: 6,
-        source: 'line',
-        commandRpm: 1500,
         running: true,
       };
       return { id, kind: 'motor', motor };

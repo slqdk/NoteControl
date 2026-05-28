@@ -45,11 +45,6 @@ export interface MotorBlockProps {
 // this factor. The numeric readouts are unaffected — they show truth.
 const DISPLAY_SLOWDOWN = 30;
 
-// Upper bound for the commanded speed in drive mode. 9000 covers the
-// AM8xxx family's 8000 rpm rated speed with headroom. Not a physical
-// limit — just a sane slider range.
-const DRIVE_RPM_MAX = 9000;
-
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
@@ -86,30 +81,12 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
 
-  // Mode-aware derivation.
-  //   line  mode: frequency is the input → nSync = 60·f/p.
-  //   drive mode: commanded rpm is the input → nSync = commandRpm, and
-  //               the frequency the drive must output is f = n·p/60.
-  const isDrive = block.source === 'drive';
-
+  // Derived physics. Memoised so the rAF effect only restarts when an
+  // input that changes the speeds changes.
   const nSync = useMemo(
-    () =>
-      isDrive
-        ? Math.max(0, block.commandRpm)
-        : syncRpm(block.frequencyHz, block.polePairs),
-    [isDrive, block.commandRpm, block.frequencyHz, block.polePairs],
+    () => syncRpm(block.frequencyHz, block.polePairs),
+    [block.frequencyHz, block.polePairs],
   );
-
-  // The frequency to DISPLAY. In line mode it's the slider value; in
-  // drive mode it's computed from the commanded speed and pole pairs.
-  const displayHz = useMemo(
-    () =>
-      isDrive
-        ? (nSync * Math.max(1, block.polePairs)) / 60
-        : block.frequencyHz,
-    [isDrive, nSync, block.polePairs, block.frequencyHz],
-  );
-
   const slip = useMemo(
     () => slipFraction(block.loadPct, block.ratedSlipPct),
     [block.loadPct, block.ratedSlipPct],
@@ -188,45 +165,21 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
   }, [applyTransforms]);
 
   // ---- input handlers ---------------------------------------------------
-  // Source toggle. Switching to drive mode seeds commandRpm from the
-  // current synchronous speed so the field doesn't jump; switching to
-  // line mode seeds frequency from the current speed (capped at 100 Hz)
-  // for the same reason — the visible speed stays continuous across the
-  // toggle.
-  const onSource = useCallback(
-    (source: 'line' | 'drive') => {
-      if (source === 'drive') {
-        onChange({ source, commandRpm: Math.round(nSync) });
-      } else {
-        const hz = clamp((nSync * Math.max(1, block.polePairs)) / 60, 0, 100);
-        onChange({ source, frequencyHz: hz });
-      }
-    },
-    [onChange, nSync, block.polePairs],
-  );
-
-  // Line mode: the frequency slider IS the input (0..100 Hz).
+  // The Hz and rpm sliders are two views of the same field speed, linked
+  // by the shared pole-pairs: rpm = 60·f/p  ⇔  f = rpm·p/60. Moving one
+  // writes frequencyHz (the single source of truth); the rpm slider is
+  // derived for display and converts back on change.
   const onHz = useCallback(
     (hz: number) => onChange({ frequencyHz: clamp(hz, 0, 100) }),
     [onChange],
   );
-  // Field-speed rpm slider. Behaviour depends on mode:
-  //   line  — rpm is derived from f, so editing it converts back to a
-  //           frequency (capped 100 Hz) — the slider can't exceed the
-  //           line-fed ceiling.
-  //   drive — rpm IS the command; write it straight to commandRpm with
-  //           no frequency cap (that's the whole point — the drive makes
-  //           whatever frequency is needed).
   const onRpm = useCallback(
     (rpm: number) => {
-      if (isDrive) {
-        onChange({ commandRpm: clamp(rpm, 0, DRIVE_RPM_MAX) });
-      } else {
-        const hz = clamp((rpm * Math.max(1, block.polePairs)) / 60, 0, 100);
-        onChange({ frequencyHz: hz });
-      }
+      // rpm → Hz via shared pole pairs. Clamp Hz to its slider range.
+      const hz = clamp((rpm * Math.max(1, block.polePairs)) / 60, 0, 100);
+      onChange({ frequencyHz: hz });
     },
-    [onChange, isDrive, block.polePairs],
+    [onChange, block.polePairs],
   );
   const onPolePairs = useCallback(
     (p: number) => onChange({ polePairs: clamp(Math.round(p), 1, 12) }),
@@ -241,11 +194,9 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
     [onChange],
   );
 
-  // Field-speed slider value + range.
-  //   line  — capped at the line-fed ceiling 60·100/p.
-  //   drive — capped at DRIVE_RPM_MAX so the slider has a sane range.
+  // rpm shown on the field-speed rpm slider (max at 100 Hz for current p).
   const rpmValue = Math.round(nSync);
-  const rpmMax = isDrive ? DRIVE_RPM_MAX : Math.round(syncRpm(100, block.polePairs));
+  const rpmMax = Math.round(syncRpm(100, block.polePairs));
 
   const slipPctText = (slip * 100).toFixed(1);
 
@@ -278,30 +229,6 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
       </div>
 
       <div className="nc-motor-block-body">
-        {/* Frequency source: line-fed (grid) vs drive-fed (servo). This
-            is the crux — in line mode f is fixed and speed is capped at
-            60·f/p; in drive mode the user commands rpm and the drive
-            synthesises whatever frequency that needs (how a servo hits
-            8000 rpm). */}
-        <div className="nc-motor-source" role="group" aria-label="Frequency source">
-          <button
-            type="button"
-            className={`nc-motor-source-btn${!isDrive ? ' is-active' : ''}`}
-            onClick={() => onSource('line')}
-            title="Grid/line-fed: frequency fixed at 50/60 Hz; speed limited to 60·f/p"
-          >
-            Line-fed (grid)
-          </button>
-          <button
-            type="button"
-            className={`nc-motor-source-btn${isDrive ? ' is-active' : ''}`}
-            onClick={() => onSource('drive')}
-            title="Servo-drive-fed: command the speed; the drive outputs the needed frequency f = n·p/60"
-          >
-            Drive-fed (servo)
-          </button>
-        </div>
-
         {/* Controls */}
         <div className="nc-motor-controls">
           <label className="nc-motor-control">
@@ -319,28 +246,24 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
             />
           </label>
 
-          <label className={`nc-motor-control${isDrive ? ' is-derived' : ''}`}>
+          <label className="nc-motor-control">
             <span className="nc-motor-control-label">
               Frequency
-              <strong>
-                {displayHz.toFixed(isDrive ? 1 : 0)} Hz
-                {isDrive ? ' (drive)' : ''}
-              </strong>
+              <strong>{block.frequencyHz.toFixed(0)} Hz</strong>
             </span>
             <input
               type="range"
               min={0}
               max={100}
               step={1}
-              value={clamp(Math.round(displayHz), 0, 100)}
+              value={Math.round(block.frequencyHz)}
               onChange={(e) => onHz(Number(e.target.value))}
-              disabled={isDrive}
             />
           </label>
 
           <label className="nc-motor-control">
             <span className="nc-motor-control-label">
-              {isDrive ? 'Commanded speed' : 'Field speed'}
+              Field speed
               <strong>{rpmValue} rpm</strong>
             </span>
             <input
@@ -405,39 +328,16 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
         </div>
 
         {/* Live math — formula then the worked numbers, so a reader of
-            the note sees where every figure on screen comes from. The
-            first line flips with the mode: line-fed solves speed FROM
-            frequency; drive-fed solves the frequency the drive must
-            output FROM the commanded speed. */}
+            the note sees where every figure on screen comes from. */}
         <div className="nc-motor-math">
-          {isDrive ? (
-            <>
-              <div className="nc-motor-math-row">
-                <span className="nc-motor-math-name">Commanded speed</span>
-                <span className="nc-motor-math-eq">
-                  n<sub>s</sub> = <strong>{Math.round(nSync)} rpm</strong>{' '}
-                  (set by the drive)
-                </span>
-              </div>
-              <div className="nc-motor-math-row">
-                <span className="nc-motor-math-name">Drive output freq.</span>
-                <span className="nc-motor-math-eq">
-                  f = n<sub>s</sub>·p / 60 ={' '}
-                  {Math.round(nSync)}·{block.polePairs} / 60 ={' '}
-                  <strong>{displayHz.toFixed(1)} Hz</strong>
-                </span>
-              </div>
-            </>
-          ) : (
-            <div className="nc-motor-math-row">
-              <span className="nc-motor-math-name">Synchronous speed</span>
-              <span className="nc-motor-math-eq">
-                n<sub>s</sub> = 60·f / p ={' '}
-                60·{block.frequencyHz.toFixed(0)} / {block.polePairs} ={' '}
-                <strong>{Math.round(nSync)} rpm</strong>
-              </span>
-            </div>
-          )}
+          <div className="nc-motor-math-row">
+            <span className="nc-motor-math-name">Synchronous speed</span>
+            <span className="nc-motor-math-eq">
+              n<sub>s</sub> = 60·f / p ={' '}
+              60·{block.frequencyHz.toFixed(0)} / {block.polePairs} ={' '}
+              <strong>{Math.round(nSync)} rpm</strong>
+            </span>
+          </div>
           <div className="nc-motor-math-row">
             <span className="nc-motor-math-name">Slip</span>
             <span className="nc-motor-math-eq">
