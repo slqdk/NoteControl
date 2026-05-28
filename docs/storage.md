@@ -40,6 +40,7 @@ it to `dev-data` (relative to the working directory).
 │   │   ├── index.db-shm
 │   │   ├── templates/          ← {name}.md per template
 │   │   ├── trash/              ← deleted notes (vault-scoped)
+│   │   ├── releases/           ← per-note frozen release + dev stash
 │   │   ├── startpage.json      ← dashboards + block layout
 │   │   └── assignments.json    ← per-vault assignments list
 │   ├── My Note.md              ← markdown body + frontmatter
@@ -94,6 +95,7 @@ notes or folders called `.notesapp`.
 | `.notesapp/index.db` | SQLite + FTS5 index of all notes in the vault. WAL mode. |
 | `.notesapp/templates/` | Each `*.md` file is one template. Filename without `.md` is the template name. A template called `Daily.md` is the body for new daily notes. |
 | `.notesapp/trash/` | Deleted notes are moved here, keeping their original folder structure as subpaths. No automatic cleanup. |
+| `.notesapp/releases/` | Per-note versioning slots, one subfolder per note (path-encoded with `/` → `__`). Holds at most a single frozen `released.md` (the one released copy, full note incl. frontmatter) and, while a note is currently showing its release live, a parked `development.md` (the working copy). Switching a note to *released* mirrors the live note into `released.md`; switching back to *development* restores `development.md`. The folder follows the note on rename; on delete it is left orphaned (same as the per-note history folder). |
 | `.notesapp/startpage.json` | Dashboard layouts for the vault: positions, sizes, RSS URLs, sticky note contents, link entries. One file holds every dashboard the vault has. Saved with debounced cadence. |
 | `.notesapp/assignments.json` | Per-vault Assignments page contents. Flat list of assignments, each carrying its own category. Saved with debounced cadence. |
 

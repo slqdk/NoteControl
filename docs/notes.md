@@ -21,7 +21,8 @@ created: 2026-04-12T08:30:00+02:00
 updated: 2026-05-04T15:22:01+02:00
 tags: [project-x, electrical]
 locked: false
-version: v0.1
+version: 1.2
+state: development
 ---
 
 # Heading
@@ -37,7 +38,8 @@ Frontmatter fields the server understands:
 | `updated` | ISO 8601 datetime | Last write. Server bumps it on every successful save. |
 | `tags` | string array | Comma-separable tag list. Lowercased on save. Indexed for search. |
 | `locked` | boolean | When true, the editor renders read-only and the save endpoint rejects writes. Toggleable from the properties panel. |
-| `version` | string (free-text) | Per-note version label. Defaults to `v0.0` when missing. The editor shows it in the properties panel; users edit it freely. |
+| `version` | string `major.minor` | Per-note version as two non-negative integers, stored bare (e.g. `1.2`). Defaults to `0.0` when missing. **Monotonic** — the server rejects any save that lowers it (equal is allowed, for a pure state change). Edited in the properties panel via two steppers. |
+| `state` | string | Lifecycle state: `development` or `released`. Written **only when the version is above 0.0**; at `0.0` the note is "not versioned" (the key is omitted) and no state is selectable. `released` is only valid at version `1.0` or higher. Switching between `development` and `released` drives the release-copy swap (see [storage.md](storage.md#notesapp-subfolder)). |
 | `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. |
 | `fontSize` | integer | Optional font size in pixels. |
 | `width` | integer | Optional page width in pixels (default 700). |
@@ -464,6 +466,14 @@ of the shell. Behaviours:
   vault restores the same expansion.
 - **Selection**: click a row to select it. Selection drives
   the properties panel and the editor's current note.
+- **State badge on note icons**: a note's icon carries a small
+  lower-right badge reflecting its lifecycle `state` — an amber
+  dot for *under development*, a green tick for *released*, and
+  nothing for *not versioned* (version 0.0). The badge comes from
+  the folder listing, so it reflects the listing's freshness: a
+  note changed in another tab keeps its old badge here until this
+  tab re-lists that folder (same staleness model as empty-folder
+  muting below).
 - **Right-click menu**: New note, New folder, Rename, Move,
   Delete.
 - **Drag-and-drop**: drag a row onto a folder to move it.

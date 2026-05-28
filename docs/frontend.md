@@ -219,8 +219,18 @@ delimiter rules, the edit popover, and the symbol palette.
 
 Shows the selected note or folder's metadata. For notes:
 
-- **Editable inline**: name, tags, locked toggle, version,
+- **Editable inline**: name, tags, locked toggle, version + state,
   per-note appearance (font / font size / page width).
+- **Version + state**: the Version row is two numeric steppers
+  (major `.` minor) plus a state selector. The version is monotonic
+  — the steppers won't go below the current value, and bumping the
+  major resets the minor to 0. The selector offers *Under
+  development* and *Released*; *Released* is disabled below version
+  1.0. At version 0.0 the row shows a non-selectable "Not
+  versioned". When a frozen released copy exists, a recall line
+  shows its version and save time, with a **Recall released
+  version** button (switching to *Released* loads the frozen copy;
+  switching back to *Under development* restores the working copy).
 - **Read-only**: full path, parent folder, created/updated
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
