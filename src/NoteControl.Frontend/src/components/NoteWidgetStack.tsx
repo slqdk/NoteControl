@@ -158,39 +158,44 @@ function NoteWidgetItem({
   // block fills it edge to edge.
   const width = Math.max(1, Math.round(measuredWidth));
 
-  // Patch handlers: strip x/y (no coordinate space in a note) and route
-  // the rest onto the widget's payload field.
+  // Patch handlers: strip x/y (no coordinate space in a note) and MERGE
+  // the rest onto the widget's CURRENT payload. The block components
+  // emit PARTIAL patches (e.g. just { inputs }); replacing the payload
+  // with the partial would drop mode/width/height/etc. The merge keeps
+  // every other field intact. (Bug fixed: interacting with a Motion
+  // widget previously collapsed it because the partial overwrote the
+  // whole payload.)
   const onChangeRss = useCallback(
     (patch: Partial<RssBlockDto>) => {
       const { x: _x, y: _y, ...rest } = patch;
       void _x; void _y;
-      onChange(w.id, { rss: rest as RssBlockDto });
+      if (w.rss) onChange(w.id, { rss: { ...w.rss, ...rest } });
     },
-    [onChange, w.id],
+    [onChange, w.id, w.rss],
   );
   const onChangeTask = useCallback(
     (patch: Partial<TaskAreaDto>) => {
       const { x: _x, y: _y, ...rest } = patch;
       void _x; void _y;
-      onChange(w.id, { task: rest as TaskAreaDto });
+      if (w.task) onChange(w.id, { task: { ...w.task, ...rest } });
     },
-    [onChange, w.id],
+    [onChange, w.id, w.task],
   );
   const onChangeLinks = useCallback(
     (patch: Partial<LinkBlockDto>) => {
       const { x: _x, y: _y, ...rest } = patch;
       void _x; void _y;
-      onChange(w.id, { links: rest as LinkBlockDto });
+      if (w.links) onChange(w.id, { links: { ...w.links, ...rest } });
     },
-    [onChange, w.id],
+    [onChange, w.id, w.links],
   );
   const onChangeMotion = useCallback(
     (patch: Partial<MotionBlockDto>) => {
       const { x: _x, y: _y, ...rest } = patch;
       void _x; void _y;
-      onChange(w.id, { motion: rest as MotionBlockDto });
+      if (w.motion) onChange(w.id, { motion: { ...w.motion, ...rest } });
     },
-    [onChange, w.id],
+    [onChange, w.id, w.motion],
   );
 
   // Host resize handle → set the payload height (clamped + rounded).
@@ -233,9 +238,13 @@ function NoteWidgetItem({
       />
     );
   } else if (w.kind === 'motion' && w.motion) {
+    // Defensive: a widget saved by the earlier partial-overwrite bug
+    // may be missing `mode` on disk. Fall back to 'A' so it still
+    // renders (and the next edit re-merges a complete payload). width
+    // is always supplied by measurement; height by the render path.
     body = (
       <MotionBlock
-        block={{ ...w.motion, x: 0, y: 0, width, height }}
+        block={{ ...w.motion, mode: w.motion.mode ?? 'A', x: 0, y: 0, width, height }}
         onChange={onChangeMotion}
         onDelete={() => onDelete(w.id)}
       />
