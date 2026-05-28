@@ -190,7 +190,7 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
     [onChange],
   );
   const onRatedSlip = useCallback(
-    (v: number) => onChange({ ratedSlipPct: clamp(v, 0, 20) }),
+    (v: number) => onChange({ ratedSlipPct: clamp(v, 0, 10) }),
     [onChange],
   );
 
@@ -278,7 +278,7 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
 
           <label className="nc-motor-control">
             <span className="nc-motor-control-label">
-              Load
+              Load (operating)
               <strong>{block.loadPct.toFixed(0)}%</strong>
             </span>
             <input
@@ -293,13 +293,13 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
 
           <label className="nc-motor-control">
             <span className="nc-motor-control-label">
-              Rated slip
+              Rated slip (motor)
               <strong>{block.ratedSlipPct.toFixed(1)}%</strong>
             </span>
             <input
               type="range"
               min={0}
-              max={20}
+              max={10}
               step={0.5}
               value={block.ratedSlipPct}
               onChange={(e) => onRatedSlip(Number(e.target.value))}
@@ -325,6 +325,42 @@ export function MotorBlock({ block, onChange, onDelete }: MotorBlockProps) {
             fieldRef={fieldAsyncRef}
             rotorRef={rotorAsyncRef}
           />
+        </div>
+
+        {/* Live math — formula then the worked numbers, so a reader of
+            the note sees where every figure on screen comes from. */}
+        <div className="nc-motor-math">
+          <div className="nc-motor-math-row">
+            <span className="nc-motor-math-name">Synchronous speed</span>
+            <span className="nc-motor-math-eq">
+              n<sub>s</sub> = 60·f / p ={' '}
+              60·{block.frequencyHz.toFixed(0)} / {block.polePairs} ={' '}
+              <strong>{Math.round(nSync)} rpm</strong>
+            </span>
+          </div>
+          <div className="nc-motor-math-row">
+            <span className="nc-motor-math-name">Slip</span>
+            <span className="nc-motor-math-eq">
+              s = (load/100)·(s<sub>rated</sub>/100) ={' '}
+              ({block.loadPct.toFixed(0)}/100)·({block.ratedSlipPct.toFixed(1)}/100) ={' '}
+              <strong>{(slip * 100).toFixed(1)}%</strong>
+            </span>
+          </div>
+          <div className="nc-motor-math-row">
+            <span className="nc-motor-math-name">Rotor speed (async)</span>
+            <span className="nc-motor-math-eq">
+              n<sub>r</sub> = n<sub>s</sub>·(1 − s) ={' '}
+              {Math.round(nSync)}·(1 − {slip.toFixed(3)}) ={' '}
+              <strong>{Math.round(nAsync)} rpm</strong>
+            </span>
+          </div>
+          <div className="nc-motor-math-row nc-motor-math-aside">
+            <span className="nc-motor-math-name">Speed lost to slip</span>
+            <span className="nc-motor-math-eq">
+              n<sub>s</sub> − n<sub>r</sub> ={' '}
+              <strong>{Math.round(nSync - nAsync)} rpm</strong>
+            </span>
+          </div>
         </div>
 
         {/* Legend */}

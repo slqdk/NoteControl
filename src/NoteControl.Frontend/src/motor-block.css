@@ -260,3 +260,48 @@
 .nc-motor-swatch-async {
   background: #22c55e;
 }
+
+/* ----- Live math strip --------------------------------------------------- */
+.nc-motor-math {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-motor-math-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.nc-motor-math-name {
+  flex: 0 0 150px;
+  color: var(--nc-fg-muted);
+}
+.nc-motor-math-eq {
+  flex: 1 1 auto;
+  color: var(--nc-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.nc-motor-math-eq strong {
+  font-weight: 700;
+  color: var(--nc-accent);
+}
+.nc-motor-math-aside {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--nc-border);
+}
+.nc-motor-math-aside .nc-motor-math-eq strong {
+  color: var(--nc-fg);
+}
+@media (max-width: 560px) {
+  .nc-motor-math-name {
+    flex-basis: 100%;
+  }
+}
