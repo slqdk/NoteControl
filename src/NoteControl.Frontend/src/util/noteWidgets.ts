@@ -124,6 +124,8 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         frequencyHz: 50,
         loadPct: 50,
         ratedSlipPct: 6,
+        source: 'line',
+        commandRpm: 1500,
         running: true,
       };
       return { id, kind: 'motor', motor };

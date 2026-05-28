@@ -564,6 +564,15 @@ export interface MotorBlockDto {
   loadPct: number;
   /** Rated slip percent at full load (typ. 1..6). */
   ratedSlipPct: number;
+  /**
+   * Field frequency source:
+   *   'line'  — grid-fed, f fixed at 50/60 Hz, speed = 60·f/p.
+   *   'drive' — servo-drive-fed, user commands rpm and f = n·p/60 is
+   *             shown (how a PM servo reaches 8000 rpm). Unknown → line.
+   */
+  source: string;
+  /** Commanded sync speed (rpm), used only in 'drive' mode. */
+  commandRpm: number;
   /** Whether the animation is running. */
   running: boolean;
 }
