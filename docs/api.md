@@ -168,7 +168,7 @@ sub-route the way the startpage has one.
 | Method | Path | Auth | Behaviour |
 |---|---|---|---|
 | GET | `` | vault:viewer | Read the assignments list from `{vault}/.notesapp/assignments.json`. Missing or empty file returns an empty list (no default placeholder). |
-| PUT | `` | vault:editor | Replace the assignments list. Atomic temp-then-rename write. Server stamps the schema version on write — clients may PUT any number; the on-disk file always carries the current version. |
+| PUT | `` | vault:editor | Replace the assignments list. Atomic temp-then-rename write. List order is significant — the frontend groups the flat list into category buckets at render time and preserves order within each bucket, so reordering and cross-bucket moves are persisted purely as changes to this list (order + each item's `category`). Server stamps the schema version on write — clients may PUT any number; the on-disk file always carries the current version. |
 
 ## Admin: server config & operations
 

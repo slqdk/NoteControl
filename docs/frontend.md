@@ -17,11 +17,12 @@ The full route table:
 | `/vaults/:vaultId` | Folder view | required | Tree on the left, folder contents in the middle, properties on the right. |
 | `/vaults/:vaultId/note?path=…` | Editor | required | Single-note editor. The path is URL-encoded. |
 | `/vaults/:vaultId/startpage` | Startpage | required | Per-vault dashboard with movable blocks. |
+| `/vaults/:vaultId/assignments` | Assignments | required | Per-vault assignment board with three category buckets. |
 | `/vaults/:vaultId/templates` | Templates | required | Manages the vault's template files. Has its own header (no shared layout). |
 | `*` (anything else) | redirect to `/vaults` | n/a | |
 
-The folder, editor, and startpage routes share a common
-**VaultLayout** that mounts once per vault session. Switching
+The folder, editor, startpage, and assignments routes share a
+common **VaultLayout** that mounts once per vault session. Switching
 between a folder and a note (or between two notes) does not
 unmount the layout — the tree's cached children, expanded set,
 and selection survive navigation. The templates page does NOT
@@ -413,6 +414,44 @@ files. Each sticky has:
 - Done state (visual only — strikethrough + opacity).
 - One of 6 colours (yellow default).
 - Reorder via drag-and-drop within their parent area.
+
+## Assignments
+
+Per-vault assignment board at `/vaults/:vaultId/assignments`.
+Three pinned category buckets, always shown in this fixed order:
+**Short Term** (red), **Long Term** (yellow), **Development**
+(blue). Each bucket is a responsive card grid on desktop and a
+single stacked column on mobile.
+
+Each card has a single-line subject and an optional multi-line
+details body. Clicking a card's body flips it to an inline edit
+form (category select, subject, details); there's no "done"
+state — the lifecycle is create / edit / delete. A persistent
+**+ Add assignment** button at the bottom opens an inline
+composer.
+
+Cards can be reordered and moved between buckets by dragging a
+grip handle (desktop only — disabled on mobile, where the grip
+isn't rendered):
+
+- Grab a card by its grip and drop it onto another card to
+  insert it immediately **before** that card.
+- Drop onto a bucket's empty space to **append** to that
+  bucket's tail.
+- Dropping onto a different bucket changes the card's category
+  and lands it at the **end** of the target bucket; the card
+  recolours to match its new bucket.
+
+A card's colour is driven entirely by which bucket it's in, so
+a cross-bucket move recolours it on drop. The stored order of
+the flat assignment list is significant — buckets are formed by
+grouping that list by category at render time, preserving order
+within each bucket.
+
+State (the assignment list, including order and per-card
+category) is stored in `{vault}/.notesapp/assignments.json` and
+saved with a debounced ~500ms cadence after the last edit — the
+same cadence as the startpage config.
 
 ## Search box
 
