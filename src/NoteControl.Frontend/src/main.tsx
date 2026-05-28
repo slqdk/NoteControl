@@ -17,6 +17,9 @@ import './motion-block.css';
 // motor-block.css — same additive-feature pattern. The synchronous vs.
 // asynchronous motor compare widget (a note-native widget).
 import './motor-block.css';
+// convert-block.css — same additive-feature pattern. The unit-converter
+// note-native widget.
+import './convert-block.css';
 // KaTeX stylesheet — required for math nodes to render correctly.
 // Imported before our own math.css so any selectors in math.css
 // (specifically: tweaks to the .katex-display container's margin

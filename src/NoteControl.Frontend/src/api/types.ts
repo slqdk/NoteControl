@@ -532,6 +532,31 @@ export interface NoteWidgetDto {
   motion?: MotionBlockDto | null;
   /** Motor compare payload — present iff kind === 'motor'. */
   motor?: MotorBlockDto | null;
+  /** Unit converter payload — present iff kind === 'convert'. */
+  convert?: ConvertBlockDto | null;
+}
+
+/**
+ * Live unit-converter widget config. Mirrors
+ * NoteControl.Shared.NoteWidgets.ConvertBlockDto.
+ *
+ * A category is selected and the user edits any unit field; the others
+ * update live. Persistence stores ONE base-SI value per category in
+ * `values` (keyed by category id), not per-unit text — so there's no
+ * rounding drift and each category remembers its own value across
+ * switches. Unit factors live in the frontend (util/convertUnits.ts);
+ * the server treats this payload as opaque.
+ */
+export interface ConvertBlockDto {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Active category id: force|torque|mass|inertia|length|rotspeed. */
+  category: string;
+  /** Base-SI value per category, keyed by category id. */
+  values?: Record<string, number> | null;
 }
 
 /**

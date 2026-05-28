@@ -1,4 +1,5 @@
 import type {
+  ConvertBlockDto,
   LinkBlockDto,
   MotionBlockDto,
   MotorBlockDto,
@@ -23,7 +24,7 @@ import { MOTION_DEFAULTS } from '../components/MotionBlock';
  */
 export const NOTE_WIDGET_ADD_EVENT = 'nc:add-note-widget';
 
-export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor';
+export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor' | 'convert';
 
 export interface NoteWidgetAddDetail {
   /**
@@ -127,6 +128,18 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         running: true,
       };
       return { id, kind: 'motor', motor };
+    }
+    case 'convert': {
+      const convert: ConvertBlockDto = {
+        id: newId(),
+        x: 0,
+        y: 0,
+        width: 460,
+        height: 340,
+        category: 'force',
+        values: {},
+      };
+      return { id, kind: 'convert', convert };
     }
     default: {
       // Exhaustiveness guard — if a new kind is added to the union

@@ -115,7 +115,63 @@ public sealed record NoteWidgetDto(
     /// this is a note-native widget (no dashboard counterpart), so its
     /// DTO lives in this namespace rather than Startpage.
     /// </summary>
-    MotorBlockDto? Motor = null);
+    MotorBlockDto? Motor = null,
+
+    /// <summary>
+    /// Unit-converter payload. Non-null iff <see cref="Kind"/> is
+    /// "convert". Note-native widget.
+    /// </summary>
+    ConvertBlockDto? Convert = null);
+
+/// <summary>
+/// Configuration for the live unit-converter widget. A category is
+/// selected (force, torque, mass, inertia, length, rotational speed)
+/// and the user edits any unit field; all the other fields in that
+/// category update instantly.
+///
+/// Persistence model: rather than store per-unit text (which would
+/// invite rounding drift on round-trip), we store ONE base-SI value per
+/// category in <see cref="Values"/>, keyed by category id. Each unit
+/// field on screen is then value × (base / unitFactor) at render time.
+/// Switching categories preserves each category's value because they're
+/// all kept in the map. The active category is <see cref="Category"/>.
+///
+/// The unit factors themselves live entirely in the frontend — the
+/// server treats this payload as opaque data, so adding a unit or a
+/// category is a frontend-only change with no DTO bump.
+///
+/// x/y/width/height mirror the other note widgets.
+/// </summary>
+public sealed record ConvertBlockDto(
+    /// <summary>Stable id (client-generated). Opaque to the server.</summary>
+    string Id,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double X = 0,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double Y = 0,
+
+    /// <summary>Widget width in px (host overrides via measurement in-note).</summary>
+    double Width = 460,
+
+    /// <summary>Widget height in px.</summary>
+    double Height = 360,
+
+    /// <summary>
+    /// Active category id. One of the frontend category ids
+    /// ("force", "torque", "mass", "inertia", "length", "rotspeed").
+    /// Unknown values fall back to the first category in the UI.
+    /// </summary>
+    string Category = "force",
+
+    /// <summary>
+    /// Base-SI value per category, keyed by category id. The base unit
+    /// is the SI unit of that category (N, N·m, kg, kg·m², m, rad/s).
+    /// A category absent from the map is treated as 0. Kept as a map so
+    /// each category remembers its own value across switches.
+    /// </summary>
+    IReadOnlyDictionary<string, double>? Values = null);
 
 /// <summary>
 /// Configuration for the synchronous vs. asynchronous motor comparison

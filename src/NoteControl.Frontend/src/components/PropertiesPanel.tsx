@@ -1320,6 +1320,9 @@ function AddNoteWidgetMenu({ notePath }: { notePath: string }) {
           <button type="button" role="menuitem" onClick={() => add('motor')}>
             ⚙️ Motor compare (sync / async)
           </button>
+          <button type="button" role="menuitem" onClick={() => add('convert')}>
+            🔢 Unit converter
+          </button>
           <div className="nc-add-widget-sep" />
           <div className="nc-add-widget-label">Motion calculator</div>
           <button type="button" role="menuitem" onClick={() => add('motion', 'A')}>
