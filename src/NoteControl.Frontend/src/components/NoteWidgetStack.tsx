@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 import type {
   LinkBlockDto,
@@ -21,20 +21,29 @@ import { MotionBlock } from './MotionBlock';
  * Why the components are reused verbatim:
  *   The four dashboard widgets (RSS, Task, Links, Motion) all take
  *   { block|area, onChange(patch), onDelete }. We mount them exactly
- *   as the dashboard does. The only adaptation is positioning.
+ *   as the dashboard does. The only adaptations are layout-related.
  *
- * Positioning adaptation:
- *   On the dashboard each block is position:absolute and reads x/y
- *   from its DTO. In a note we want a vertical stack, not a free
- *   canvas. So each widget gets a position:relative host sized to the
- *   widget's own width/height, and we hand the component a DTO whose
- *   x/y are forced to 0 — the absolute child then pins to the host's
- *   top-left and the host participates in normal block flow. The
- *   widget's drag handler still fires (it writes x/y back through
- *   onChange), but we discard x/y on the way back in, so dragging is
- *   effectively inert here without having to fork the components.
- *   Resize still works and is honoured (it writes width/height, which
- *   we DO keep — the host re-sizes to match).
+ * Layout adaptation (width):
+ *   Each block sets its width/height via INLINE style from its DTO, so
+ *   CSS can't size it. To make a widget fill the note column instead of
+ *   its dashboard width, each host measures its own content width (a
+ *   ResizeObserver) and hands that pixel width down to the block as the
+ *   block's width. No overflow, no fixed dashboard width leaking in.
+ *
+ * Layout adaptation (position):
+ *   On the dashboard each block is position:absolute. The CSS switches
+ *   the hosted block to position:relative so it FLOWS and the host
+ *   auto-fits its height. x/y are forced to 0 and discarded on the way
+ *   back, so dragging is inert here.
+ *
+ * Height (auto-fit + manual override):
+ *   The block needs a concrete height for its internal layout (the
+ *   Motion chart canvas sizes off it), so the payload `height` is the
+ *   block's height and the host wraps it exactly. "Auto-fit by default"
+ *   is the seeded per-kind default height. The host renders its OWN
+ *   full-width bottom resize handle: dragging rewrites the payload
+ *   `height`; double-clicking resets to the kind's default. The block's
+ *   own corner handle is hidden in-note (CSS) to avoid a double grip.
  *
  * Persistence is the caller's concern: onChange/onDelete bubble up to
  * the EditorPage-level note-widgets map, which debounce-saves to the
@@ -50,16 +59,39 @@ export interface NoteWidgetStackProps {
   onDelete: (widgetId: string) => void;
 }
 
-/**
- * Pull the width/height a widget's payload carries, so the relative
- * host can size to match. Defaults are conservative — if a kind has no
- * size (shouldn't happen for the current four), the host falls back to
- * auto height and full width.
- */
-function payloadSize(w: NoteWidgetDto): { width?: number; height?: number } {
-  const p = w.rss ?? w.task ?? w.links ?? w.motion ?? null;
-  if (!p) return {};
-  return { width: p.width, height: p.height };
+/** Per-kind default height, used as the auto-fit baseline and the
+ *  double-click reset target. Mirrors the insert-time defaults in
+ *  util/noteWidgets.ts so a reset returns the widget to how it looked
+ *  when added. */
+const DEFAULT_HEIGHT: Record<string, number> = {
+  rss: 320,
+  task: 380,
+  links: 320,
+  motion: 460,
+};
+
+/** Clamp host height to sane bounds so a drag can't collapse a widget
+ *  to nothing or balloon it off-screen. */
+const HEIGHT_MIN = 120;
+const HEIGHT_MAX = 1600;
+
+/** Fallback width used for the very first render, before the host has
+ *  been measured. Replaced by the measured width on the next frame. */
+const FALLBACK_WIDTH = 640;
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+/** The currently-stored payload for a widget, regardless of kind. */
+function payloadOf(w: NoteWidgetDto): { height?: number } | null {
+  return w.rss ?? w.task ?? w.links ?? w.motion ?? null;
+}
+
+/** The default/reset height for a widget, accounting for Motion-D. */
+function defaultHeightFor(w: NoteWidgetDto): number {
+  if (w.kind === 'motion' && w.motion?.mode === 'D') return 640;
+  return DEFAULT_HEIGHT[w.kind] ?? 320;
 }
 
 export function NoteWidgetStack({
@@ -68,119 +100,219 @@ export function NoteWidgetStack({
   onChange,
   onDelete,
 }: NoteWidgetStackProps) {
-  // Map a payload patch coming out of a child component back onto the
-  // NoteWidgetDto. We strip x/y so dragging never persists a position
-  // (the note stack has no meaningful coordinate space), but keep
-  // width/height so resize sticks.
-  const patchRss = useCallback(
-    (id: string, patch: Partial<RssBlockDto>) => {
-      const { x: _x, y: _y, ...rest } = patch;
-      void _x;
-      void _y;
-      onChange(id, { rss: rest as RssBlockDto });
-    },
-    [onChange],
-  );
-  const patchTask = useCallback(
-    (id: string, patch: Partial<TaskAreaDto>) => {
-      const { x: _x, y: _y, ...rest } = patch;
-      void _x;
-      void _y;
-      onChange(id, { task: rest as TaskAreaDto });
-    },
-    [onChange],
-  );
-  const patchLinks = useCallback(
-    (id: string, patch: Partial<LinkBlockDto>) => {
-      const { x: _x, y: _y, ...rest } = patch;
-      void _x;
-      void _y;
-      onChange(id, { links: rest as LinkBlockDto });
-    },
-    [onChange],
-  );
-  const patchMotion = useCallback(
-    (id: string, patch: Partial<MotionBlockDto>) => {
-      const { x: _x, y: _y, ...rest } = patch;
-      void _x;
-      void _y;
-      onChange(id, { motion: rest as MotionBlockDto });
-    },
-    [onChange],
-  );
-
   if (widgets.length === 0) return null;
 
   return (
     <div className="nc-note-widgets">
-      {widgets.map((w) => {
-        const { width, height } = payloadSize(w);
-        // The host is position:relative and sized to the widget; the
-        // absolute child (x=0,y=0) fills it. Width caps at 100% so a
-        // wide dashboard default doesn't overflow a narrow note column.
-        const hostStyle: React.CSSProperties = {
-          position: 'relative',
-          width: width ? Math.min(width, 100000) : '100%',
-          maxWidth: '100%',
-          height: height ?? undefined,
-        };
-
-        let body: React.ReactNode = null;
-
-        if (w.kind === 'rss' && w.rss) {
-          // x/y forced to 0 so the absolute child pins to the host.
-          const block: RssBlockDto = { ...w.rss, x: 0, y: 0 };
-          body = (
-            <RssBlock
-              vaultId={vaultId}
-              block={block}
-              onChange={(patch) => patchRss(w.id, patch)}
-              onDelete={() => onDelete(w.id)}
-            />
-          );
-        } else if (w.kind === 'task' && w.task) {
-          const area: TaskAreaDto = { ...w.task, x: 0, y: 0 };
-          body = (
-            <TaskArea
-              area={area}
-              onChange={(patch) => patchTask(w.id, patch)}
-              onDelete={() => onDelete(w.id)}
-            />
-          );
-        } else if (w.kind === 'links' && w.links) {
-          const block: LinkBlockDto = { ...w.links, x: 0, y: 0 };
-          body = (
-            <LinksBlock
-              vaultId={vaultId}
-              block={block}
-              onChange={(patch) => patchLinks(w.id, patch)}
-              onDelete={() => onDelete(w.id)}
-            />
-          );
-        } else if (w.kind === 'motion' && w.motion) {
-          const block: MotionBlockDto = { ...w.motion, x: 0, y: 0 };
-          body = (
-            <MotionBlock
-              block={block}
-              onChange={(patch) => patchMotion(w.id, patch)}
-              onDelete={() => onDelete(w.id)}
-            />
-          );
-        } else {
-          // Unknown kind, or a payload missing for its declared kind.
-          // Forward-compat: skip silently rather than crash. A newer
-          // build that wrote a kind this build doesn't know simply
-          // doesn't render it; the widget data is preserved on disk
-          // because we never drop unknown widgets from the map.
-          return null;
-        }
-
-        return (
-          <div key={w.id} className="nc-note-widget-host" style={hostStyle}>
-            {body}
-          </div>
-        );
-      })}
+      {widgets.map((w) => (
+        <NoteWidgetItem
+          key={w.id}
+          vaultId={vaultId}
+          widget={w}
+          onChange={onChange}
+          onDelete={onDelete}
+        />
+      ))}
     </div>
+  );
+}
+
+/**
+ * One widget in the stack. Owns the host element, measures its width,
+ * builds the kind-appropriate block (with measured width + current
+ * height, x/y zeroed), and renders the host resize handle.
+ */
+function NoteWidgetItem({
+  vaultId,
+  widget: w,
+  onChange,
+  onDelete,
+}: {
+  vaultId: string;
+  widget: NoteWidgetDto;
+  onChange: (widgetId: string, patch: Partial<NoteWidgetDto>) => void;
+  onDelete: (widgetId: string) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [measuredWidth, setMeasuredWidth] = useState<number>(FALLBACK_WIDTH);
+
+  // Measure the host width and keep it in sync as the layout changes
+  // (window resize, rail toggles, note-width slider). The block is
+  // handed this width as its inline width so it fills the note column.
+  useLayoutEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const apply = () => {
+      const wpx = el.clientWidth;
+      if (wpx > 0) setMeasuredWidth(wpx);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const payload = payloadOf(w);
+  const height = payload?.height ?? defaultHeightFor(w);
+  // Block width = measured host width. The host has no padding so the
+  // block fills it edge to edge.
+  const width = Math.max(1, Math.round(measuredWidth));
+
+  // Patch handlers: strip x/y (no coordinate space in a note) and route
+  // the rest onto the widget's payload field.
+  const onChangeRss = useCallback(
+    (patch: Partial<RssBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      onChange(w.id, { rss: rest as RssBlockDto });
+    },
+    [onChange, w.id],
+  );
+  const onChangeTask = useCallback(
+    (patch: Partial<TaskAreaDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      onChange(w.id, { task: rest as TaskAreaDto });
+    },
+    [onChange, w.id],
+  );
+  const onChangeLinks = useCallback(
+    (patch: Partial<LinkBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      onChange(w.id, { links: rest as LinkBlockDto });
+    },
+    [onChange, w.id],
+  );
+  const onChangeMotion = useCallback(
+    (patch: Partial<MotionBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      onChange(w.id, { motion: rest as MotionBlockDto });
+    },
+    [onChange, w.id],
+  );
+
+  // Host resize handle → set the payload height (clamped + rounded).
+  const setHeight = useCallback(
+    (h: number) => {
+      const next = Math.round(clamp(h, HEIGHT_MIN, HEIGHT_MAX));
+      if (w.rss) onChange(w.id, { rss: { ...w.rss, height: next } });
+      else if (w.task) onChange(w.id, { task: { ...w.task, height: next } });
+      else if (w.links) onChange(w.id, { links: { ...w.links, height: next } });
+      else if (w.motion) onChange(w.id, { motion: { ...w.motion, height: next } });
+    },
+    [onChange, w],
+  );
+
+  let body: React.ReactNode = null;
+  if (w.kind === 'rss' && w.rss) {
+    body = (
+      <RssBlock
+        vaultId={vaultId}
+        block={{ ...w.rss, x: 0, y: 0, width, height }}
+        onChange={onChangeRss}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'task' && w.task) {
+    body = (
+      <TaskArea
+        area={{ ...w.task, x: 0, y: 0, width, height }}
+        onChange={onChangeTask}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'links' && w.links) {
+    body = (
+      <LinksBlock
+        vaultId={vaultId}
+        block={{ ...w.links, x: 0, y: 0, width, height }}
+        onChange={onChangeLinks}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'motion' && w.motion) {
+    body = (
+      <MotionBlock
+        block={{ ...w.motion, x: 0, y: 0, width, height }}
+        onChange={onChangeMotion}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else {
+    // Unknown kind / missing payload. Forward-compat: skip silently.
+    // Data is preserved on disk (server never drops unknown widgets).
+    return null;
+  }
+
+  return (
+    <div className="nc-note-widget-host" ref={hostRef}>
+      {body}
+      <ResizeHandle
+        heightHint={height}
+        onResize={setHeight}
+        onReset={() => setHeight(defaultHeightFor(w))}
+      />
+    </div>
+  );
+}
+
+/**
+ * Full-width bottom resize strip. Captures the pointer, translates
+ * vertical drag into a new height against the height at drag-start, and
+ * reports it via onResize. Double-click resets to the default.
+ */
+function ResizeHandle({
+  heightHint,
+  onResize,
+  onReset,
+}: {
+  heightHint: number;
+  onResize: (height: number) => void;
+  onReset: () => void;
+}) {
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      dragRef.current = { startY: e.clientY, startH: heightHint };
+    },
+    [heightHint],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      onResize(d.startH + (e.clientY - d.startY));
+    },
+    [onResize],
+  );
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // releasePointerCapture throws if nothing was captured. Ignore.
+    }
+  }, []);
+
+  return (
+    <div
+      className="nc-note-widget-resize"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={onReset}
+      title="Drag to resize · double-click to reset height"
+      aria-label="Resize widget"
+    />
   );
 }

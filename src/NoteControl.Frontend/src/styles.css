@@ -7385,44 +7385,96 @@ a.nc-rss-item-title:hover {
   margin: 4px 0 20px;
 }
 
-/* One widget's host. position:relative establishes the containing
-   block for the absolutely-positioned widget component inside it. The
-   inline style sets width/height to the widget's own size (capped to
-   100% so a wide dashboard default doesn't overflow a narrow note
-   column). When a widget has no intrinsic height the host collapses to
-   the child's height via min-height fallback. */
+/* One widget's host. Auto-fits to the widget's natural height by
+   default (the child flows in normal layout, so the host grows to
+   contain it), and can be manually overridden by dragging the host's
+   own resize handle, which writes an explicit height back to the
+   widget's payload. */
 .nc-note-widget-host {
-  /* position + sizing come from the component's inline style; these are
-     just the visual affordances that make the hosted block read as a
-     distinct card in the note band rather than floating chrome. */
+  position: relative;
   border: 1px solid var(--nc-border);
   border-radius: 10px;
   background: var(--nc-bg-elev-1, var(--nc-bg));
-  overflow: hidden;
+  /* No overflow:hidden — the dashboard widgets clip their own
+     content internally, and clipping here would hide both the
+     widget's own resize handle and our host handle. */
   min-height: 80px;
 }
 
-/* The hosted block components are position:absolute with left/top from
-   their (forced-to-0) x/y. Inside a note host we want them to fill the
-   host edge-to-edge rather than floating at an offset, so neutralise
-   the absolute offset to the host's padding box. The component still
-   reads width/height from its DTO for its own internal layout. */
+/* In a note host we want the widget to flow (contribute its height to
+   the host) rather than float absolutely as it does on the dashboard
+   canvas. Switching to position:relative makes the host auto-fit: the
+   block's intrinsic height becomes the host's height. The block's own
+   inline width/height still apply for its internal layout, but we let
+   width fill the host (capped to the note column) and let height be
+   driven by content unless the host has an explicit override (below).
+
+   These selectors must beat the per-widget stylesheets, some of which
+   load after styles.css (motion-block.css). Inline styles on the block
+   set width/height; we can't override those from CSS, so the component
+   is responsible for handing the block the right width/height in the
+   note context (see NoteWidgetStack). */
 .nc-note-widget-host > .nc-rss-block,
 .nc-note-widget-host > .nc-task-area,
 .nc-note-widget-host > .nc-links-block,
 .nc-note-widget-host > .nc-motion-block {
-  position: absolute;
-  left: 0;
-  top: 0;
-  /* Fill the host so resizing the host (driven by the widget's own
-     resize handle writing width/height back) keeps the block flush. */
-  width: 100%;
-  height: 100%;
-  /* The host already provides the border + radius + clip, so drop the
-     block's own free-floating-canvas border to avoid a double frame. */
+  position: relative;
+  left: auto;
+  top: auto;
+  /* Width comes from the block's own inline style, which the host sets
+     to its measured content width (see NoteWidgetStack). We don't set
+     width here — an inline width would win anyway, and trying to also
+     pin it in CSS just invites confusion. */
+  /* Host owns the visible frame; drop the block's own so there's no
+     double border / double radius. */
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* The hosted blocks each carry their own bottom-right resize handle
+   for the dashboard canvas. In a note the host provides a single
+   full-width bottom handle instead, so hide the block's own to avoid
+   two overlapping grips that both write height. RSS / Task / Links all
+   reuse the .nc-rss-block-resize handle class; Motion has its own. */
+.nc-note-widget-host .nc-rss-block-resize,
+.nc-note-widget-host .nc-motion-block-resize {
+  display: none;
+}
+
+/* Host-level resize handle. Bottom edge, full width, thin grab strip.
+   Dragging it sets an explicit height on the widget payload (overriding
+   auto-fit); a double-click clears the override back to auto-fit. */
+.nc-note-widget-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10px;
+  cursor: ns-resize;
+  /* Sits above the widget content so the drag always lands on the
+     handle, not on a control underneath. */
+  z-index: 5;
+  /* Subtle affordance: a faint grip bar centred on the strip, only
+     visible on hover so it doesn't clutter the resting state. */
+  background: transparent;
+  touch-action: none;
+}
+.nc-note-widget-resize::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--nc-border-strong);
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.nc-note-widget-host:hover .nc-note-widget-resize::after {
+  opacity: 0.7;
 }
 
 /* ----- "Add Note Widget" dropdown in the Properties panel ----------
