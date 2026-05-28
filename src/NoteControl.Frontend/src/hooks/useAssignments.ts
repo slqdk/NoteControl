@@ -43,6 +43,27 @@ export interface UseAssignmentsResult {
   updateAssignment: (id: string, patch: Partial<Omit<AssignmentDto, 'id'>>) => void;
   /** Delete one assignment by id. No-op if id not found. */
   deleteAssignment: (id: string) => void;
+  /**
+   * Move one assignment by id, optionally changing its category,
+   * and reposition it in the flat list.
+   *
+   * - `targetCategory`: the bucket it ends up in. If it differs
+   *   from the current category the card's `category` is rewritten.
+   * - `beforeId`: insert the moved card immediately before this
+   *   assignment in the flat list. If null/undefined (or the id
+   *   isn't found), the card is appended to the END of the flat
+   *   list. Because rendering groups by category in stored order,
+   *   appending to the flat list lands the card at the end of its
+   *   target bucket — which is what a drop onto empty bucket space
+   *   or a cross-bucket drop should do.
+   *
+   * No-op if `id` isn't found.
+   */
+  moveAssignment: (
+    id: string,
+    targetCategory: AssignmentDto['category'],
+    beforeId?: string | null,
+  ) => void;
 }
 
 export function useAssignments(vaultId: string | undefined): UseAssignmentsResult {
@@ -155,6 +176,51 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
     });
   }, []);
 
+  const moveAssignment = useCallback(
+    (
+      id: string,
+      targetCategory: AssignmentDto['category'],
+      beforeId?: string | null,
+    ) => {
+      setConfig((prev) => {
+        if (!prev) return prev;
+        const moving = prev.assignments.find((a) => a.id === id);
+        if (!moving) return prev;
+        // No-op the degenerate "drop onto itself" case so we don't
+        // dirty the config and fire a pointless save.
+        if (beforeId === id) return prev;
+
+        // Rewrite category if the drop crossed buckets.
+        const updated =
+          moving.category === targetCategory
+            ? moving
+            : { ...moving, category: targetCategory };
+
+        // Pull the card out, then splice it back in. We rebuild the
+        // flat list rather than mutate in place so React sees a new
+        // array reference and the debounced save picks it up.
+        const without = prev.assignments.filter((a) => a.id !== id);
+        const insertAt =
+          beforeId == null
+            ? without.length
+            : (() => {
+                const idx = without.findIndex((a) => a.id === beforeId);
+                // beforeId not found (e.g. it was the card we just
+                // removed, or a stale id) → append to the end.
+                return idx === -1 ? without.length : idx;
+              })();
+
+        const assignments = [
+          ...without.slice(0, insertAt),
+          updated,
+          ...without.slice(insertAt),
+        ];
+        return { ...prev, assignments };
+      });
+    },
+    [],
+  );
+
   return {
     config,
     loadError,
@@ -162,5 +228,6 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
     addAssignment,
     updateAssignment,
     deleteAssignment,
+    moveAssignment,
   };
 }

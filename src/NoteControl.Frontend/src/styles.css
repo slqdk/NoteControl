@@ -6739,7 +6739,7 @@ a.nc-rss-item-title:hover {
   align-items: flex-start;
   border: 1px solid var(--nc-border);
   border-radius: 6px;
-  padding: 10px 36px 10px 12px; /* extra right padding for the trash button */
+  padding: 10px 36px 26px 12px; /* right pad for trash; bottom pad for the grip handle */
   background: var(--nc-bg-elev);
   cursor: pointer;
   transition: border-color 0.1s ease, box-shadow 0.1s ease;
@@ -6825,6 +6825,60 @@ a.nc-rss-item-title:hover {
 }
 .nc-assignments-card-delete:hover {
   background: rgba(0, 0, 0, 0.08);
+}
+
+/* ---------- Drag-and-drop reorder (desktop only) ---------- */
+
+/* Grip handle: the ONLY drag source on a card. Sits bottom-right so
+   it doesn't collide with the trash button at top-right. Faint until
+   the card is hovered, matching the trash button's reveal pattern. */
+.nc-assignments-card-grip {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: #475569;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+}
+.nc-assignments-card:hover .nc-assignments-card-grip {
+  opacity: 0.7;
+}
+.nc-assignments-card-grip:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
+.nc-assignments-card-grip:active {
+  cursor: grabbing;
+}
+
+/* The card being dragged: dim it so the insertion point reads clearly. */
+.nc-assignments-card-dragging {
+  opacity: 0.4;
+}
+
+/* Drop-before affordance: a thick accent line on the card's leading
+   edge, marking where the dragged card will be inserted. */
+.nc-assignments-card-drop-before {
+  box-shadow: -3px 0 0 0 #2563eb;
+}
+
+/* Bucket-level drop (append to tail): highlight the whole section so
+   it's clear the card will land here even when not over a card. */
+.nc-assignments-section-drop-active {
+  background: rgba(37, 99, 235, 0.06);
+  border-radius: 8px;
 }
 
 /* ---------- Card edit mode ---------- */

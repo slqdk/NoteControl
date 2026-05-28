@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useMemo, useState } from 'react';
 import { useOutletContext, useParams } from 'react-router-dom';
 
@@ -75,6 +76,17 @@ export function AssignmentsPage() {
   // handler before swapping in.
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // ----- drag-and-drop reordering state -----
+  // The id of the card currently being dragged (null when no drag
+  // is in flight). Native HTML5 DnD; only the grip handle is the
+  // drag source, so click-to-edit on the card body is untouched.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The id of the card the pointer is currently hovering over as a
+  // drop-before target, or a `cat:<category>` sentinel when hovering
+  // the empty tail of a bucket (drop = append to that bucket). Drives
+  // the insertion-line / bucket-highlight affordance.
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
   // Composer state. Lives at page level so opening / closing it
   // doesn't fight with React's input focus management.
   const [composerOpen, setComposerOpen] = useState(false);
@@ -120,6 +132,40 @@ export function AssignmentsPage() {
     );
   }
 
+  // ---------- drag-and-drop handlers ----------
+  // Defined here (not per-card) so all cards share one set of stable
+  // handlers and the page owns the drag/drop state. Mobile skips DnD
+  // entirely — touch drag is fiddly and the page is a single scroll
+  // column there; reordering on mobile is out of scope for now.
+
+  function handleDragStart(id: string) {
+    setDraggingId(id);
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null);
+    setDropTarget(null);
+  }
+
+  // Drop BEFORE a specific card (same-bucket reorder, or cross-bucket
+  // insert at a precise spot). beforeId is the hovered card's id.
+  function handleDropBefore(beforeId: string, category: AssignmentCategory) {
+    if (draggingId && draggingId !== beforeId) {
+      assignments.moveAssignment(draggingId, category, beforeId);
+    }
+    handleDragEnd();
+  }
+
+  // Drop onto the bucket itself (empty space / tail) → append to the
+  // end of that bucket. This is also the cross-bucket landing spot:
+  // dropping Short→Long anywhere but on a specific Long card appends.
+  function handleDropInBucket(category: AssignmentCategory) {
+    if (draggingId) {
+      assignments.moveAssignment(draggingId, category, null);
+    }
+    handleDragEnd();
+  }
+
   // ---------- main render ----------
 
   return (
@@ -146,6 +192,15 @@ export function AssignmentsPage() {
           category={cat}
           items={grouped[cat]}
           editingId={editingId}
+          // Drag-and-drop is desktop-only (see handlers above).
+          dragEnabled={!isMobile}
+          draggingId={draggingId}
+          dropTarget={dropTarget}
+          onSetDropTarget={setDropTarget}
+          onDragStartCard={handleDragStart}
+          onDragEndCard={handleDragEnd}
+          onDropBefore={handleDropBefore}
+          onDropInBucket={handleDropInBucket}
           onStartEdit={(id) => setEditingId(id)}
           onStopEdit={() => setEditingId(null)}
           onPatch={assignments.updateAssignment}
@@ -199,6 +254,14 @@ interface AssignmentCategorySectionProps {
   category: AssignmentCategory;
   items: AssignmentDto[];
   editingId: string | null;
+  dragEnabled: boolean;
+  draggingId: string | null;
+  dropTarget: string | null;
+  onSetDropTarget: (target: string | null) => void;
+  onDragStartCard: (id: string) => void;
+  onDragEndCard: () => void;
+  onDropBefore: (beforeId: string, category: AssignmentCategory) => void;
+  onDropInBucket: (category: AssignmentCategory) => void;
   onStartEdit: (id: string) => void;
   onStopEdit: () => void;
   onPatch: (id: string, patch: Partial<Omit<AssignmentDto, 'id'>>) => void;
@@ -209,11 +272,44 @@ function AssignmentCategorySection({
   category,
   items,
   editingId,
+  dragEnabled,
+  draggingId,
+  dropTarget,
+  onSetDropTarget,
+  onDragStartCard,
+  onDragEndCard,
+  onDropBefore,
+  onDropInBucket,
   onStartEdit,
   onStopEdit,
   onPatch,
   onDelete,
 }: AssignmentCategorySectionProps) {
+  // Sentinel target id for "append to this bucket's tail" — used to
+  // highlight the bucket when the pointer is over empty space rather
+  // than over a specific card.
+  const bucketTarget = `cat:${category}`;
+  const bucketActive = dragEnabled && dropTarget === bucketTarget;
+
+  // Bucket-level drop: fires when the pointer is over the section but
+  // NOT over a specific card (card handlers stopPropagation). Appends
+  // the dragged card to the end of this bucket.
+  const bucketDropProps = dragEnabled
+    ? {
+        onDragOver: (e: React.DragEvent) => {
+          if (!draggingId) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          onSetDropTarget(bucketTarget);
+        },
+        onDrop: (e: React.DragEvent) => {
+          if (!draggingId) return;
+          e.preventDefault();
+          onDropInBucket(category);
+        },
+      }
+    : {};
+
   // Empty bucket: render the header anyway so the page structure
   // is consistent. The empty state is a tiny muted hint; we don't
   // collapse the whole section because that would visually hide
@@ -224,8 +320,12 @@ function AssignmentCategorySection({
       className={[
         'nc-assignments-section',
         `nc-assignments-section-${category}`,
-      ].join(' ')}
+        bucketActive ? 'nc-assignments-section-drop-active' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       data-category={category}
+      {...bucketDropProps}
     >
       <h2 className="nc-assignments-section-title">{CATEGORY_LABEL[category]}</h2>
       {items.length === 0 ? (
@@ -237,6 +337,17 @@ function AssignmentCategorySection({
               key={a.id}
               assignment={a}
               isEditing={editingId === a.id}
+              dragEnabled={dragEnabled}
+              isDragging={draggingId === a.id}
+              isDropBefore={dragEnabled && dropTarget === a.id}
+              onDragStart={() => onDragStartCard(a.id)}
+              onDragEnd={onDragEndCard}
+              onDragOverCard={() => {
+                if (draggingId && draggingId !== a.id) {
+                  onSetDropTarget(a.id);
+                }
+              }}
+              onDropOnCard={() => onDropBefore(a.id, category)}
               onStartEdit={() => onStartEdit(a.id)}
               onStopEdit={onStopEdit}
               onPatch={(patch) => onPatch(a.id, patch)}
@@ -254,6 +365,13 @@ function AssignmentCategorySection({
 interface AssignmentCardProps {
   assignment: AssignmentDto;
   isEditing: boolean;
+  dragEnabled: boolean;
+  isDragging: boolean;
+  isDropBefore: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverCard: () => void;
+  onDropOnCard: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
   onPatch: (patch: Partial<Omit<AssignmentDto, 'id'>>) => void;
@@ -270,6 +388,13 @@ interface AssignmentCardProps {
 function AssignmentCard({
   assignment,
   isEditing,
+  dragEnabled,
+  isDragging,
+  isDropBefore,
+  onDragStart,
+  onDragEnd,
+  onDragOverCard,
+  onDropOnCard,
   onStartEdit,
   onStopEdit,
   onPatch,
@@ -278,10 +403,64 @@ function AssignmentCard({
   const subject = assignment.subject.trim();
   const details = assignment.details.trim();
 
+  // Drop-target wiring shared by both card states. A card is a drop
+  // target whenever DnD is enabled; the grip is the only drag SOURCE
+  // (so dragging never starts from the body and never collides with
+  // click-to-edit). onDragOver must preventDefault to allow a drop.
+  const cardDropProps = dragEnabled
+    ? {
+        onDragOver: (e: React.DragEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          onDragOverCard();
+        },
+        onDrop: (e: React.DragEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDropOnCard();
+        },
+      }
+    : {};
+
+  // The grip is a tiny drag-only handle. draggable lives HERE, not on
+  // the card, so the card body stays clickable for edit. dataTransfer
+  // is set to a harmless payload so Firefox actually initiates a drag.
+  const grip = dragEnabled ? (
+    <button
+      type="button"
+      className="nc-assignments-card-grip"
+      title="Drag to reorder or move between buckets"
+      aria-label="Drag to reorder"
+      data-no-edit="true"
+      draggable
+      onClick={(e) => e.stopPropagation()}
+      onDragStart={(e) => {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', assignment.id);
+        onDragStart();
+      }}
+      onDragEnd={(e) => {
+        e.stopPropagation();
+        onDragEnd();
+      }}
+    >
+      ⠿
+    </button>
+  ) : null;
+
   if (!isEditing) {
     return (
       <div
-        className="nc-assignments-card"
+        className={[
+          'nc-assignments-card',
+          isDragging ? 'nc-assignments-card-dragging' : '',
+          isDropBefore ? 'nc-assignments-card-drop-before' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        {...cardDropProps}
         onClick={(e) => {
           // Ignore clicks on the action buttons / category select —
           // those have their own handlers. Without this guard, the
@@ -314,6 +493,7 @@ function AssignmentCard({
             <div className="nc-assignments-card-details">{details}</div>
           )}
         </div>
+        {grip}
         <button
           type="button"
           className="nc-assignments-card-delete"
@@ -337,7 +517,16 @@ function AssignmentCard({
   // sight). Subject below it (single line), details below that
   // (textarea).
   return (
-    <div className="nc-assignments-card nc-assignments-card-editing">
+    <div
+      className={[
+        'nc-assignments-card',
+        'nc-assignments-card-editing',
+        isDropBefore ? 'nc-assignments-card-drop-before' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      {...cardDropProps}
+    >
       <div className="nc-assignments-card-edit-fields">
         <label className="nc-assignments-edit-label">
           Category
