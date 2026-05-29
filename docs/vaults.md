@@ -29,15 +29,25 @@ permissions on a whole vault.
 
 Roles on a vault, lowest to highest privilege:
 
-- **`viewer`** — read everything, run searches, see the
-  dashboards. Cannot write notes, change templates, share, or
-  configure.
+- **`viewer`** — read everything (notes, folders, search,
+  templates, assignments). Cannot write anything. The web UI
+  hides every write affordance for a viewer-role vault: no
+  dashboards section in the tree, no Daily Note + / "+" / Widgets+
+  / Templates / Add-assignment buttons, every Properties field
+  rendered disabled, editor in read-only mode. Opening a viewer
+  vault lands on the folder root rather than a dashboard.
 - **`editor`** — viewer + create/update/delete notes and folders,
   edit templates, add/rename/delete dashboards and edit their
   layout.
 - **`owner`** — editor + share/unshare with other users + change
   appearance + delete the vault + rebuild the search index +
   install sample data.
+
+The UI hiding is a **convenience**, not a security boundary —
+the server gates every write endpoint on the caller's role
+regardless of what the client sends. If a request bypasses the
+hidden UI (URL navigation, scripted call, stale cached view),
+the API still returns 403.
 
 The owner role is granted when the vault is created (or
 registered, for an existing folder). It is **stored as a

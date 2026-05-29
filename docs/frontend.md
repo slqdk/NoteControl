@@ -52,11 +52,26 @@ The top bar contains, left to right:
 1. **Brand / vault picker** — depends on context:
    - On the vault list page: just the brand text.
    - On any `/vaults/:vaultId/*` page with the full vault list
-     loaded: a desktop-only **vault picker**. ≤ 3 vaults render
-     as inline pills. > 3 vaults render as the active pill +
-     dropdown for the others. Right-click on the active pill
-     opens an **appearance popover** (12 emoji + 8 colour swatches
-     + auto fallback) for changing the vault's icon/colour.
+     loaded: a desktop-only **vault picker**. The picker splits
+     vaults by ownership: **personal** vaults (caller is the
+     owner) render as inline pills at the left with the existing
+     overflow algorithm (≤ N pills inline + "+N ▾" dropdown for
+     the rest); **shared** vaults (someone else's vaults the
+     caller has a permission row on) collapse into a single
+     trailing **"Shared ▾"** trigger at the right end of the
+     row. When the active vault is a shared one, the Shared
+     trigger takes on the active pill style and shows that
+     vault's avatar + name + caret instead of the generic
+     "🤝 Shared +N" label, so the user always sees which vault
+     they're in. The trigger's dropdown lists every shared
+     vault with a "by <owner-username>" hint. Mobile keeps its
+     single-trigger dropdown but orders entries personal-first
+     with a small "Shared" subheading divider when both groups
+     are non-empty. Right-click on the active pill (whether
+     personal-inline or active-shared) opens an **appearance
+     popover** (12 emoji + 8 colour swatches + auto fallback) —
+     visible to **editors and owners only**; viewer-role vaults
+     get the browser's native context menu instead.
 2. **Search box** — searches across vaults, scoped by the per-vault
    toggle row in the dropdown. Submits to
    `/api/vaults/{id}/search` once per selected vault. Hits open
@@ -66,8 +81,17 @@ The top bar contains, left to right:
    properties panel) in vault routes. Empty on routes without a
    shared layout.
 4. **Templates link** — direct route to the templates page for
-   the current vault (in vault routes).
-5. **Account menu** — current user's name, with a popover menu
+   the current vault (in vault routes). **Hidden for viewer-role
+   vaults** — the templates page is editing-focused (Save /
+   Delete / Create) and every write would 403; viewers who need
+   to inspect templates can still reach the page by URL.
+5. **Widgets+** — appears only on a dashboard route, and only
+   for editors / owners. Opens a dropdown of widget kinds to
+   add to the active dashboard. Hidden for viewer-role vaults
+   (and effectively unreachable for them anyway, since viewers
+   are redirected away from dashboard routes — see
+   [Dashboards & viewers](#dashboards-and-viewers) below).
+6. **Account menu** — current user's name, with a popover menu
    (Account, My sessions, Settings, Sign out).
 
 ## Settings (web UI, not the tray)
@@ -193,6 +217,14 @@ The menu closes on outside click, Escape, or after picking an
 item. Picking Import suppresses the menu before the OS file
 picker pops up so the menu doesn't shadow the picker visually.
 
+**Viewer-role vaults**: the whole rail-header row is empty —
+both the Daily Note + pill and the "+" dropdown are write
+affordances and neither makes sense for read-only access. The
+rail header reduces to a thin empty band above the tree; the
+tree itself remains usable for navigation. The "+" tree-context-
+menu also filters out write items (New note here, New folder,
+Rename…, Delete) — only Open and Properties stay.
+
 ## Editor view
 
 The editor opens when a note is selected. The layout still has
@@ -215,6 +247,16 @@ features and shortcuts are documented in [notes.md](notes.md).
 The custom extensions include LaTeX/KaTeX math rendering
 (inline and block); see [notes.md § Math](notes.md#math) for
 delimiter rules, the edit popover, and the symbol palette.
+
+**Read-only mode**: the editor renders read-only when either
+the note's frontmatter `locked` flag is true OR the active
+vault is viewer-role (the host page passes `forceReadOnly` into
+`NoteEditor`). Both flow through the same TipTap `editable:
+false` path and the same `.nc-editor-locked` styling — caret
+suppressed, keystrokes discarded, links click-through to a new
+tab instead of opening the link-edit popover. The two
+conditions are OR'd; a viewer on a locked note sees the same
+read-only behaviour as on any other note.
 
 ## Properties panel
 
@@ -259,6 +301,16 @@ desktop-only affordance for now.
 
 The panel toggles via the rail-toggle button in the topbar (or
 collapses automatically on narrow viewports).
+
+**Viewer-role vaults**: every editable field renders **disabled**
+— Name, Tags, Locked, Version + state, Font / Font size /
+Width — so the viewer can read the values but inputs are inert.
+The action buttons (Move, Delete, ＋ Add Note Widget) are
+**hidden entirely**. The folder Cover row (Upload / Replace /
+Delete) is also hidden; the cover banner itself still renders
+on the Folder page. Export buttons remain — export is a read
+operation. The mobile `MobileNoteProperties` slim-section
+mirrors the desktop disable/hide propagation.
 
 ## Note widgets
 
@@ -320,6 +372,12 @@ A few mobile-specific affordances:
   reachable by URL, but isn't surfaced.
 - Touch resize handles for images/videos in the editor are
   **not** in scope yet (queue item).
+- **Viewer-role mobile**: the MobileNavBar's Daily Notes anchor
+  is hidden (`POST /daily/today` is editor-only); the FolderPage's
+  bottom "+ Add note or folder" composer is hidden; the
+  MobileNoteProperties slim-section's Delete button is hidden
+  and its editable fields render disabled, matching the desktop
+  properties panel.
 
 This is desktop-first software. Mobile is "doesn't break,"
 not "first-class."
@@ -452,6 +510,26 @@ startpage route) lists "Add RSS feed", "Add Task area", "Add
 Links". The dropdown communicates with the page via window
 `CustomEvent`s — no shared context.
 
+### Dashboards and viewers
+
+The dashboards UI is **hidden entirely for viewer-role vaults**:
+
+- The tree's Dashboards section is not rendered (the section
+  heading and per-dashboard rows both disappear; Assignments
+  tightens up against the rail header).
+- The topbar's **Widgets+** dropdown is suppressed.
+- Opening a viewer-role vault lands on the **folder root**
+  rather than a dashboard. `VaultListPage`'s auto-redirect
+  picks `/vaults/{id}` over `/vaults/{id}/startpage` when the
+  picked vault's `myRole === 'viewer'`; `StartpagePage` itself
+  also redirects viewers to the folder root before fetching
+  the dashboards config; `DashboardPage` defence-in-depths the
+  same redirect at the route level (covering direct URL hits,
+  bookmarks made when the user previously had higher role,
+  links from teammates).
+
+Editors and owners see the dashboards section as before.
+
 ## Sticky notes
 
 Sticky notes only exist inside Task areas on the startpage.
@@ -502,6 +580,13 @@ State (the assignment list, including order and per-card
 category) is stored in `{vault}/.notesapp/assignments.json` and
 saved with a debounced ~500ms cadence after the last edit — the
 same cadence as the startpage config.
+
+**Viewer-role vaults**: existing cards remain visible (read-
+only navigation is the point); the **+ Add assignment** button
+at the bottom is hidden. Click-to-edit on a card is still
+wired in the UI but a committed edit will 403 server-side and
+surface as a `saveError` banner above the title — finer-grained
+per-card edit gating may follow in a future ship.
 
 ## Search box
 
