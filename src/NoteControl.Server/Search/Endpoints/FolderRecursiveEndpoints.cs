@@ -35,6 +35,12 @@ public static class FolderRecursiveEndpoints
     ///
     /// Path semantics: empty/missing <c>path</c> means whole vault.
     /// Limit defaults to 100; max 200.
+    ///
+    /// Each row carries <c>VersionMajor</c> / <c>VersionMinor</c> /
+    /// <c>State</c> so the frontend can group rows by lifecycle state
+    /// (released → development → not-versioned). The values are sniffed
+    /// from each file's frontmatter prefix — same per-note cost the
+    /// non-recursive folder listing already pays.
     /// </summary>
     private static async Task<IResult> ListRecursiveAsync(
         Guid vaultId,
@@ -46,7 +52,8 @@ public static class FolderRecursiveEndpoints
         try
         {
             var folderPath = NormalizeFolder(path);
-            var notes = await index.ListNotesAsync(vaultId, folderPath, limit ?? 100, ct);
+            var notes = await index.ListNotesWithVersionAsync(
+                vaultId, folderPath, limit ?? 100, ct);
 
             // Project to NoteSummaryDto so the frontend can reuse the
             // same TypeScript type it uses for /folder responses.
@@ -61,7 +68,10 @@ public static class FolderRecursiveEndpoints
                     // is acceptable; if a future caller needs accurate
                     // sizes we'd need either to add a `size` column to
                     // the index or stat each file (defeats the purpose).
-                    SizeBytes: 0))
+                    SizeBytes: 0,
+                    VersionMajor: n.VersionMajor,
+                    VersionMinor: n.VersionMinor,
+                    State: n.State))
                 .ToList();
 
             return Results.Ok(summaries);

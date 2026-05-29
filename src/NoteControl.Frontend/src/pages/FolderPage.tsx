@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError, notesApi } from '../api/client';
@@ -14,12 +14,17 @@ import { formatAbsoluteDateShort, formatNoteTimestamp } from '../utils/time';
  * Layout, top → bottom:
  *   1. Folder title (full path, breadcrumb-style)
  *   2. Search box, scoped to this folder + descendants
- *   3. All notes under this folder, recursively, newest-updated first.
- *      Each row's label is the path **relative to the current folder**,
- *      with the .md stripped:
- *        - viewing root  →  "Projects/Q4/launch"
- *        - viewing Projects → "Q4/launch"
- *        - viewing Projects/Q4 → "launch"
+ *   3. All notes under this folder, recursively, grouped by lifecycle
+ *      state. Section order: Released → Under development →
+ *      Not versioned. Within each section the rows stay sorted
+ *      most-recently-updated first. Each row's label is the path
+ *      **relative to the current folder**, with the .md stripped,
+ *      split into a greyed folder-prefix and a black filename:
+ *        - viewing root  →  greyed "Projects/Q4/" + black "launch"
+ *        - viewing root, note at root → greyed "./" + black "launch"
+ *        - viewing Projects → greyed "Q4/" + black "launch"
+ *      Versioned rows get a `v{major}.{minor}` pill before the
+ *      timestamp; unversioned rows just show the timestamp.
  *   4. **Mobile only**: an Add footer at the bottom that lets the
  *      user create a note or folder under the current folder. The
  *      footer mirrors the assignments-page Add button visual
@@ -169,6 +174,13 @@ export function FolderPage() {
     };
   }, [folderPath]);
 
+  // Partition the recursive listing by lifecycle state. The server
+  // already returns the rows sorted by mtime DESC, so each per-state
+  // bucket inherits that ordering "for free" — we just bucket without
+  // re-sorting. useMemo keeps this stable across re-renders that don't
+  // change the listing (e.g. a cover refetch shouldn't reshuffle).
+  const grouped = useMemo(() => groupByState(notes), [notes]);
+
   if (!vaultId) {
     return null;
   }
@@ -219,43 +231,41 @@ export function FolderPage() {
           <p className="nc-empty">No notes here yet.</p>
         ) : (
           /*
-            Compact row layout (Ship N): each note is a single line.
-            Name on the left (truncated with ellipsis if it overflows),
-            timestamp on the right showing BOTH relative ("1 hour ago")
-            and absolute ("May 20"). The two timestamps are separated
-            by an interpunct so they read as one unit rather than two
-            competing data points.
-
-            The .nc-list-compact modifier opts the list into the
-            denser styling: smaller font, tighter padding, zebra
-            striping using the theme's --nc-stripe-bg-* variables
-            (same source the LinksBlock zebra uses, so the stripe
-            colour follows the active gradient preset light/dark).
-
-            We deliberately keep the existing .nc-list base class so
-            the underlying list semantics (no bullets, no padding)
-            are unchanged. The compact modifier only adds visual
-            tweaks; it doesn't redefine layout primitives.
+            Three lifecycle-state groups, top to bottom:
+              Released → Under development → Not versioned
+            Empty groups are skipped — we don't render a heading for
+            a section that has zero rows. Within each group, rows are
+            already in newest-updated-first order (server-side sort).
           */
-          <ul className="nc-list nc-list-compact">
-            {notes.map((note) => (
-              <li key={note.path}>
-                <Link
-                  to={`/vaults/${vaultId}/note?path=${encodeURIComponent(note.path)}`}
-                  className="nc-note-link"
-                >
-                  <span className="nc-note-name">
-                    {stripMd(relativePath(note.path, folderPath))}
-                  </span>
-                  <span className="nc-note-time">
-                    {formatNoteTimestamp(note.lastModified)}
-                    {' · '}
-                    {formatAbsoluteDateShort(note.lastModified)}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <>
+            {grouped.released.length > 0 && (
+              <StateGroup
+                kind="released"
+                label="Released"
+                notes={grouped.released}
+                vaultId={vaultId}
+                folderPath={folderPath}
+              />
+            )}
+            {grouped.development.length > 0 && (
+              <StateGroup
+                kind="development"
+                label="Under development"
+                notes={grouped.development}
+                vaultId={vaultId}
+                folderPath={folderPath}
+              />
+            )}
+            {grouped.notVersioned.length > 0 && (
+              <StateGroup
+                kind="notVersioned"
+                label="Not versioned"
+                notes={grouped.notVersioned}
+                vaultId={vaultId}
+                folderPath={folderPath}
+              />
+            )}
+          </>
         )}
       </section>
 
@@ -282,6 +292,146 @@ export function FolderPage() {
       )}
     </div>
   );
+}
+
+// ============================================================ StateGroup
+
+type StateKind = 'released' | 'development' | 'notVersioned';
+
+interface StateGroupProps {
+  kind: StateKind;
+  label: string;
+  notes: NoteSummaryDto[];
+  vaultId: string;
+  folderPath: string;
+}
+
+/**
+ * One lifecycle-state section of the recursive list: a heading
+ * (with state badge for released/development), then a compact list
+ * of rows. Each row splits the relative path into a greyed prefix
+ * and a black filename, appends an optional version pill, and ends
+ * with the timestamp.
+ *
+ * The badge here is a section-level marker, NOT a per-row one —
+ * the heading carries the state, so individual rows don't repeat it.
+ * This matches the user's mental model: "I'm looking at the released
+ * notes" rather than "this note is green-ticked".
+ */
+function StateGroup({ kind, label, notes, vaultId, folderPath }: StateGroupProps) {
+  return (
+    <div className="nc-state-group">
+      <h3 className={`nc-state-heading nc-state-heading-${kind}`}>
+        {kind === 'released' && <span className="nc-state-badge-released">✓</span>}
+        {kind === 'development' && <span className="nc-state-badge-development">●</span>}
+        <span className="nc-state-heading-label">{label}</span>
+        <span className="nc-state-heading-count">{notes.length}</span>
+      </h3>
+      <ul className="nc-list nc-list-compact">
+        {notes.map((note) => {
+          const rel = stripMd(relativePath(note.path, folderPath));
+          const { prefix, name } = splitPathForDisplay(rel);
+          const versionLabel = isVersioned(note)
+            ? `v${note.versionMajor}.${note.versionMinor}`
+            : null;
+          return (
+            <li key={note.path}>
+              <Link
+                to={`/vaults/${vaultId}/note?path=${encodeURIComponent(note.path)}`}
+                className="nc-note-link"
+                title={rel}
+              >
+                <span className="nc-note-name">
+                  {prefix && <span className="nc-note-path-prefix">{prefix}</span>}
+                  <span className="nc-note-filename">{name}</span>
+                </span>
+                <span className="nc-note-meta">
+                  {versionLabel && (
+                    <span className="nc-note-version">{versionLabel}</span>
+                  )}
+                  <span className="nc-note-time">
+                    {formatNoteTimestamp(note.lastModified)}
+                    {' · '}
+                    {formatAbsoluteDateShort(note.lastModified)}
+                  </span>
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ============================================================ helpers
+
+/**
+ * Bucket the (server-sorted) listing into the three lifecycle states
+ * we render. The server returns a `state` string per note; we map
+ * known values to a bucket and default anything we don't recognise
+ * to "not versioned" so a forward-compat state value can't make a
+ * row disappear from the page.
+ */
+interface GroupedNotes {
+  released: NoteSummaryDto[];
+  development: NoteSummaryDto[];
+  notVersioned: NoteSummaryDto[];
+}
+
+function groupByState(notes: NoteSummaryDto[] | null): GroupedNotes {
+  const out: GroupedNotes = { released: [], development: [], notVersioned: [] };
+  if (!notes) return out;
+  for (const note of notes) {
+    if (note.state === 'released') {
+      out.released.push(note);
+    } else if (note.state === 'development') {
+      out.development.push(note);
+    } else {
+      // Treat "not-versioned", missing, and any unknown state as the
+      // unversioned bucket. We deliberately do NOT also check
+      // versionMajor/versionMinor here: the server is the source of
+      // truth for "this note has a lifecycle state".
+      out.notVersioned.push(note);
+    }
+  }
+  return out;
+}
+
+/**
+ * A note counts as "versioned" (worth showing a version pill for) when
+ * either component is non-zero. The server treats 0.0 as "not versioned"
+ * and omits the state, but we guard against future inconsistency by
+ * checking the numbers directly here too.
+ */
+function isVersioned(note: NoteSummaryDto): boolean {
+  return (note.versionMajor ?? 0) > 0 || (note.versionMinor ?? 0) > 0;
+}
+
+/**
+ * Split a relative note path into a "folder prefix" (greyed) and a
+ * "filename" (black) for two-tone rendering. The prefix ALWAYS ends
+ * with a slash so it visually attaches to the filename.
+ *
+ *   "MOTION/HARDWARE/Gear Noise"  →  prefix="MOTION/HARDWARE/", name="Gear Noise"
+ *   "Gear Noise"                  →  prefix="./", name="Gear Noise"
+ *
+ * The "./" prefix is a small visual marker that says "this note lives
+ * at the folder you're currently looking at" — it keeps root-level
+ * rows from looking lonely next to deep-path rows and gives the eye
+ * a consistent column of grey on the left.
+ */
+function splitPathForDisplay(relPath: string): { prefix: string; name: string } {
+  const lastSlash = relPath.lastIndexOf('/');
+  if (lastSlash === -1) {
+    // Note sits directly under the folder we're viewing — render the
+    // ./ marker so the row still has a grey prefix lane.
+    return { prefix: './', name: relPath };
+  }
+  return {
+    prefix: relPath.slice(0, lastSlash + 1),
+    name: relPath.slice(lastSlash + 1),
+  };
 }
 
 /**

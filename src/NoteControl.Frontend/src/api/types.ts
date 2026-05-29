@@ -184,10 +184,15 @@ export interface NoteSummaryDto {
   name: string;
   lastModified: string;
   /**
-   * Per-note version + lifecycle state, used by the tree to render a
-   * state badge on the note icon (yellow dot = development, green tick
-   * = released, nothing = not-versioned). The index-backed recursive
-   * listing omits these, so they default to an unversioned note.
+   * Per-note version + lifecycle state. Used by:
+   *   1. The tree, to render a per-note state badge on note icons
+   *      (yellow dot = development, green tick = released, nothing
+   *      = not-versioned).
+   *   2. The FolderPage recursive listing, to group rows by lifecycle
+   *      state (Released → Under development → Not versioned).
+   * Both the `/folder` and `/folder/recursive` endpoints populate
+   * these. Defaults are versionMajor=0, versionMinor=0, state="not-versioned"
+   * when the server can't determine them (e.g. unreadable file).
    */
   versionMajor?: number;
   versionMinor?: number;

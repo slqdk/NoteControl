@@ -2018,12 +2018,14 @@ body.nc-dragging * {
   white-space: nowrap;
 }
 .nc-list-compact .nc-note-time {
-  /* Smaller still than the name, same muted colour as before so
-     the timestamp clearly reads as secondary info. nowrap is
-     critical here because the timestamp contains a middot ·
+  /* Same 11px size as before so the timestamp clearly reads as
+     secondary info, but full-foreground (not muted) per the Ship N
+     spec — the user wants date text in the same dark colour as the
+     filename and version. Only the path-prefix is greyed now. nowrap
+     is critical here because the timestamp contains a middot ·
      separator and we never want it wrapping mid-row. */
   font-size: 11px;
-  color: var(--nc-fg-muted);
+  color: var(--nc-fg);
   white-space: nowrap;
   /* Pull slightly off the right edge so the date doesn't crowd
      the row's gutter — visual breathing room. */
@@ -2055,6 +2057,144 @@ body.nc-dragging * {
    active gradient. */
 .nc-list-compact .nc-note-link:hover {
   background: var(--nc-bg-elev-2);
+}
+
+/* ---------- Lifecycle-state groups (FolderPage) ------------------
+   The FolderPage's recursive list groups notes by lifecycle state:
+   Released → Under development → Not versioned. Each group has its
+   own heading (with state badge) and its own zebra-striped list.
+   The badge lives on the heading, NOT per row — the heading carries
+   the state context for all rows beneath it. */
+
+.nc-state-group {
+  /* Separate groups with breathing room so the eye reads the section
+     break before the rows. Smaller bottom margin on the last group
+     would help, but the FolderPage's mobile Add footer (when shown)
+     already provides that spacing — keeping the rule simple. */
+  margin-bottom: 18px;
+}
+.nc-state-group:last-child {
+  margin-bottom: 0;
+}
+
+.nc-state-heading {
+  /* Sub-heading scale — clearly secondary to the page's "All notes
+     under X" h2 above. We use a flex row so the badge, label, and
+     count all sit on one baseline regardless of badge variant. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  /* Subtle bottom border to anchor the heading visually to the rows
+     beneath it. Uses the same border token as elsewhere so it
+     adapts to the active theme. */
+  border-bottom: 1px solid var(--nc-border);
+  padding-bottom: 4px;
+}
+
+/* The first state heading inside a section sits right under the
+   .nc-section's h2 — drop the top margin so they don't stack. */
+.nc-state-group:first-of-type .nc-state-heading {
+  margin-top: 4px;
+}
+
+.nc-state-heading-label {
+  /* Label takes whatever space is left after the badge and count. */
+  flex: 1;
+}
+
+.nc-state-heading-count {
+  /* Trailing per-section row count. Greyed and small so it reads as
+     metadata, not a primary heading element. */
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--nc-fg-muted);
+}
+
+/* Section badges. Same colour vocabulary as the tree's per-note
+   state badges (#2e9e44 green, #e6a700 amber) — keep them in sync if
+   either palette is ever tuned. */
+.nc-state-badge-released {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #2e9e44;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.nc-state-badge-development {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e6a700;
+  /* No glyph — bare amber dot, matching the tree badge. The character
+     in the JSX is just a "●" placeholder; we hide it via font-size:0
+     so the dot's geometry comes entirely from background + size. */
+  font-size: 0;
+  flex-shrink: 0;
+}
+
+/* ---------- Path-prefix two-tone styling -------------------------
+   Each compact row's name is split into a greyed folder prefix and a
+   black filename so the eye can scan filenames down the left column
+   without the path noise competing for attention. Root-level rows
+   render a "./" prefix to keep a consistent grey lane on the left. */
+
+.nc-list-compact .nc-note-path-prefix {
+  /* Path prefix is the only greyed element on the row now —
+     filename, version pill, and date all read in full foreground. */
+  color: var(--nc-fg-muted);
+  font-weight: 400;
+}
+
+.nc-list-compact .nc-note-filename {
+  /* Filename is the row's anchor — same colour as the heading text
+     so it reads with full prominence. Inherits the row's 500 weight
+     from .nc-list-compact .nc-note-name. */
+  color: var(--nc-fg);
+}
+
+/* ---------- Right-hand meta column (version + timestamp) ---------
+   The compact row's right side now carries an optional version pill
+   followed by the timestamp. They share a flex container so the
+   pill stays attached to the timestamp regardless of row width. */
+
+.nc-list-compact .nc-note-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.nc-list-compact .nc-note-version {
+  /* Tiny capsule so the version reads as a label, not a word. Uses
+     the accent-soft background so it picks up the active theme's
+     primary tint. Border-radius pill-shaped to differentiate it from
+     the rectangular table cells the editor may show below. */
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-fg);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
 
 .nc-breadcrumb {

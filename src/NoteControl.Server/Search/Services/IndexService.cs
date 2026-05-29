@@ -1,6 +1,8 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using NoteControl.Server.Data;
+using NoteControl.Server.Notes.Frontmatter;
 using NoteControl.Server.Vaults.Services;
 using NoteControl.Shared.Search;
 
@@ -524,6 +526,153 @@ public sealed class IndexService : IIndexService
                 Tags: Array.Empty<string>())); // not loaded
         }
         return results;
+    }
+
+    // ----------------------------------------------------------------- ListNotesWithVersion
+
+    /// <summary>
+    /// Same shape as <see cref="ListNotesAsync"/> but each row carries
+    /// the note's version/state pulled from on-disk frontmatter. Used by
+    /// the FolderPage recursive listing to group rows by lifecycle state
+    /// (released → development → not-versioned).
+    /// <para>
+    /// Strategy: do the cheap index SELECT for path/title/updated first,
+    /// then sniff frontmatter for each result file (8KB prefix read).
+    /// On lightserver SSD with the default limit of 100 this is ~800KB of
+    /// I/O — well under the noise floor for a folder-page paint. Failures
+    /// on individual files fall through as "not-versioned" so the listing
+    /// is robust to a mid-write file or a corrupt frontmatter block.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<NoteListingEntry>> ListNotesWithVersionAsync(
+        Guid vaultId,
+        string folderPath,
+        int limit,
+        CancellationToken ct = default)
+    {
+        // Resolve the vault root once. The SQL side and the per-row
+        // sniff both need it; doing it twice (via two ListNotesAsync-
+        // style helpers) would mean two DB roundtrips. We inline the
+        // query against the connection pool below instead.
+        var root = await ResolveVaultRootAsync(vaultId, ct).ConfigureAwait(false);
+        var clampedLimit = limit <= 0 ? 100 : Math.Min(limit, MaxSearchLimit);
+
+        // SQL side: same SELECT as ListNotesAsync. We deliberately
+        // don't share the implementation via composition here — that
+        // would either force a second vault-root resolution or require
+        // a new private helper that takes a pre-resolved root, and the
+        // duplication is small enough (one short SQL string) that
+        // splitting it isn't worth the indirection.
+        //
+        // We explicitly DISPOSE the lease before the per-file sniff
+        // loop below — holding it across N file reads (cold cache:
+        // tens of ms each) would serialise concurrent index writes
+        // for the whole vault for the duration of the listing, which
+        // is unacceptable when the user is also saving notes.
+        var bareRows = new List<(string Path, string Title, DateTimeOffset Updated)>();
+        var prefix = string.IsNullOrEmpty(folderPath) ? "" : folderPath + "/";
+        await using (var lease = await _pool.EnterAsync(vaultId, root, ct).ConfigureAwait(false))
+        {
+            var sql = "SELECT path, title, updated FROM notes";
+            if (prefix.Length > 0)
+            {
+                sql += " WHERE path LIKE $prefix || '%'";
+            }
+            sql += " ORDER BY updated DESC LIMIT $limit;";
+
+            await using var cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.Parameters.AddWithValue("$limit", clampedLimit);
+            if (prefix.Length > 0)
+            {
+                cmd.Parameters.AddWithValue("$prefix", prefix);
+            }
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var p = reader.GetString(0);
+                var t = reader.GetString(1);
+                DateTimeOffset.TryParse(reader.GetString(2), out var u);
+                bareRows.Add((p, t, u));
+            }
+        }
+        // lease released here — sniff loop below runs lease-free.
+        var enriched = new List<NoteListingEntry>(bareRows.Count);
+        foreach (var row in bareRows)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var (vMaj, vMin, state) = await SniffFrontmatterVersionStateAsync(
+                root, row.Path, ct).ConfigureAwait(false);
+
+            enriched.Add(new NoteListingEntry(
+                Path: row.Path,
+                Title: row.Title,
+                Updated: row.Updated,
+                VersionMajor: vMaj,
+                VersionMinor: vMin,
+                State: state));
+        }
+
+        return enriched;
+    }
+
+    /// <summary>
+    /// Read just enough of a note file to extract its version/state from
+    /// frontmatter. Caps the read at 8KB — frontmatter blocks larger than
+    /// that are pathological and we'd rather miss the metadata than spend
+    /// I/O reading megabyte notes.
+    /// <para>
+    /// Mirrors the logic in <c>NoteService.ReadVersionStateAsync</c> but
+    /// lives here because the recursive endpoint goes through
+    /// <see cref="IIndexService"/> rather than <see cref="NoteControl.Server.Notes.Services.NoteService"/>.
+    /// If both paths grow more callers, promote this to a shared helper.
+    /// </para>
+    /// </summary>
+    private static async Task<(int Major, int Minor, string State)> SniffFrontmatterVersionStateAsync(
+        string vaultRoot,
+        string relativePath,
+        CancellationToken ct)
+    {
+        const int prefixCap = 8 * 1024;
+        try
+        {
+            // ToOSPath: the wire path uses forward slashes (canonical
+            // form); the filesystem may want backslashes on Windows.
+            var absolutePath = Path.Combine(
+                vaultRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+            // FileShare.ReadWrite so a concurrent save by the editor
+            // doesn't fail our sniff with a sharing violation. The
+            // worst case here is a torn read of a mid-write file —
+            // we catch broadly below and fall back to not-versioned.
+            string prefix;
+            await using (var fs = new FileStream(
+                absolutePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                var len = (int)Math.Min(fs.Length, prefixCap);
+                if (len == 0)
+                {
+                    return (0, 0, FrontmatterCodec.StateNotVersioned);
+                }
+                var buf = new byte[len];
+                var read = await fs.ReadAsync(buf.AsMemory(0, len), ct).ConfigureAwait(false);
+                // Strip a leading BOM if an externally-edited file has one;
+                // our own writes never do.
+                prefix = Encoding.UTF8.GetString(buf, 0, read).TrimStart('\uFEFF');
+            }
+            var (fm, _) = FrontmatterCodec.Split(prefix);
+            return (fm.VersionMajor, fm.VersionMinor, fm.State);
+        }
+        catch
+        {
+            // Unreadable / locked / mid-write / missing — treat as
+            // unversioned. The listing must not fail because one note
+            // couldn't be sniffed.
+            return (0, 0, FrontmatterCodec.StateNotVersioned);
+        }
     }
 
     // ----------------------------------------------------------------- helpers
