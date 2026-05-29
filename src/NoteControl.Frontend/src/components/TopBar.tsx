@@ -282,13 +282,26 @@ export function TopBar({
       <div className="nc-topbar-right">
         {rightExtras}
 
-        {isOnStartpage && !isMobile && (
+        {isOnStartpage && !isMobile && canEdit && (
           /*
             Widgets+ dropdown. Mirrors AccountMenu's click-outside /
             Escape pattern. We use the same .nc-account-popover
             styles so all topbar dropdowns feel like one menu
             system, customised slightly via .nc-widgets-* for the
             icon glyphs in front of each item.
+
+            Hidden for viewers: every dropdown item dispatches a
+            window event that DashboardPage handles by calling
+            patchCurrent → ctx.patchDashboard, which mutates the
+            shared config and triggers a debounced PUT. PUT
+            /startpage/config is editor-only, so a viewer who picked
+            an item would see "Request failed: 403 Forbidden". In
+            practice viewers can't reach a dashboard route at all
+            after this ship (StartpagePage, VaultListPage, and
+            DashboardPage all redirect viewers to the folder root),
+            so isOnStartpage will be false for them anyway — the
+            canEdit gate is belt-and-braces in case any of those
+            redirects gets bypassed.
           */
           <div ref={widgetsRef} className="nc-variant-picker">
             <button

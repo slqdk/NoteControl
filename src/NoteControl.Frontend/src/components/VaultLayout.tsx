@@ -1213,7 +1213,22 @@ export function VaultLayout() {
         moveModeItem={moveModeItem}
         onMoveModeExit={() => setMoveModeItem(null)}
         dashboardsSlot={
-          dashboardsHook.config && (
+          /*
+            Viewer-mode (canEdit=false) hides the dashboards section
+            in the tree entirely — both the "Dashboards" heading and
+            the per-dashboard rows. Per Søren's request: a viewer
+            can still see assignments (read-only) but the dashboards
+            section is removed from the navigation surface.
+
+            We don't render an empty placeholder ("0 dashboards" or
+            similar): nothing is rendered, the Assignments row
+            tightens up against the folder list below, and the tree
+            reads as "one less section". The shared StartpagePage /
+            VaultListPage / DashboardPage redirects send viewers to
+            the folder root anyway, so there's no working URL the
+            user could reach the dashboard canvas via.
+          */
+          canEdit && dashboardsHook.config && (
             <DashboardList
               dashboards={dashboardsHook.config.dashboards}
               activeDashboardId={activeDashboardId}

@@ -64,9 +64,7 @@ function normaliseCategory(value: string): AssignmentCategory {
 
 export function AssignmentsPage() {
   const { vaultId } = useParams<{ vaultId: string }>();
-  // Pull the outlet context so the type check stays honest if the
-  // layout shape changes. We don't use any field directly today.
-  useOutletContext<VaultLayoutContext>();
+  const { canEdit } = useOutletContext<VaultLayoutContext>();
 
   const assignments = useAssignments(vaultId);
   const isMobile = useIsMobile();
@@ -224,26 +222,38 @@ export function AssignmentsPage() {
         composer; the composer has its own internal state for
         the in-progress draft so users can cancel without
         polluting the saved list.
+
+        Hidden for viewers (canEdit=false): per the user's "I don't
+        need to be able to insert assignments on a read-only vault"
+        request. Existing cards remain visible — viewers can still
+        see what assignments exist, just can't add new ones. Click-
+        to-edit on existing cards still works; if a viewer commits
+        an edit it will 403 server-side and surface as
+        assignments.saveError (banner above the title) — not the
+        cleanest UX but acceptable for v1 of viewer mode; tighter
+        per-card edit gating is a follow-up if Søren wants it.
       */}
-      <div className="nc-assignments-add-row">
-        {composerOpen ? (
-          <AssignmentComposer
-            onCancel={() => setComposerOpen(false)}
-            onCreate={(draft) => {
-              assignments.addAssignment(draft);
-              setComposerOpen(false);
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            className="nc-btn nc-assignments-add-btn"
-            onClick={() => setComposerOpen(true)}
-          >
-            + Add assignment
-          </button>
-        )}
-      </div>
+      {canEdit && (
+        <div className="nc-assignments-add-row">
+          {composerOpen ? (
+            <AssignmentComposer
+              onCancel={() => setComposerOpen(false)}
+              onCreate={(draft) => {
+                assignments.addAssignment(draft);
+                setComposerOpen(false);
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="nc-btn nc-assignments-add-btn"
+              onClick={() => setComposerOpen(true)}
+            >
+              + Add assignment
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

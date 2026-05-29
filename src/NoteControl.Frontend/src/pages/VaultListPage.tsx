@@ -76,11 +76,28 @@ export function VaultListPage() {
       targetId = vaults[0].id;
     }
 
-    // Same target shape as Ship 47's vault-list links: land on the
-    // per-vault startpage, not the folder root. On mobile the
-    // startpage redirects to the folder root via Ship 86's mobile
-    // guard, so phones land on a usable navigation view.
-    return <Navigate to={`/vaults/${targetId}/startpage`} replace />;
+    // Resolve which role the caller has on the picked vault — drives
+    // the landing-page choice. The dashboards section is hidden
+    // entirely for viewer-role users (per the role-gating ship), so
+    // auto-landing them on /startpage (which then redirects to the
+    // first dashboard) would surface a section they shouldn't see.
+    // StartpagePage itself also has a viewer→folder redirect as
+    // defence-in-depth; this check just saves one redirect hop on the
+    // way in.
+    const pickedVault = vaults.find((v) => v.id === targetId) ?? null;
+    const pickedIsViewer = pickedVault?.myRole === 'viewer';
+
+    // Editors / owners: land on the per-vault startpage (which
+    // redirects to the first dashboard). On mobile the startpage
+    // page itself redirects to the folder root via Ship 86's mobile
+    // guard, so phones land on a usable navigation view anyway.
+    //
+    // Viewers: land directly on the folder root. No dashboards UI
+    // to land on.
+    const target = pickedIsViewer
+      ? `/vaults/${targetId}`
+      : `/vaults/${targetId}/startpage`;
+    return <Navigate to={target} replace />;
   }
 
   // ---- fallback render: no vaults, error, or still loading ----

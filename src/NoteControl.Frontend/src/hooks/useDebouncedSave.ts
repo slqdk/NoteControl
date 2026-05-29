@@ -69,22 +69,36 @@ export function useDebouncedSave<T>(
   const lastSavedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Not-loaded-yet state. Don't capture a baseline; don't save.
-    // The first time we see a real value (after the async load
-    // resolves), we'll capture THAT as the baseline below.
+    // Not-loaded-yet state. Don't save — and ALSO clear the
+    // baseline. Without the clear, a host that re-uses the same
+    // hook instance for different underlying resources (e.g.
+    // VaultLayout's useDashboards instance stays mounted across
+    // vault switches; only the vaultId effect dependency changes,
+    // which triggers setConfig(null)) would carry the previous
+    // resource's serialised baseline into the next resource's
+    // load — making the new resource's first non-null value look
+    // like a user edit ("the value differs from what we last
+    // saved!") and firing a debounced PUT that 403s for viewers.
+    // Reset-on-null re-arms the first-non-null-becomes-baseline
+    // rule for each new resource the host points us at.
     if (value === null || value === undefined) {
+      lastSavedRef.current = null;
       return;
     }
 
     const serialized = JSON.stringify(value);
 
-    // First non-null value: capture as "already saved" and skip
-    // the network call. Covers both:
+    // First non-null value (either the very first render or the
+    // first render after a null gap from a host-driven reset):
+    // capture as "already saved" and skip the network call. Covers:
     //   - components that pass a non-null T on every render (the
     //     original contract — first render is treated as baseline)
     //   - components that pass `null` while loading and the real
     //     T after the async GET resolves (so the loaded DTO becomes
     //     the baseline, not the result of a wasted save round-trip)
+    //   - hosts that flip value back to null between two different
+    //     underlying resources (cross-vault navigation, etc.) — the
+    //     null reset arms the baseline for the next resource.
     if (lastSavedRef.current === null) {
       lastSavedRef.current = serialized;
       return;

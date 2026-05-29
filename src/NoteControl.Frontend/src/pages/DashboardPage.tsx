@@ -316,6 +316,21 @@ export function DashboardPage() {
     return <Navigate to={`/vaults/${vaultId}`} replace />;
   }
 
+  // Viewers don't get the dashboards UI at all — the dashboards
+  // section is hidden from the tree, Widgets+ is hidden from the
+  // topbar, StartpagePage redirects them to the folder root, and
+  // VaultListPage's auto-redirect skips the /startpage hop. This
+  // route-level guard is defence-in-depth for anyone who hits a
+  // dashboard URL directly (bookmark from when they had higher
+  // role, a link from a teammate, the browser's history). We send
+  // them to the folder root rather than render the canvas, since
+  // any block-edit save here would 403 (PUT /startpage/config is
+  // editor-only). Wait for ctx.vault to resolve so we don't make
+  // the role decision against null.
+  if (ctx.vault !== null && ctx.vault.myRole === 'viewer') {
+    return <Navigate to={`/vaults/${vaultId}`} replace />;
+  }
+
   // Empty-state detection: nothing of any type on THIS dashboard.
   const isEmpty =
     current !== null &&
