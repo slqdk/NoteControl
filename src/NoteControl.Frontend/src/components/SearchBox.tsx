@@ -126,6 +126,13 @@ export function SearchBox({
     // special-case "no vaults known yet". The placeholder uses the
     // active vault id but with a generic label — the topbar usually
     // overwrites this within milliseconds of mount.
+    //
+    // Field shape matches the wire VaultDto exactly: `myRole` (not
+    // `role`) per the C# DTO's camelCase emit, plus `ownerUsername`
+    // for the picker's "shared by …" affordance. SearchBox doesn't
+    // read either field, but TypeScript needs them to satisfy the
+    // VaultDto contract since the API shape was tightened to match
+    // the server.
     return [
       {
         id: vaultId,
@@ -133,8 +140,9 @@ export function SearchBox({
         name: 'This vault',
         scope: 'personal',
         ownerId: '',
+        ownerUsername: '',
         createdAt: '',
-        role: 'viewer',
+        myRole: 'viewer',
       },
     ];
   }, [vaults, vaultId]);

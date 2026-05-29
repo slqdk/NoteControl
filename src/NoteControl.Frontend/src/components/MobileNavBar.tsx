@@ -92,6 +92,19 @@ export interface MobileNavBarProps {
 
   onSelectAssignments: () => void;
   onOpenDailyNote: () => void;
+  /**
+   * Whether the caller has at least editor role on the active
+   * vault. The "Daily notes" anchor (position 2) is hidden when
+   * false: tapping it would call POST /api/vaults/{id}/daily/today,
+   * which the server gates as editor-only (it creates today's
+   * file on first call). Viewers see Assignments at position 1 and
+   * root folders directly after, no gap — the layout collapses
+   * gracefully because the row is flex.
+   *
+   * Other affordances (Assignments anchor, folder/note children)
+   * remain read-accessible for viewers and stay rendered.
+   */
+  canEdit: boolean;
 }
 
 export type MobileNavCurrent =
@@ -107,6 +120,7 @@ export function MobileNavBar({
   current,
   onSelectAssignments,
   onOpenDailyNote,
+  canEdit,
 }: MobileNavBarProps) {
   const navigate = useNavigate();
 
@@ -308,11 +322,18 @@ export function MobileNavBar({
         />
 
         {/*
-          Position 2 — Daily Notes. Always rendered, even when the
-          vault has no "Daily Notes" folder yet — the server's
-          openToday endpoint creates the folder + today's file on
-          first call, so tapping the button in a fresh vault works
-          and the folder appears in subsequent renders.
+          Position 2 — Daily Notes. Always rendered for editors and
+          owners, even when the vault has no "Daily Notes" folder
+          yet — the server's openToday endpoint creates the folder +
+          today's file on first call, so tapping the button in a
+          fresh vault works and the folder appears in subsequent
+          renders.
+
+          Hidden for viewers (canEdit=false): the openToday endpoint
+          requires editor role (it writes to disk), so a viewer who
+          tapped this would get a 403 banner with no useful side
+          effect. Position 2 collapses out of the row when hidden;
+          root folders shift left to fill the gap.
 
           Tapping this button:
             (a) navigates to today's daily note in the editor
@@ -326,13 +347,15 @@ export function MobileNavBar({
           consistent with how the other anchor buttons indicate
           "you came from here".
         */}
-        <MobileNavButton
-          label="Daily notes"
-          icon="📅"
-          colorKey="teal"
-          active={anchorOverride === DAILY_NOTES_FOLDER}
-          onClick={handleSelectDailyNotes}
-        />
+        {canEdit && (
+          <MobileNavButton
+            label="Daily notes"
+            icon="📅"
+            colorKey="teal"
+            active={anchorOverride === DAILY_NOTES_FOLDER}
+            onClick={handleSelectDailyNotes}
+          />
+        )}
 
         {/*
           Positions 3..N — other root folders, in the server's

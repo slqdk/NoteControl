@@ -67,7 +67,7 @@ export function EditorPage() {
   const { vaultId } = useParams<{ vaultId: string }>();
   const [searchParams] = useSearchParams();
   const notePath = searchParams.get('path') ?? '';
-  const { vault } = useOutletContext<VaultLayoutContext>();
+  const { vault, canEdit } = useOutletContext<VaultLayoutContext>();
   const navigate = useNavigate();
 
   const [note, setNote] = useState<NoteDto | null>(null);
@@ -542,6 +542,12 @@ export function EditorPage() {
           key={`${note.path}::rendered`}
           vaultId={vaultId}
           initialNote={note}
+          /* Viewer-role users get the editor in read-only mode even
+             on unlocked notes. NoteEditor ORs this with the note's
+             frontmatter.locked flag so the existing locked-note path
+             (TipTap editable: false + .nc-editor-locked styling +
+             link click-through) handles both cases uniformly. */
+          forceReadOnly={!canEdit}
           onSaveStateChange={setSaveState}
           onUploadsChange={setUploads}
           onSaveNowReady={(fn) => {

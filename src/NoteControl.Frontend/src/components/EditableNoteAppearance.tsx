@@ -76,6 +76,20 @@ export interface EditableNoteAppearanceProps {
   font: string | null;
   fontSize: number | null;
   width: number | null;
+  /**
+   * When true, every input is inert: the font <select> and the two
+   * number inputs all render `disabled`, swallowing keystrokes and
+   * clicks. Values are still visible so the viewer can see what the
+   * note's appearance overrides are; only the editing path is shut
+   * off. Combined with the same `disabled` plumbing on EditableName /
+   * EditableTags / EditableLocked / VersionStateEditor so the whole
+   * properties panel behaves consistently for viewers.
+   *
+   * Optional / defaults to false so existing callers (none today
+   * besides PropertiesPanel + MobileNoteProperties) keep working
+   * without changes.
+   */
+  disabled?: boolean;
   onSaveFont: (stack: string) => Promise<void>;
   onSaveFontSize: (size: number) => Promise<void>;
   onSaveWidth: (w: number) => Promise<void>;
@@ -85,13 +99,14 @@ export function EditableNoteAppearance({
   font,
   fontSize,
   width,
+  disabled,
   onSaveFont,
   onSaveFontSize,
   onSaveWidth,
 }: EditableNoteAppearanceProps) {
   return (
     <>
-      <FontField value={font} onSave={onSaveFont} />
+      <FontField value={font} disabled={disabled} onSave={onSaveFont} />
       <NumberField
         label="Font size"
         value={fontSize}
@@ -100,6 +115,7 @@ export function EditableNoteAppearance({
         step={1}
         placeholder="default"
         unit="px"
+        disabled={disabled}
         onSave={onSaveFontSize}
       />
       <NumberField
@@ -109,6 +125,7 @@ export function EditableNoteAppearance({
         step={WIDTH_STEP}
         placeholder="700"
         unit="px"
+        disabled={disabled}
         onSave={onSaveWidth}
         snap
       />
@@ -120,9 +137,11 @@ export function EditableNoteAppearance({
 
 function FontField({
   value,
+  disabled,
   onSave,
 }: {
   value: string | null;
+  disabled?: boolean;
   onSave: (stack: string) => Promise<void>;
 }) {
   const [state, setState] = useState<FieldSaveState>({ kind: 'idle' });
@@ -157,7 +176,7 @@ function FontField({
             onChange={(e) => {
               void handleChange(e);
             }}
-            disabled={state.kind === 'saving'}
+            disabled={disabled || state.kind === 'saving'}
             aria-label="Note font"
           >
             {FONT_OPTIONS.map((opt) => (
@@ -188,6 +207,8 @@ interface NumberFieldProps {
   unit?: string;
   /** When true, blank-out empty input + snap value to nearest step. */
   snap?: boolean;
+  /** When true, the input renders disabled (viewer-mode lockout). */
+  disabled?: boolean;
   onSave: (n: number) => Promise<void>;
 }
 
@@ -209,6 +230,7 @@ function NumberField({
   placeholder,
   unit,
   snap,
+  disabled,
   onSave,
 }: NumberFieldProps) {
   const [draft, setDraft] = useState<string>(value === null ? '' : String(value));
@@ -280,7 +302,7 @@ function NumberField({
             max={max}
             step={step}
             placeholder={placeholder}
-            disabled={state.kind === 'saving'}
+            disabled={disabled || state.kind === 'saving'}
             onChange={(e) => setDraft(e.currentTarget.value)}
             onBlur={() => {
               void commit();

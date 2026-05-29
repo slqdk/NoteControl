@@ -42,7 +42,7 @@ export function FolderPage() {
   const { vaultId } = useParams<{ vaultId: string }>();
   const [searchParams] = useSearchParams();
   const folderPath = searchParams.get('path') ?? '';
-  const { vault, onCreateNote, onCreateFolder } =
+  const { vault, canEdit, onCreateNote, onCreateFolder } =
     useOutletContext<VaultLayoutContext>();
   const isMobile = useIsMobile();
 
@@ -265,8 +265,13 @@ export function FolderPage() {
         at the bottom that swaps into an inline composer when tapped.
         Desktop folder views deliberately skip this — note/folder
         creation belongs in the tree rail there.
+
+        Hidden for viewers: every action it offers (create note,
+        create folder) would 403 server-side. The mobile centre
+        pane stays useful read-only — recursive notes list still
+        renders, links to notes still navigate to read-only editor.
       */}
-      {isMobile && (
+      {isMobile && canEdit && (
         <FolderAddRow
           folderPath={folderPath}
           siblingNoteNames={siblingNoteNames}

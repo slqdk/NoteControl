@@ -26,8 +26,28 @@ export interface VaultDto {
   name: string;
   scope: 'personal' | 'shared';
   ownerId: string;
+  /**
+   * Username of the user identified by ownerId. Server-projected in
+   * the same query that builds the row (VaultService.ListForUserAsync
+   * et al.) so the picker can render "shared by Jacob" labels without
+   * a separate users lookup. The C# DTO field is `OwnerUsername`;
+   * ASP.NET's default camelCase serialiser emits it as
+   * `ownerUsername`.
+   */
+  ownerUsername: string;
   createdAt: string;
-  role: 'owner' | 'editor' | 'viewer';
+  /**
+   * Caller's effective role on this vault — one of "owner" | "editor"
+   * | "viewer". The wire name is `myRole` (matches the C# property
+   * `MyRole` → camelCase `myRole`); the field used to be declared
+   * here as `role`, which silently produced undefined at runtime
+   * because the JSON key didn't match. No code read it then, so the
+   * mismatch went unnoticed; readers added now (the VaultPicker's
+   * personal-vs-shared split, the role-gated topbar / rail / panel
+   * affordances) need the real value, so the type now matches the
+   * wire.
+   */
+  myRole: 'owner' | 'editor' | 'viewer';
   /**
    * Ship 91: optional emoji glyph for the topbar vault picker. One of
    * 12 from the fixed palette (📁 📓 🛠 🔧 💼 ✏️ 📊 🏠 🎓 🎨 🔬 📐).

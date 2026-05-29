@@ -39,6 +39,31 @@ interface TopBarProps {
    */
   vaults?: VaultDto[];
   /**
+   * Signed-in user's id. Forwarded to VaultPicker so it can split
+   * the list into personal (owned by this user) and shared (owned
+   * by someone else) for the picker's two-zone layout. Null while
+   * auth is still loading — the picker treats null as "everything
+   * personal" until the real id resolves.
+   */
+  currentUserId: string | null;
+  /**
+   * Whether the active vault's role allows write operations
+   * (editor or owner). Drives two pieces of UI here:
+   *   - The Templates link is hidden for viewers — TemplatesPage
+   *     is editing-focused (Save / Delete / Create) and 403s on
+   *     every write a viewer could attempt. Hiding the link keeps
+   *     the topbar honest. (Viewers can still reach the page by
+   *     typing the URL; the page itself doesn't break, just every
+   *     mutation fails.)
+   *   - Forwarded to VaultPicker as canChangeAppearance so the
+   *     right-click-to-rebrand popover doesn't open for viewers
+   *     (PUT /appearance is editor-only — the popover would lead
+   *     to a 403 on save). Defaults to true when no vault is in
+   *     scope (the picker won't open the popover without an active
+   *     vault anyway).
+   */
+  canEdit: boolean;
+  /**
    * Callback when an entry in `vaults` was updated via the
    * appearance popover. The parent should splice the new DTO into
    * its in-memory list so re-renders pick up the new icon/colour
@@ -102,7 +127,7 @@ interface TopBarProps {
  * topbar's grid.
  */
 export function TopBar({
-  vault, vaults, onVaultUpdated, rightExtras, rightSettings,
+  vault, vaults, currentUserId, canEdit, onVaultUpdated, rightExtras, rightSettings,
 }: TopBarProps) {
   const location = useLocation();
   // Drives the Widgets+ button gate. The button is meant for the
@@ -230,6 +255,8 @@ export function TopBar({
                 ? vaults.find((v) => v.id === vault.id) ?? null
                 : null
             }
+            currentUserId={currentUserId}
+            canChangeAppearance={canEdit}
             onVaultUpdated={onVaultUpdated}
             mobile={isMobile}
           />
@@ -370,11 +397,16 @@ export function TopBar({
           </div>
         )}
 
-        {vault && (
+        {vault && canEdit && (
           /*
             Templates link surfaces the per-vault template manager.
             Only visible when a vault is in scope — without one, the
-            link has no destination.
+            link has no destination. Hidden for viewers: the page is
+            editing-focused (Save / Delete / Create) and every write
+            attempt would 403; a viewer with read intent can still
+            type the URL to browse templates, but the topbar
+            shouldn't advertise a workflow that doesn't work for
+            them.
           */
           <Link
             to={`/vaults/${vault.id}/templates`}

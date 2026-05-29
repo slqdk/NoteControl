@@ -78,6 +78,29 @@ export interface PropertiesPanelProps {
   variant: TreeVariant;
   onClose: () => void;
   /**
+   * Whether the caller has at least editor role on this vault.
+   * Drives the read/write split throughout the panel:
+   *   - All Editable* fields (Name, Tags, Locked, Version,
+   *     Appearance) become disabled — values still render so the
+   *     viewer can see them, but inputs are inert.
+   *   - The action buttons block (Move, Delete, Add Note Widget)
+   *     is hidden. Export buttons remain visible (export is a
+   *     read operation; the server's /note/export endpoint is
+   *     viewer-allowed).
+   *   - The folder cover Upload/Replace/Delete affordances are
+   *     hidden; the thumbnail itself still renders.
+   *   - Undo / Redo / Revert remain interactive — they only affect
+   *     local editor state and the server's history fetch is
+   *     viewer-allowed, but the buttons are useless without write
+   *     access. We disable them by way of canUndo/canRedo already
+   *     reporting false (the viewer's read-only editor never enters
+   *     the dirty state).
+   * Dashboard mode (dashboardSelection != null) ignores canEdit;
+   * dashboard rename/delete are still parent-owned and the parent
+   * gates them itself.
+   */
+  canEdit: boolean;
+  /**
    * Called after a successful rename so the parent (VaultLayout)
    * can refresh the tree, update its selection, and follow the URL.
    * Old + new are full canonical paths. Kind tells the parent
@@ -163,6 +186,7 @@ export function PropertiesPanel({
   selection,
   variant,
   onClose,
+  canEdit,
   onAfterRename,
   onDelete,
   isInMoveMode,
@@ -639,6 +663,7 @@ export function PropertiesPanel({
             <dd>
               <EditableName
                 value={stripMd(selection.name)}
+                disabled={!canEdit}
                 onSave={saveNoteRename}
               />
             </dd>
@@ -666,6 +691,7 @@ export function PropertiesPanel({
                 minor={note.frontmatter.versionMinor}
                 state={note.frontmatter.state}
                 release={releaseInfo}
+                disabled={!canEdit}
                 onSave={saveVersionState}
               />
             </dd>
@@ -674,6 +700,7 @@ export function PropertiesPanel({
             <dd>
               <EditableTags
                 tags={note.frontmatter.tags}
+                disabled={!canEdit}
                 onSave={saveTags}
               />
             </dd>
@@ -682,6 +709,7 @@ export function PropertiesPanel({
             <dd>
               <EditableLocked
                 value={note.frontmatter.locked}
+                disabled={!canEdit}
                 onSave={saveLocked}
               />
             </dd>
@@ -690,11 +718,13 @@ export function PropertiesPanel({
               Per-note appearance: font, font size, page width. Three
               rows (each renders its own dt/dd inside the fragment).
               Saves are independent per-field — see saveAppearance.
+              Viewer mode passes disabled through to every sub-input.
             */}
             <EditableNoteAppearance
               font={note.frontmatter.font}
               fontSize={note.frontmatter.fontSize}
               width={note.frontmatter.width}
+              disabled={!canEdit}
               onSaveFont={(stack) => saveAppearance('font', stack)}
               onSaveFontSize={(size) => saveAppearance('fontSize', size)}
               onSaveWidth={(w) => saveAppearance('width', w)}
@@ -817,6 +847,7 @@ export function PropertiesPanel({
               ) : (
                 <EditableName
                   value={selection.name}
+                  disabled={!canEdit}
                   onSave={saveFolderRename}
                 />
               )}
@@ -838,16 +869,27 @@ export function PropertiesPanel({
               nc:folder-cover-changed on success so any open
               FolderPage refetches and shows the new state without a
               reload.
+
+              Hidden for viewers: the underlying POST/DELETE
+              endpoints require editor role, and the editor has no
+              "view-only" mode short of hiding the upload/delete
+              buttons. Cover image itself is still visible on the
+              folder page banner — viewers see it in context, just
+              can't manage it from here.
             */}
-            <dt>Cover</dt>
-            <dd>
-              <FolderCoverEditor
-                vaultId={vaultId}
-                folderPath={selection.path}
-                coverUrl={folder.coverUrl ?? null}
-                onChanged={() => setRefreshTick((t) => t + 1)}
-              />
-            </dd>
+            {canEdit && (
+              <>
+                <dt>Cover</dt>
+                <dd>
+                  <FolderCoverEditor
+                    vaultId={vaultId}
+                    folderPath={selection.path}
+                    coverUrl={folder.coverUrl ?? null}
+                    onChanged={() => setRefreshTick((t) => t + 1)}
+                  />
+                </dd>
+              </>
+            )}
           </dl>
         )}
 
@@ -883,7 +925,7 @@ export function PropertiesPanel({
         */}
         {selection && (
           (selection.kind === 'note' && !!note) ||
-          !(selection.kind === 'folder' && selection.path === '')
+          (canEdit && !(selection.kind === 'folder' && selection.path === ''))
         ) && (
           <div className="nc-props-actions">
             {selection.kind === 'note' && note && (
@@ -913,11 +955,14 @@ export function PropertiesPanel({
                   dashboard's Widgets+ dropdown uses to talk to
                   DashboardPage, and the same channel the view-mode
                   toggle already uses (nc:note-view-mode-changed).
+
+                  Hidden for viewers: adding a widget mutates the per-
+                  vault note-widgets sidecar, whose PUT requires editor.
                 */}
-                <AddNoteWidgetMenu notePath={selection.path} />
+                {canEdit && <AddNoteWidgetMenu notePath={selection.path} />}
               </>
             )}
-            {showMoveButton && (
+            {canEdit && showMoveButton && (
               <button
                 type="button"
                 className={`nc-btn ${isInMoveMode ? 'nc-btn-active' : ''}`}
@@ -931,7 +976,7 @@ export function PropertiesPanel({
                 {isInMoveMode ? '✖ Cancel move' : '↪ Move…'}
               </button>
             )}
-            {!(selection.kind === 'folder' && selection.path === '') && (
+            {canEdit && !(selection.kind === 'folder' && selection.path === '') && (
               <button
                 type="button"
                 className="nc-btn nc-btn-danger"

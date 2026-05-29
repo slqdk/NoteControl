@@ -118,14 +118,19 @@ export function useDashboards(vaultId: string | undefined): UseDashboardsResult 
     },
     [vaultId],
   );
-  // Default-shape sentinel for the pre-load render — same trick
-  // DashboardPage used in the single-startpage era. The hook
-  // skips its first render anyway, so this never actually saves.
-  useDebouncedSave(
-    config ?? { version: 2, dashboards: [] },
-    500,
-    doSave,
-  );
+  // Pass the nullable config straight through. useDebouncedSave
+  // treats null as "not loaded yet" — it doesn't capture a baseline
+  // or fire a save — and captures the first non-null value (the
+  // GET's response) as the new baseline so the post-load render
+  // doesn't immediately PUT the server's own response back at it.
+  //
+  // Pre-this-ship we coalesced to a sentinel here so the hook's
+  // generic-non-null type would accept it. The post-load value-flip
+  // (null sentinel → real DTO) then looked like a user edit and
+  // fired a debounced PUT, which 403d for viewers (PUT /config is
+  // editor-only). With the null-aware hook the cycle is broken
+  // cleanly without per-call-site workarounds.
+  useDebouncedSave(config, 500, doSave);
 
   // ----- mutators
 

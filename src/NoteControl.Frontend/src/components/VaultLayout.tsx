@@ -29,6 +29,7 @@ import { loadVariant, type TreeVariant } from '../tree/treeStyles';
 import { useTreeAppearance, buildTreeStyle } from '../tree/treeAppearance';
 import { useDashboards } from '../hooks/useDashboards';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useAuth } from '../auth/AuthContext';
 
 /**
  * Top-level vault shell. Owns:
@@ -125,6 +126,45 @@ export function VaultLayout() {
   // into. Pre-Ship-91 the list-fetch effect threw the result away
   // after picking out the active vault.
   const [allVaults, setAllVaults] = useState<VaultDto[]>([]);
+
+  // Signed-in user's id. Pulled from AuthContext so the topbar's
+  // VaultPicker can split vaults into personal (owned by this user)
+  // vs shared (owned by someone else but shared with the caller).
+  // Null while auth is still 'loading' or 'anonymous' — the picker
+  // treats null as "everything personal" for the brief mount window
+  // so its layout doesn't flicker as auth resolves.
+  const { state: authState } = useAuth();
+  const currentUserId =
+    authState.status === 'authenticated' ? authState.user.id : null;
+
+  // Whether the caller can write to this vault. Derived from the
+  // active vault's myRole (per-vault permission row, NOT the site-
+  // wide UserDto.role — admins still need an explicit vault row to
+  // open a vault). Drives every write affordance in the shell:
+  //   - TopBar.canEdit  → hides Templates link, gates picker's
+  //                       right-click-appearance popover
+  //   - Daily Note +    → hidden for viewers (server gates the
+  //                       openToday endpoint as editor-only)
+  //   - RailHeaderAddMenu (the "+" dropdown) → hidden for viewers
+  //   - TreeContextMenu → filters write items
+  //   - PropertiesPanel → disables Editable* fields, hides Move /
+  //                       Delete / Add Widget / Cover
+  //   - MobileNavBar    → hides Daily Notes anchor
+  //   - VaultLayoutContext.canEdit → forwarded to FolderPage and
+  //                       EditorPage so they can gate their own
+  //                       affordances (mobile FolderAddRow,
+  //                       NoteEditor.forceReadOnly, etc.)
+  //
+  // Defaults to true mid-load (vault === null) so the brief window
+  // before the metadata fetch resolves doesn't flash a viewer-mode
+  // UI for users who'll turn out to be editors — most loads. The
+  // worst case is the inverse (an editor briefly sees their own
+  // affordances; a viewer briefly sees write affordances and then
+  // they disappear). For viewers the flicker is one render cycle,
+  // and clicking anything during that window would 403 anyway.
+  // We default to optimistic-editor because it matches the more
+  // common path.
+  const canEdit = vault === null ? true : vault.myRole !== 'viewer';
 
   /*
     Step 36: which row (if any) is currently in "move mode" — armed
@@ -834,6 +874,18 @@ export function VaultLayout() {
   // the user explicitly asked for.
   const onOpenDailyNote = useCallback(async () => {
     if (!vaultId) return;
+    // Defence-in-depth: the buttons that invoke this (rail-header
+    // Daily Note pill on desktop, MobileNavBar Daily Notes anchor)
+    // are both hidden for viewers, so this guard should never
+    // trigger via normal UI flow. It exists for paths that bypass
+    // those buttons — e.g. a keyboard shortcut wired in a future
+    // ship, a debugger-driven call, or a stale reference held by
+    // a component that re-rendered between vault load and the
+    // viewer-vs-editor flag flipping. Without this, a viewer who
+    // somehow reached the call would see a "Request failed: 403
+    // Forbidden" banner (the server gates openToday as editor-only
+    // because it creates today's file on first call).
+    if (!canEdit) return;
     try {
       const res = await dailyNotesApi.openToday(vaultId);
 
@@ -871,7 +923,7 @@ export function VaultLayout() {
       // eslint-disable-next-line no-alert
       window.alert(message);
     }
-  }, [vaultId, treeData, navigate]);
+  }, [vaultId, treeData, navigate, canEdit]);
 
   // ---------------------------------------------------- toolbar parent
   //
@@ -1028,64 +1080,86 @@ export function VaultLayout() {
   // Ship 87: split the action buttons into their own variable so
   // the mobile merged toggle-row can render them without
   // duplicating the three button definitions.
+  //
+  // Viewer-mode (canEdit=false): the entire actionButtons block
+  // collapses to empty — both the Daily Note pill and the "+"
+  // dropdown are write affordances and neither makes sense for a
+  // read-only caller. We render an empty <span> rather than null
+  // so the surrounding .nc-rail-header layout (which flex-justifies
+  // around this element) stays predictable. The rail header itself
+  // is then visually just an empty band above the tree; that's
+  // intentional — the tree is still useful read-only, and removing
+  // the band entirely would require restructuring the rail's CSS
+  // grid more invasively than this ship warrants.
   const actionButtons = (
     <span className="nc-rail-header-actions">
-      {/*
-        Daily-note pill on the LEFT. Always the most-used action in
-        this row — opening (or idempotently creating) today's daily
-        note. The 📅 glyph matches the Daily Notes folder icon in
-        the tree below (see TreeView's isDailyNotesRoot branch),
-        keeping the button and its target row visually paired.
+      {canEdit && (
+        <>
+          {/*
+            Daily-note pill on the LEFT. Always the most-used action in
+            this row — opening (or idempotently creating) today's daily
+            note. The 📅 glyph matches the Daily Notes folder icon in
+            the tree below (see TreeView's isDailyNotesRoot branch),
+            keeping the button and its target row visually paired.
 
-        Modifier class --daily applies the pill styling on top of
-        the shared rail-header-button base. The other actions
-        (Add Note, Add Folder, Import, Add Dashboard) used to live
-        next to this button as four separate icon-+plus buttons;
-        they've been folded into the single "+" dropdown menu on
-        the RIGHT (RailHeaderAddMenu) so the rail header reads as a
-        clean pair: a labelled primary action on one end, a
-        compact add-things menu on the other.
-      */}
-      <button
-        type="button"
-        className="nc-rail-header-button nc-rail-header-button--daily"
-        title={`Today's daily note (${formatLocalDate(new Date())})`}
-        onClick={() => void onOpenDailyNote()}
-      >
-        <span className="nc-rail-header-button__icon" aria-hidden="true">📅</span>
-        <span className="nc-rail-header-button__label">Daily Note +</span>
-      </button>
+            Modifier class --daily applies the pill styling on top of
+            the shared rail-header-button base. The other actions
+            (Add Note, Add Folder, Import, Add Dashboard) used to live
+            next to this button as four separate icon-+plus buttons;
+            they've been folded into the single "+" dropdown menu on
+            the RIGHT (RailHeaderAddMenu) so the rail header reads as a
+            clean pair: a labelled primary action on one end, a
+            compact add-things menu on the other.
 
-      {/*
-        The "+" dropdown — replaces the 🏠+ / 📄+ / import-chevron /
-        📁+ row. Items in spec order: Add Note, Add Folder, Import,
-        Add Dashboard. The dashboard add callback is gated on
-        dashboardsHook.config being loaded (mirrors the old
-        standalone button's disabled state); we pass null when not
-        ready, and the menu disables that item with a tooltip.
+            Hidden for viewers: the openToday endpoint requires editor
+            role (it creates today's file on first call).
+          */}
+          <button
+            type="button"
+            className="nc-rail-header-button nc-rail-header-button--daily"
+            title={`Today's daily note (${formatLocalDate(new Date())})`}
+            onClick={() => void onOpenDailyNote()}
+          >
+            <span className="nc-rail-header-button__icon" aria-hidden="true">📅</span>
+            <span className="nc-rail-header-button__label">Daily Note +</span>
+          </button>
 
-        Mobile gets the same dropdown — gone is the desktop-only
-        gate on dashboards + import. The menu is the same width on
-        both viewports and the file picker / dashboard-canvas
-        destinations don't change behaviour with viewport size, so
-        the previous "desktop only" restrictions were really just
-        "we ran out of room in the icon row" — which no longer
-        applies.
-      */}
-      <RailHeaderAddMenu
-        vaultId={vaultId}
-        targetFolder={toolbarParent}
-        targetLabel={toolbarParentLabel}
-        onAddNote={() => onNewNoteUnder(toolbarParent)}
-        onAddFolder={() => onNewFolderUnder(toolbarParent)}
-        onImported={(target) => {
-          void treeData.refresh(target);
-          if (target !== '' && !treeData.expanded.has(target)) {
-            treeData.toggle(target);
-          }
-        }}
-        onAddDashboard={dashboardsHook.config ? onAddDashboard : null}
-      />
+          {/*
+            The "+" dropdown — replaces the 🏠+ / 📄+ / import-chevron /
+            📁+ row. Items in spec order: Add Note, Add Folder, Import,
+            Add Dashboard. The dashboard add callback is gated on
+            dashboardsHook.config being loaded (mirrors the old
+            standalone button's disabled state); we pass null when not
+            ready, and the menu disables that item with a tooltip.
+
+            Mobile gets the same dropdown — gone is the desktop-only
+            gate on dashboards + import. The menu is the same width on
+            both viewports and the file picker / dashboard-canvas
+            destinations don't change behaviour with viewport size, so
+            the previous "desktop only" restrictions were really just
+            "we ran out of room in the icon row" — which no longer
+            applies.
+
+            Hidden for viewers: every action it dispatches (new note,
+            new folder, import, new dashboard) writes server-side and
+            would 403.
+          */}
+          <RailHeaderAddMenu
+            vaultId={vaultId}
+            targetFolder={toolbarParent}
+            targetLabel={toolbarParentLabel}
+            onAddNote={() => onNewNoteUnder(toolbarParent)}
+            onAddFolder={() => onNewFolderUnder(toolbarParent)}
+            onImported={(target) => {
+              void treeData.refresh(target);
+              if (target !== '' && !treeData.expanded.has(target)) {
+                treeData.toggle(target);
+              }
+            }}
+            onAddDashboard={dashboardsHook.config ? onAddDashboard : null}
+          />
+        </>
+      )}
     </span>
   );
 
@@ -1213,6 +1287,8 @@ export function VaultLayout() {
       <TopBar
         vault={vault ?? undefined}
         vaults={allVaults}
+        currentUserId={currentUserId}
+        canEdit={canEdit}
         onVaultUpdated={(updated) => {
           // Ship 91: splice the updated DTO back into the in-memory
           // list so the picker re-renders with the new icon/colour
@@ -1288,6 +1364,7 @@ export function VaultLayout() {
           current={mobileNavCurrent}
           onSelectAssignments={onSelectAssignments}
           onOpenDailyNote={() => void onOpenDailyNote()}
+          canEdit={canEdit}
         />
       )}
 
@@ -1334,6 +1411,14 @@ export function VaultLayout() {
           <Outlet
             context={{
               vault,
+              // Forwarded to pages so they can gate their own
+              // write affordances. FolderPage uses it for the mobile
+              // FolderAddRow visibility; EditorPage uses it for
+              // NoteEditor's forceReadOnly. Default-true mid-load
+              // matches the same optimistic-editor stance the rest
+              // of the layout takes (see the canEdit derivation
+              // near the top of this file).
+              canEdit,
               dashboards: dashboardsHook.config?.dashboards ?? null,
               patchDashboard: dashboardsHook.patchDashboard,
               // Mobile redesign: FolderPage's mobile-only Add footer
@@ -1359,6 +1444,7 @@ export function VaultLayout() {
               vaultId={vaultId}
               selection={selection}
               variant={variant}
+              canEdit={canEdit}
               /*
                 onClose flips visibility through the same unified
                 handler the rail-toggle button uses, so the close
@@ -1519,6 +1605,7 @@ export function VaultLayout() {
           onRenameNote={(p) => rename.start('note', p)}
           onRenameFolder={(p) => rename.start('folder', p)}
           onShowProperties={onShowProperties}
+          canEdit={canEdit}
         />
       )}
     </>
@@ -1534,6 +1621,20 @@ export function VaultLayout() {
  */
 export interface VaultLayoutContext {
   vault: VaultDto | null;
+  /**
+   * Whether the caller has at least editor role on this vault.
+   * Derived from `vault.myRole !== 'viewer'`. Pages use it to gate
+   * their own write affordances (FolderPage's mobile FolderAddRow,
+   * EditorPage's NoteEditor.forceReadOnly, etc.) so the read-only
+   * vs. write-capable behaviour stays consistent across the shell
+   * and the page bodies.
+   *
+   * Defaults to true while `vault` is null (mid-load) — matches the
+   * optimistic-editor default used elsewhere in the layout. The
+   * brief window before the metadata fetch resolves doesn't flash
+   * viewer-mode UI for users who'll turn out to be editors.
+   */
+  canEdit: boolean;
   /**
    * The vault's dashboards. null while the initial GET is in flight
    * or has failed. Always at least one entry once non-null (the

@@ -67,12 +67,21 @@ export interface MobileNotePropertiesProps {
   /** The note as fetched at the EditorPage level. We refresh our
       own copy after each save so this is just the seed. */
   initialNote: NoteDto;
+  /**
+   * Whether the caller has at least editor role on this vault.
+   * Mirrors the desktop PropertiesPanel: every Editable* field
+   * renders disabled when false, values remain visible so the
+   * viewer can read them. Add Note Widget is hidden for viewers
+   * (writes the per-vault widget sidecar, editor-only).
+   */
+  canEdit: boolean;
 }
 
 export function MobileNoteProperties({
   vaultId,
   notePath,
   initialNote,
+  canEdit,
 }: MobileNotePropertiesProps) {
   // Local copy of the note that this panel mutates. Starts from
   // initialNote so we don't fetch on first render. After any save,
@@ -274,22 +283,33 @@ export function MobileNoteProperties({
           {error && <div className="nc-form-error">{error}</div>}
 
           {/* Slim section: the four things you actually want on
-              mobile. Tags, Locked, Name (rename), and Delete. */}
+              mobile. Tags, Locked, Name (rename), and Delete.
+              All Editable fields render disabled for viewers; the
+              Delete button is hidden entirely (it would 403). */}
           <dl className="nc-props-grid">
             <dt>Name</dt>
             <dd>
-              <EditableName value={displayName} onSave={saveRename} />
+              <EditableName
+                value={displayName}
+                disabled={!canEdit}
+                onSave={saveRename}
+              />
             </dd>
 
             <dt>Tags</dt>
             <dd>
-              <EditableTags tags={note.frontmatter.tags} onSave={saveTags} />
+              <EditableTags
+                tags={note.frontmatter.tags}
+                disabled={!canEdit}
+                onSave={saveTags}
+              />
             </dd>
 
             <dt>Locked</dt>
             <dd>
               <EditableLocked
                 value={note.frontmatter.locked}
+                disabled={!canEdit}
                 onSave={saveLocked}
               />
             </dd>
@@ -298,17 +318,22 @@ export function MobileNoteProperties({
           {/* Slim-section actions: just Delete. Move is omitted —
               it relies on tree drag-and-drop which doesn't work on
               touch yet (Ship 85's audit). Export buttons live in
-              the More section so the slim view stays focused. */}
-          <div className="nc-props-actions">
-            <button
-              type="button"
-              className="nc-btn nc-btn-danger"
-              onClick={onDelete}
-              title="Move this note to the vault trash"
-            >
-              🗑 Delete note
-            </button>
-          </div>
+              the More section so the slim view stays focused.
+
+              Hidden entirely for viewers — DELETE /note requires
+              editor. */}
+          {canEdit && (
+            <div className="nc-props-actions">
+              <button
+                type="button"
+                className="nc-btn nc-btn-danger"
+                onClick={onDelete}
+                title="Move this note to the vault trash"
+              >
+                🗑 Delete note
+              </button>
+            </div>
+          )}
 
           {/* Nested "More" expander. Tap to reveal the read-only
               metadata + Version + Appearance + Export + ETag.
@@ -353,16 +378,19 @@ export function MobileNoteProperties({
                     minor={note.frontmatter.versionMinor}
                     state={note.frontmatter.state}
                     release={releaseInfo}
+                    disabled={!canEdit}
                     onSave={saveVersionState}
                   />
                 </dd>
 
                 {/* Appearance renders three dt/dd pairs as a
-                    fragment — same as PropertiesPanel does. */}
+                    fragment — same as PropertiesPanel does.
+                    Disabled for viewers. */}
                 <EditableNoteAppearance
                   font={note.frontmatter.font}
                   fontSize={note.frontmatter.fontSize}
                   width={note.frontmatter.width}
+                  disabled={!canEdit}
                   onSaveFont={(stack) => saveAppearance('font', stack)}
                   onSaveFontSize={(size) => saveAppearance('fontSize', size)}
                   onSaveWidth={(w) => saveAppearance('width', w)}

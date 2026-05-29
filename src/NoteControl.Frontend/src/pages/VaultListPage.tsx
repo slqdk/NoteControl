@@ -86,7 +86,17 @@ export function VaultListPage() {
   // ---- fallback render: no vaults, error, or still loading ----
   return (
     <>
-      <TopBar />
+      {/* No vault is in scope on this fallback render (we're either
+          loading the list, the list is empty, or an error happened
+          before redirect could fire), so currentUserId doesn't need
+          to be resolved for picker grouping — the picker won't even
+          render without a `vaults` list. We pass null and canEdit
+          true (the safe default that matches VaultLayout's optimistic
+          stance); without an active vault the role gate is moot
+          anyway. The Templates link inside TopBar is wrapped in
+          `vault && canEdit && …`, so no vault means no link
+          regardless of canEdit. */}
+      <TopBar currentUserId={null} canEdit={true} />
       <main className="nc-page">
         <h1 className="nc-page-title">Your vaults</h1>
 

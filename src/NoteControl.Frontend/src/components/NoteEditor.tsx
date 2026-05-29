@@ -107,6 +107,20 @@ interface NoteEditorProps {
    * save attempt, and resolves to 'ok' | 'failed' | 'conflict'.
    */
   onSaveNowReady?: (saveNow: () => Promise<SaveNowOutcome>) => void;
+  /**
+   * When true, the editor renders read-only regardless of the note's
+   * frontmatter.locked flag. ORs into the existing locked-note path
+   * (same `editable: false` + .nc-editor-locked styling + link
+   * click-through). The host page sets this for viewer-role users so
+   * they can navigate notes without making accidental edits that
+   * would 412/403 on save.
+   *
+   * Optional / defaults to false so existing callers (none today
+   * besides EditorPage) keep working unchanged. A future
+   * "unlock-and-edit" toggle and viewer-mode read-only would both
+   * flow through this same path.
+   */
+  forceReadOnly?: boolean;
 }
 
 /**
@@ -128,6 +142,7 @@ export function NoteEditor({
   onSaveStateChange,
   onUploadsChange,
   onSaveNowReady,
+  forceReadOnly = false,
 }: NoteEditorProps) {
   // Ship 84: drives whether we render the mobile properties section
   // below the editor's page area. Desktop never sees that block —
@@ -554,10 +569,19 @@ export function NoteEditor({
       // accepts updates from a locked note. The UI honours the
       // hint to avoid accidental edits. A future "unlock first"
       // affordance could be wired into the toolbar.
-      editable: !initialNote.frontmatter.locked,
+      //
+      // forceReadOnly piggy-backs on the same path: the host sets
+      // it for viewer-role users so the editor is read-only even on
+      // an unlocked note. Same `editable: false`, same .nc-editor-
+      // locked styling, same link click-through. We deliberately
+      // reuse the locked styling rather than introduce a separate
+      // viewer-mode class — the visible affordances (no caret, link
+      // clicks navigate instead of editing) are identical and a
+      // second class would only add CSS surface area.
+      editable: !(initialNote.frontmatter.locked || forceReadOnly),
       editorProps: {
         attributes: {
-          class: initialNote.frontmatter.locked
+          class: (initialNote.frontmatter.locked || forceReadOnly)
             ? 'nc-editor nc-editor-locked'
             : 'nc-editor',
           spellcheck: 'false',
@@ -1155,6 +1179,12 @@ export function NoteEditor({
           vaultId={vaultId}
           notePath={initialNote.path}
           initialNote={initialNote}
+          /* Mirror forceReadOnly: if the host disabled writes for
+             this user, the mobile properties panel should match. The
+             inverse mapping (canEdit = !forceReadOnly) keeps the two
+             surfaces honest with each other without the host having
+             to thread two props down separately. */
+          canEdit={!forceReadOnly}
         />
       )}
       {/*

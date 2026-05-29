@@ -115,15 +115,14 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
     },
     [vaultId],
   );
-  // Same trick useDashboards uses — pass a default-shape sentinel
-  // before the real config has loaded. useDebouncedSave skips the
-  // first render anyway, so this default value never actually
-  // PUTs to the server.
-  useDebouncedSave(
-    config ?? { version: 1, assignments: [] },
-    500,
-    doSave,
-  );
+  // Pass nullable config straight through — useDebouncedSave now
+  // treats null as "not loaded yet" and captures the first non-null
+  // value (the GET's response) as the baseline. Pre-this-ship the
+  // sentinel-coalesce trick fired a spurious PUT on every vault open
+  // when the post-load value differed from the sentinel; for viewers
+  // that PUT 403d (PUT /assignments is editor-only). See
+  // useDebouncedSave.ts for the full rationale.
+  useDebouncedSave(config, 500, doSave);
 
   // ----- mutators
 

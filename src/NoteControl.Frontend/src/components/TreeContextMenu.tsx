@@ -13,11 +13,31 @@ export interface TreeContextMenuProps {
   onRenameNote: (notePath: string) => void;
   onRenameFolder: (folderPath: string) => void;
   onShowProperties: (sel: TreeSelection) => void;
+  /**
+   * Whether the caller has at least editor role on this vault.
+   * Viewers see only the read-side items (Open, Properties); the
+   * write-side items (New note here, New folder, Rename…, Delete)
+   * are filtered out so the menu doesn't advertise actions that
+   * would 403 server-side. The server is the authority here too —
+   * even if the menu re-renders stale items briefly, the API
+   * rejects the call — but offering a clickable "Delete" to a
+   * viewer reads as broken UX. Same rule the rail-header "+" menu
+   * follows; this menu is the second discovery path for the same
+   * operations.
+   */
+  canEdit: boolean;
 }
 
 /**
  * Context-menu items for one tree selection. As of step 7b-1 every
  * action is wired to a real endpoint — no more "coming soon" rows.
+ *
+ * Viewer mode (canEdit=false) drops every write item. The remaining
+ * items (Open, Properties, separators between them) still make
+ * sense as read affordances. If a viewer opens the menu on a leaf
+ * row with no write items left, the menu shrinks to just those two
+ * entries — that's fine, the user has confirmed they wanted "more
+ * options for this row" by right-clicking.
  */
 export function TreeContextMenu({
   selection,
@@ -31,6 +51,7 @@ export function TreeContextMenu({
   onRenameNote,
   onRenameFolder,
   onShowProperties,
+  canEdit,
 }: TreeContextMenuProps) {
   const items: ContextMenuItem[] =
     selection.kind === 'note'
@@ -41,25 +62,29 @@ export function TreeContextMenu({
               /* row-click already navigated */
             },
           },
-          { label: null },
-          {
-            label: 'Rename…',
-            onClick: () => onRenameNote(selection.path),
-            accelerator: 'F2',
-          },
-          {
-            label: 'Delete',
-            onClick: () => {
-              if (
-                window.confirm(
-                  `Delete "${selection.name}"? It will be moved to the vault's trash folder.`,
-                )
-              ) {
-                onDeleteNote(selection.path);
-              }
-            },
-            accelerator: 'Del',
-          },
+          ...(canEdit
+            ? ([
+                { label: null },
+                {
+                  label: 'Rename…',
+                  onClick: () => onRenameNote(selection.path),
+                  accelerator: 'F2',
+                },
+                {
+                  label: 'Delete',
+                  onClick: () => {
+                    if (
+                      window.confirm(
+                        `Delete "${selection.name}"? It will be moved to the vault's trash folder.`,
+                      )
+                    ) {
+                      onDeleteNote(selection.path);
+                    }
+                  },
+                  accelerator: 'Del',
+                },
+              ] as ContextMenuItem[])
+            : []),
           { label: null },
           {
             label: 'Properties',
@@ -82,34 +107,38 @@ export function TreeContextMenu({
               /* row-click already navigated */
             },
           },
-          { label: null },
-          {
-            label: 'New note here',
-            onClick: () => onNewNoteUnder(selection.path),
-          },
-          {
-            label: 'New folder',
-            onClick: () => onNewFolderUnder(selection.path),
-          },
-          { label: null },
-          {
-            label: 'Rename…',
-            onClick: () => onRenameFolder(selection.path),
-            accelerator: 'F2',
-          },
-          {
-            label: 'Delete folder',
-            onClick: () => {
-              if (
-                window.confirm(
-                  `Delete folder "${selection.name}"?\n\nThis only works for empty folders. Move or delete its notes first if it contains any.`,
-                )
-              ) {
-                onDeleteFolder(selection.path);
-              }
-            },
-            accelerator: 'Del',
-          },
+          ...(canEdit
+            ? ([
+                { label: null },
+                {
+                  label: 'New note here',
+                  onClick: () => onNewNoteUnder(selection.path),
+                },
+                {
+                  label: 'New folder',
+                  onClick: () => onNewFolderUnder(selection.path),
+                },
+                { label: null },
+                {
+                  label: 'Rename…',
+                  onClick: () => onRenameFolder(selection.path),
+                  accelerator: 'F2',
+                },
+                {
+                  label: 'Delete folder',
+                  onClick: () => {
+                    if (
+                      window.confirm(
+                        `Delete folder "${selection.name}"?\n\nThis only works for empty folders. Move or delete its notes first if it contains any.`,
+                      )
+                    ) {
+                      onDeleteFolder(selection.path);
+                    }
+                  },
+                  accelerator: 'Del',
+                },
+              ] as ContextMenuItem[])
+            : []),
           { label: null },
           {
             label: 'Properties',

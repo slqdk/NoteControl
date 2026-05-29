@@ -498,6 +498,79 @@ body.nc-dragging * {
   text-align: right;
 }
 
+/* ---------- Shared dropdown trigger (trailing pill) ----------
+
+   Wraps the personal/shared split: personal vaults render as
+   inline pills at the left; vaults shared with the user collapse
+   into a single trigger at the right. Two visual modes — see
+   VaultPicker.tsx:
+     - Active vault is NOT shared → "🤝 Shared +N ▾" trigger.
+     - Active vault IS shared    → trigger shows the active
+       vault's avatar + name + ▾ in the active pill style.
+
+   Reuses .nc-vault-picker-overflow for positioning (it's the
+   same relative-anchored container the personal overflow uses)
+   and .nc-vault-picker-menu for the dropdown surface. The rule
+   below only adds Shared-specific overrides. */
+
+.nc-vault-picker-shared {
+  /* margin-left:auto pushes this trigger to the right edge of
+     the .nc-vault-picker flex container so personal pills stay
+     left-anchored and the Shared trigger always trails. Without
+     this, a short personal list would render Shared snug against
+     the last personal pill instead of at the picker's right edge. */
+  margin-left: auto;
+}
+.nc-vault-shared-trigger {
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+  /* Cap the trigger width so a long active-shared vault name
+     truncates inside the pill rather than blowing out the topbar
+     grid. Matches the SHARED_TRIGGER_RESERVE_PX budget in
+     VaultPicker.tsx (200px reserved; cap at 180 so we never
+     exceed the reserve and shove personal pills under us). */
+  max-width: 180px;
+}
+.nc-vault-shared-trigger .nc-vault-pill-label {
+  /* Inherits .nc-vault-pill-label sizing but enforces truncation
+     so the active-shared "JAS" or "Jacob's Long Vault Name" still
+     fits the 180px cap. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nc-vault-shared-glyph {
+  /* Stand-in for the avatar when the trigger represents a group
+     of vaults (active is personal or null). Sized to match the
+     22px avatar VaultAvatar renders so the trigger's vertical
+     rhythm matches a normal pill. */
+  font-size: 18px;
+  line-height: 22px;
+  width: 22px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+/* ---------- Mobile dropdown grouping heading ----------
+
+   Used inside the mobile single-dropdown menu to separate the
+   personal vaults from the shared vaults. Rendered only when
+   both groups are non-empty. Visual is a small muted divider
+   label — non-interactive (it's a div, not a Link/button) so
+   keyboard navigation skips over it. */
+
+.nc-vault-picker-menu-heading {
+  padding: 8px 8px 4px 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--nc-fg-muted);
+  border-top: 1px solid var(--nc-border);
+}
+
 /* ---------- Appearance popover (right-click on active pill) ---------- */
 
 .nc-vault-appearance-popover {

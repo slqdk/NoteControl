@@ -9,6 +9,7 @@ import {
   type TemplateSummaryDto,
 } from '../api/client';
 import type { VaultDto } from '../api/types';
+import { useAuth } from '../auth/AuthContext';
 import { TemplateEditor } from '../components/TemplateEditor';
 import { TopBar } from '../components/TopBar';
 import { refreshTemplates } from '../editor/templateCache';
@@ -32,6 +33,23 @@ export function TemplatesPage() {
   const navigate = useNavigate();
 
   const [vault, setVault] = useState<VaultDto | null>(null);
+
+  // Mirror the derivation VaultLayout uses so the topbar's
+  // role-gated affordances (Templates link visibility, picker
+  // appearance popover) behave consistently on this page too. This
+  // page sits outside the shared VaultLayout (it has its own
+  // header), so it has to thread these props in itself.
+  const { state: authState } = useAuth();
+  const currentUserId =
+    authState.status === 'authenticated' ? authState.user.id : null;
+  // Optimistic-editor default while vault metadata is in flight —
+  // matches VaultLayout's stance. Viewers on this page will see
+  // every Save / Delete button 403 anyway; the role gate here is
+  // primarily about the topbar's Templates link (which would
+  // self-hide while the user is on the templates page they reached
+  // via direct URL — minor cosmetic, but consistent).
+  const canEdit = vault === null ? true : vault.myRole !== 'viewer';
+
   const [templates, setTemplates] = useState<TemplateSummaryDto[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [draft, setDraft] = useState<TemplateDto | null>(null);
@@ -204,7 +222,11 @@ export function TemplatesPage() {
 
   return (
     <>
-      <TopBar vault={vault ?? undefined} />
+      <TopBar
+        vault={vault ?? undefined}
+        currentUserId={currentUserId}
+        canEdit={canEdit}
+      />
 
       <div className="nc-templates-page">
         <div className="nc-templates-header">
