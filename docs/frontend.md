@@ -236,7 +236,11 @@ Shows the selected note or folder's metadata. For notes:
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
 - **Buttons**: Move (toggles move-mode), Delete (with
-  confirmation). Rename happens by editing the name inline.
+  confirmation), and **＋ Add Note Widget** (a dropdown of widget
+  kinds — RSS, Task, Links, Motion A–D, Motor compare, Unit
+  converter — that attach to the open note; see
+  [note-widgets.md](note-widgets.md)). Rename happens by editing
+  the name inline.
 
 For folders: name, full path, contents count, created/updated
 timestamps. Move/Delete buttons available.
@@ -255,6 +259,52 @@ desktop-only affordance for now.
 
 The panel toggles via the rail-toggle button in the topbar (or
 collapses automatically on narrow viewports).
+
+## Note widgets
+
+Interactive widgets can be attached to a single note. They render
+in a band **above** the editor (above the note's top rule),
+stacked vertically; one note can carry zero or more. They are
+added via the Properties panel's **＋ Add Note Widget** dropdown
+and persisted in a per-vault sidecar — `.notesapp/note-widgets.json`
+keyed by note path — NOT in the note's `.md` body.
+
+Available kinds (see [note-widgets.md](note-widgets.md) for each
+kind's behaviour and payload):
+
+- **RSS feed**, **Task area**, **Links** — the same components
+  the dashboard uses (see [Startpage](#startpage)). They look
+  and behave identically on either surface.
+- **Motion** (A / B / C / D) — the motion-profile calculator,
+  also a dashboard widget.
+- **Motor compare** — note-native; an animated sync vs. async
+  induction-motor teaching widget with live slip/rpm math.
+- **Unit converter** — note-native; live multi-unit conversion
+  across Force, Torque, Mass, Inertia, Length, Rotational speed.
+
+Each hosted widget renders inside a relative host that auto-fits
+to the widget's natural height and exposes a full-width bottom
+**resize handle**: drag to set an explicit height (persisted in
+the widget payload), double-click to reset to the kind's default.
+Width is measured from the host and handed to the widget, so the
+widget fills the note column (not its dashboard width).
+
+Source view (the toggle on the editor's view picker) hides the
+note-widget band: widgets aren't part of the markdown, so showing
+them over raw source would be misleading.
+
+Cross-component plumbing: the Properties panel and the Editor
+page live in different branches of the tree (panel in
+`VaultLayout`, editor in the routed page). The Add menu therefore
+dispatches a window `CustomEvent` (`nc:add-note-widget`) with the
+target note path; the editor listens and appends. Same decoupling
+pattern as the topbar's **Widgets+** dropdown talking to
+DashboardPage on the startpage.
+
+Persistence: edits/adds/deletes update the per-vault map in the
+editor page's state and debounce-save the whole map at ~500ms
+cadence via `PUT /api/vaults/{id}/note-widgets`. See
+[api.md § Note widgets](api.md#note-widgets).
 
 ## Mobile
 

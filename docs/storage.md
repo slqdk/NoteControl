@@ -98,6 +98,7 @@ notes or folders called `.notesapp`.
 | `.notesapp/releases/` | Per-note versioning slots, one subfolder per note (path-encoded with `/` → `__`). Holds at most a single frozen `released.md` (the one released copy, full note incl. frontmatter) and, while a note is currently showing its release live, a parked `development.md` (the working copy). Switching a note to *released* mirrors the live note into `released.md`; switching back to *development* restores `development.md`. The folder follows the note on rename; on delete it is left orphaned (same as the per-note history folder). |
 | `.notesapp/startpage.json` | Dashboard layouts for the vault: positions, sizes, RSS URLs, sticky note contents, link entries. One file holds every dashboard the vault has. Saved with debounced cadence. |
 | `.notesapp/assignments.json` | Per-vault Assignments page contents. Flat list of assignments, each carrying its own category. Saved with debounced cadence. |
+| `.notesapp/note-widgets.json` | Per-note interactive widgets (the band above the editor). Map of note path → ordered widget list. One file per vault, shared across notes. Saved with debounced cadence. |
 
 #### startpage.json schema
 
@@ -183,6 +184,53 @@ The server normalises null fields to empty strings on both
 read and write so the on-disk file stays free of `null` noise.
 On write the server stamps the schema version, normalises
 fields, and uses temp-then-rename for atomic replacement.
+
+#### note-widgets.json schema
+
+The file is hand-editable JSON. Schema version **1**: a
+versioned envelope around a map keyed by note path. Each entry
+is the ordered widget list for that note.
+
+```json
+{
+  "version": 1,
+  "byNote": {
+    "Folder/My Note.md": [
+      {
+        "id": "...",       // stable, client-generated UUID
+        "kind": "motor",   // see note-widgets.md for kinds
+        "motor": { /* kind-specific payload */ }
+      },
+      ...
+    ],
+    ...
+  }
+}
+```
+
+The note path key is the vault-relative path with `/`
+separators and the `.md` extension, exactly as it appears
+elsewhere in the API. Exactly one payload field is populated
+per widget, selected by `kind`. The kind catalog and per-kind
+payload shapes live in [note-widgets.md](note-widgets.md).
+
+Normalisation: on both read and write, notes whose widget list
+is empty are dropped from the map entirely — the file never
+accumulates empty arrays for notes that briefly had a widget
+and lost it. Widgets with empty `id` or `kind` are dropped.
+Unknown `kind` values are preserved verbatim (forward-compat:
+a newer build that wrote a kind this build doesn't know is
+kept on disk so the older build doesn't lose data).
+
+A missing or empty file is treated as an empty map. On write
+the server stamps the schema version and uses temp-then-rename
+for atomic replacement. Same single-user / last-write-wins
+concurrency model as `startpage.json` and `assignments.json`.
+
+Caveat — **rename/move orphans widgets.** The `byNote` key is
+the note's path. The app's note-move flow does not currently
+re-key this file, and moving a `.md` by hand on disk likewise
+orphans its widgets. Tracked separately.
 
 ### Notes (the `.md` files)
 

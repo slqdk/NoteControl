@@ -26,7 +26,7 @@ If you're an AI helping with code changes, **read this section first**.
 5. If the doc and the code disagree, surface it before acting —
    don't silently make either match the other.
 
-Don't fetch all 9 docs up front. Fetch only what's relevant.
+Don't fetch all 10 docs up front. Fetch only what's relevant.
 Most changes touch one doc, sometimes two.
 
 ### Raw URLs (use these for fetching)
@@ -38,6 +38,7 @@ auth:          https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/a
 vaults:        https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/vaults.md
 notes:         https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/notes.md
 frontend:      https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/frontend.md
+note-widgets:  https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/note-widgets.md
 st-sandbox:    https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/st-sandbox.md
 tray:          https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/tray.md
 api:           https://raw.githubusercontent.com/slqdk/NoteControl/master/docs/api.md
@@ -159,6 +160,7 @@ docs. If a doc is out of date, the code review missed a step.
 | [vaults.md](vaults.md) | Changing how vaults are created, owned, shared, or how their visual identity (icon, colour) works. |
 | [notes.md](notes.md) | Changing notes, folders, daily notes, templates, drag-and-drop, the editor, the slash menu, paste handling, or the tree view. |
 | [frontend.md](frontend.md) | Changing routes, top-bar layout, the properties panel, sticky notes, RSS blocks, the startpage, settings, keyboard shortcuts, or the appearance system. |
+| [note-widgets.md](note-widgets.md) | Adding a new note-widget kind, changing the "Add Note Widget" flow, or touching the per-note widget sidecar. |
 | [st-sandbox.md](st-sandbox.md) | Changing the in-browser Structured Text runtime: the run modal, the parser/interpreter under `src/runtime/`, value pills, poking, the permissive-unknown model, or the built-in FBs (TON/TOF/R_TRIG/F_TRIG). |
 | [tray.md](tray.md) | Changing the tray menu, the Settings tabs, the Users/Vaults/Logs/Backups admin windows, the tray's update mechanism, or the local tray token flow. |
 | [api.md](api.md) | Adding, removing, or changing the shape of an HTTP endpoint. (Documents only behavioural contract — exact JSON shapes live in `NoteControl.Shared/`.) |

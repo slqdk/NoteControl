@@ -49,6 +49,20 @@ saves — the server reads, mutates the known fields, and writes
 back without dropping unknown ones. Hand-edit frontmatter to add
 your own keys; they survive editor saves.
 
+A note can also carry **interactive widgets** (RSS, Task, Links,
+Motion, Motor compare, Unit converter) attached via the
+Properties panel's **＋ Add Note Widget** dropdown. These render
+above the editor and are persisted in a per-vault sidecar —
+`.notesapp/note-widgets.json` keyed by note path — NOT in the
+`.md` body. Consequences: widgets are invisible in source view
+and `.md`/`.docx` export, they don't travel if the bare `.md` file
+is hand-copied out of the vault, and moving or renaming the file
+*outside* the app orphans them (the app's move flow does not yet
+re-key the sidecar either; tracked separately). See
+[note-widgets.md](note-widgets.md) for the catalog and
+[storage.md § note-widgets.json](storage.md#notesapp-subfolder)
+for the file shape.
+
 ## Path conventions
 
 A note's path inside the vault is its relative path from the

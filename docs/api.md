@@ -170,6 +170,21 @@ sub-route the way the startpage has one.
 | GET | `` | vault:viewer | Read the assignments list from `{vault}/.notesapp/assignments.json`. Missing or empty file returns an empty list (no default placeholder). |
 | PUT | `` | vault:editor | Replace the assignments list. Atomic temp-then-rename write. List order is significant — the frontend groups the flat list into category buckets at render time and preserves order within each bucket, so reordering and cross-bucket moves are persisted purely as changes to this list (order + each item's `category`). Server stamps the schema version on write — clients may PUT any number; the on-disk file always carries the current version. |
 
+## Note widgets
+
+All under `/api/vaults/{vaultId}/note-widgets`. Backs the
+per-note widget band above the editor (see
+[note-widgets.md](note-widgets.md) and
+[frontend.md § Note widgets](frontend.md#note-widgets)). One
+file per vault — `{vault}/.notesapp/note-widgets.json` — keyed
+internally by note path. Bare-route group like Assignments —
+no `/config` sub-route.
+
+| Method | Path | Auth | Behaviour |
+|---|---|---|---|
+| GET | `` | vault:viewer | Read the per-vault widget map (`notePath → widget[]`). Missing or empty file returns an empty map. |
+| PUT | `` | vault:editor | Replace the whole per-vault map. Atomic temp-then-rename write. Whole-file replace (not per-note patch) — the editor page loads the map once when a note opens and PUTs the entire map back on a debounce, mirroring how the startpage and assignments persist. Server stamps the schema version on write, drops empty widget lists from the map, preserves unknown `kind` values for forward-compat. |
+
 ## Admin: server config & operations
 
 All under `/api/admin/server`, all admin-only.
