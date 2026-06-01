@@ -132,21 +132,55 @@ Layout: **3 panes**.
 
 - **Left rail (tree)**: collapsible (toggle in topbar).
 - **Centre**: a recursive **"All notes under X"** list of every
-  note at or below the current folder, sorted most-recently-
-  updated first. The list is **compact and zebra-striped**:
-  each row is a single line with the note's name (relative to
-  the current folder, .md stripped) on the left and a timestamp
-  on the right showing both a relative form and an absolute
-  short date (`1 hour ago · May 20`; the year suffix appears
-  only when the date isn't this year). Even-indexed rows pick
-  up a tinted background from the active theme's stripe colour
-  — the same `--nc-stripe-bg-*` variables the Links startpage
-  block uses, so the stripe shade follows whatever gradient
-  preset the user has picked and switches automatically between
-  light and dark variants. Long names truncate with ellipsis;
-  the full path is in the link's browser-default tooltip.
-  Pages with zero notes show a muted "No notes here yet."
-  placeholder instead of the list.
+  note at or below the current folder, **grouped by lifecycle
+  state**. The list is compact and zebra-striped (zebra resets
+  per section).
+
+  Three sections render top-to-bottom in this fixed order, with
+  empty sections skipped entirely:
+
+  1. **✓ Released** — section heading carries a green tick badge.
+  2. **● Under development** — section heading carries an amber
+     dot badge.
+  3. **Not versioned** — no badge.
+
+  The state vocabulary matches the per-note state field on disk
+  (`released` / `development` / `not-versioned`). Anything the
+  client doesn't recognise buckets into "Not versioned" so a
+  forward-compat state value can never make a row disappear.
+  Each section heading shows a small right-aligned row count.
+  Within each section, rows stay sorted most-recently-updated
+  first.
+
+  Each row is a single line, two-tone:
+
+  - **Path prefix** (folder path relative to the current view,
+    `.md` stripped) renders in muted grey. Notes that sit directly
+    at the folder you're viewing get a literal `./` prefix so the
+    grey lane on the left stays consistent across all rows.
+  - **Filename** renders in the full foreground colour.
+  - **Right side** of the row: an optional version pill
+    (`v{major}.{minor}`, shown when either component is non-zero)
+    followed by the timestamp in full foreground (both relative
+    and absolute short-date forms, e.g. `1 hour ago · May 20`;
+    the year suffix only appears when the date isn't this year).
+
+  Even-indexed rows pick up a tinted background from the active
+  theme's stripe colour — the same `--nc-stripe-bg-*` variables
+  the Links startpage block uses, so the stripe shade follows
+  whatever gradient preset the user has picked and switches
+  automatically between light and dark variants. Long names
+  truncate with ellipsis; the full relative path is in the link's
+  browser-default tooltip. Pages with zero notes show a muted
+  "No notes here yet." placeholder instead of the list.
+
+  The version/state values come from the server's
+  `/api/vaults/{id}/folder/recursive` endpoint, which sniffs each
+  note's frontmatter prefix to populate `VersionMajor`,
+  `VersionMinor`, and `State` on every row — same per-note cost
+  the non-recursive folder listing already pays. The frontend
+  partitions the (already mtime-sorted) list into the three
+  buckets without re-sorting.
 
   Above the search box, a **per-folder cover image** renders
   whenever the folder has one configured (see the Properties
