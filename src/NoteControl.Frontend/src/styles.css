@@ -1737,6 +1737,64 @@ body.nc-dragging * {
   cursor: default;
 }
 
+/* Previous releases list — one row per archived Released version.
+   Tapping a row dispatches nc:note-open-archived-release; EditorPage
+   swaps the editor surface for a read-only archive viewer. Same
+   classes are used by the desktop PropertiesPanel and the mobile
+   MobileNoteProperties More-expander. Visual language mirrors
+   .nc-version-recall-btn: elev background, sm radius, accent hover. */
+.nc-archived-releases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.nc-archived-release {
+  margin: 0;
+}
+.nc-archived-release-btn {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  padding: 4px 8px;
+  background: var(--nc-bg-elev);
+  color: var(--nc-fg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+  cursor: pointer;
+}
+.nc-archived-release-btn:hover {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+}
+.nc-archived-release-btn:focus-visible {
+  outline: 2px solid var(--nc-accent);
+  outline-offset: 1px;
+}
+.nc-archived-release-version {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* Stop the version pill from being squeezed by a long timestamp. */
+  flex: 0 0 auto;
+}
+.nc-archived-release-time {
+  color: var(--nc-fg-muted);
+  font-size: 0.85em;
+  /* Right-align the time; truncate gracefully on very narrow rails. */
+  flex: 1 1 auto;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Editable tag area — chips wrap and the input follows them inline. */
 .nc-prop-tags {
   align-items: flex-start;
