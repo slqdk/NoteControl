@@ -109,16 +109,15 @@ interface NoteEditorProps {
   onSaveNowReady?: (saveNow: () => Promise<SaveNowOutcome>) => void;
   /**
    * When true, the editor renders read-only regardless of the note's
-   * frontmatter.locked flag. ORs into the existing locked-note path
-   * (same `editable: false` + .nc-editor-locked styling + link
-   * click-through). The host page sets this for viewer-role users so
-   * they can navigate notes without making accidental edits that
-   * would 412/403 on save.
+   * lifecycle state. ORs into the state-driven lock path (same
+   * `editable: false` + .nc-editor-locked styling + link click-
+   * through). The host page sets this for viewer-role users so they
+   * can navigate notes without making accidental edits that would
+   * 412/403 on save, and for the archive viewer (where the surface is
+   * intentionally frozen).
    *
-   * Optional / defaults to false so existing callers (none today
-   * besides EditorPage) keep working unchanged. A future
-   * "unlock-and-edit" toggle and viewer-mode read-only would both
-   * flow through this same path.
+   * Optional / defaults to false so existing callers keep working
+   * unchanged.
    */
   forceReadOnly?: boolean;
 }
@@ -560,28 +559,32 @@ export function NoteEditor({
       // editor/mathParser.ts for the scanner rules (Pandoc whitespace
       // protection, currency-safe `$5 and $10`, code-fence skipping).
       content: preprocessMarkdownForMath(initialNote.body),
-      // When a note is marked locked in its frontmatter, the editor
+      // When a note is in the Released lifecycle state, the editor
       // becomes read-only. The user can still navigate to it, copy
       // text out, and inspect its properties, but typing has no
       // effect (TipTap discards keystrokes silently).
       //
-      // Locked is a hint, not a security boundary — the API still
-      // accepts updates from a locked note. The UI honours the
-      // hint to avoid accidental edits. A future "unlock first"
-      // affordance could be wired into the toolbar.
+      // Lock-by-state is a hint, not a security boundary — the API
+      // still accepts body updates that pass an etag. The UI honours
+      // the hint to prevent accidental edits to a published release.
+      // To unlock, the user transitions the note back to Under
+      // development from the Properties panel (or bumps the version);
+      // both paths auto-bump the minor on the server.
       //
-      // forceReadOnly piggy-backs on the same path: the host sets
-      // it for viewer-role users so the editor is read-only even on
-      // an unlocked note. Same `editable: false`, same .nc-editor-
-      // locked styling, same link click-through. We deliberately
-      // reuse the locked styling rather than introduce a separate
-      // viewer-mode class — the visible affordances (no caret, link
-      // clicks navigate instead of editing) are identical and a
-      // second class would only add CSS surface area.
-      editable: !(initialNote.frontmatter.locked || forceReadOnly),
+      // forceReadOnly piggy-backs on the same path: the host sets it
+      // for viewer-role users (so the editor is read-only even on a
+      // development note) and for the archive viewer (an
+      // intentionally frozen read-only surface). Same `editable:
+      // false`, same .nc-editor-locked styling, same link click-
+      // through. We deliberately reuse the locked styling rather
+      // than introduce a separate viewer-mode class — the visible
+      // affordances (no caret, link clicks navigate instead of
+      // editing) are identical and a second class would only add CSS
+      // surface area.
+      editable: !(initialNote.frontmatter.state === 'released' || forceReadOnly),
       editorProps: {
         attributes: {
-          class: (initialNote.frontmatter.locked || forceReadOnly)
+          class: (initialNote.frontmatter.state === 'released' || forceReadOnly)
             ? 'nc-editor nc-editor-locked'
             : 'nc-editor',
           spellcheck: 'false',
@@ -958,39 +961,11 @@ export function NoteEditor({
       if (ce.detail?.path !== initialNote.path) return;
       editor!.commands.redo();
     }
-    // "Revert to last save" handler: the panel has just POSTed to the
-    // history/pop endpoint and got back a fresh NoteDto. It dispatches
-    // this event so the open editor adopts the restored body.
-    //
-    // We deliberately let setContent go into TipTap's history stack
-    // (i.e. don't suppress it) — so a user who clicks Revert by
-    // mistake can press Ctrl+Z to bring back what they had. The body
-    // we set is the body the server now has, so we also pre-set
-    // lastSavedMarkdownRef + etagRef + saveState to 'saved' to keep
-    // the autosave from immediately re-saving the same content.
-    function onReload(e: Event) {
-      const ce = e as CustomEvent<{ path: string; body: string; etag: string }>;
-      if (ce.detail?.path !== initialNote.path) return;
-      // Same math pre-processing as the initial-content path —
-      // setContent feeds tiptap-markdown's parser, which doesn't
-      // know `$..$` so we rewrite to HTML placeholders first.
-      // lastSavedMarkdownRef stays the RAW (un-rewritten) body so
-      // the dirty-check against the serializer output stays clean.
-      editor!.commands.setContent(
-        preprocessMarkdownForMath(ce.detail.body),
-        false,
-      );
-      lastSavedMarkdownRef.current = ce.detail.body;
-      etagRef.current = ce.detail.etag;
-      setSaveState({ kind: 'saved' });
-    }
     window.addEventListener('nc:note-tiptap-undo', onUndoRequest);
     window.addEventListener('nc:note-tiptap-redo', onRedoRequest);
-    window.addEventListener('nc:note-reload-body', onReload);
     return () => {
       window.removeEventListener('nc:note-tiptap-undo', onUndoRequest);
       window.removeEventListener('nc:note-tiptap-redo', onRedoRequest);
-      window.removeEventListener('nc:note-reload-body', onReload);
     };
   }, [editor, initialNote.path]);
 

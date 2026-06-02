@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react';
 
-import type { ReleaseInfo } from '../api/types';
-import { formatNoteTimestamp } from '../utils/time';
 import { SaveStatusBadge, type FieldSaveState } from './SaveStatusBadge';
 
 /**
  * Per-note version + lifecycle-state editor for the Properties panel.
  *
- * Replaces the old free-text version field. A note's version is now two
- * integers (major / minor) edited via number inputs with +/- steppers,
- * and a lifecycle state:
+ * A note's version is two integers (major / minor) edited via number
+ * inputs with +/- steppers, and a lifecycle state:
  *
  *   - version 0.0            -> "Not versioned" (derived, not selectable).
  *   - any version > 0.0      -> "Under development".
@@ -21,14 +18,21 @@ import { SaveStatusBadge, type FieldSaveState } from './SaveStatusBadge';
  *     below its current value;
  *   - "Released" requires version >= 1.0.
  *
- * State changes between development and released drive the server's
- * release-copy swap: switching to Released recalls the single frozen
- * release; switching back to Development restores the parked working
- * copy. The recall info line surfaces that a frozen release exists.
+ * Release/unlock semantics (server-driven, see notes.md):
+ *   - When the note is in Released state, the body is locked. The
+ *     state selector still lets the user pick "Under development" —
+ *     that's the unlock affordance, and the server auto-bumps the
+ *     minor by one on the way through (so the live note's version
+ *     diverges from the archived release).
+ *   - A stepper change on a Released note also unlocks: the server
+ *     accepts the version patch, archives the current released entry
+ *     in place, and transitions back to development at the new pair.
+ *     We send only the integer fields in that case; the server fills
+ *     in the state transition.
  *
  * The component owns only draft + save-status state. The parent wires
- * onSave to a notesApi.update call and refetches the note (+ release
- * info) afterwards, which flows back in as new props.
+ * onSave to a notesApi.update call and refetches the note afterwards,
+ * which flows back in as new props.
  */
 export interface VersionStatePatch {
   versionMajor?: number;
@@ -41,8 +45,6 @@ export interface VersionStateEditorProps {
   minor: number;
   /** "not-versioned" | "development" | "released" */
   state: string;
-  /** Frozen-release info for the recall line; null while loading. */
-  release: ReleaseInfo | null;
   disabled?: boolean;
   onSave: (patch: VersionStatePatch) => Promise<void>;
 }
@@ -55,7 +57,6 @@ export function VersionStateEditor({
   major,
   minor,
   state,
-  release,
   disabled,
   onSave,
 }: VersionStateEditorProps) {
@@ -163,6 +164,9 @@ export function VersionStateEditor({
             Not versioned
           </span>
         ) : (
+          // Selector stays enabled even when the note is Released —
+          // picking "Under development" is the unlock affordance. The
+          // server handles the minor auto-bump on that transition.
           <select
             className="nc-prop-input nc-version-state-select"
             value={state === STATE_NOT_VERSIONED ? STATE_DEVELOPMENT : state}
@@ -177,33 +181,6 @@ export function VersionStateEditor({
           </select>
         )}
       </div>
-
-      {release?.exists && (
-        <div className="nc-version-recall">
-          <span className="nc-version-recall-info">
-            Released v{release.versionMajor}.{release.versionMinor}
-            {release.savedAt ? ` · ${formatNoteTimestamp(release.savedAt)}` : ''}
-          </span>
-          {state === STATE_RELEASED ? (
-            release.developmentStashed ? (
-              <span className="nc-version-recall-hint">
-                Showing the released copy — switch to Under development to
-                return to your working copy.
-              </span>
-            ) : null
-          ) : (
-            <button
-              type="button"
-              className="nc-version-recall-btn"
-              disabled={busy}
-              onClick={() => void commitState(STATE_RELEASED)}
-              title="Recall the frozen released copy into the note"
-            >
-              Recall released version
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

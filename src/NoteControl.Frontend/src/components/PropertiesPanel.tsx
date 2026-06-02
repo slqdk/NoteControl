@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { ApiError, foldersApi, notesApi } from '../api/client';
-import type { FolderListingDto, NoteDto, NoteHistoryInfo, ReleaseInfo } from '../api/types';
+import type { FolderListingDto, NoteDto, ReleasedVersionSummary } from '../api/types';
 import type { TreeSelection } from './TreeView';
 import { formatNoteTimestamp } from '../utils/time';
 import type { TreeVariant } from '../tree/treeStyles';
 import { EditableName } from './EditableName';
 import { EditableTags } from './EditableTags';
-import { EditableLocked } from './EditableLocked';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
 import { VersionStateEditor, type VersionStatePatch } from './VersionStateEditor';
 import {
@@ -20,8 +19,8 @@ import {
  * Visual Studio-style properties panel.
  *
  * As of step 7b-2, fields that the user can change — name, tags,
- * locked — are inline-editable. Read-only metadata (paths, sizes,
- * timestamps) stay as plain <dl> rows.
+ * version + state, appearance — are inline-editable. Read-only
+ * metadata (paths, sizes, timestamps) stay as plain <dl> rows.
  *
  * The panel calls the API directly for edits rather than going
  * through the parent. Each editable component owns its own save
@@ -58,19 +57,33 @@ import {
  * flow, which sources it from live editor state and pairs it with
  * an ETag.
  *
- * Undo / Revert (two distinct affordances):
- *   - Undo / Redo buttons drive TipTap's in-memory history through
- *     nc:note-tiptap-undo / nc:note-tiptap-redo events. State
- *     (canUndo / canRedo) is mirrored from nc:note-undo-state
- *     events the editor dispatches on every transaction.
- *   - Revert to last save button drives the server-side snapshot
- *     ring: POSTs to /history/pop, gets the restored NoteDto, then
- *     dispatches nc:note-reload-body so the open editor adopts the
- *     restored content + fresh etag without remount.
- *   The two are deliberately separate buttons (not one smart Undo)
- *   because their costs and effects differ wildly — one moves a
- *   keystroke, the other replaces the whole document with an older
- *   save. A combined affordance would surprise users.
+ * Lock-by-state (no manual Locked toggle):
+ *   A note is locked iff its lifecycle state is `released`. There
+ *   is no Locked checkbox here — the user unlocks by switching the
+ *   state selector back to "Under development" (server auto-bumps
+ *   the minor) or by bumping the version steppers on a Released
+ *   note (server auto-transitions to development at the new pair
+ *   and archives the just-released entry).
+ *
+ * Previous releases:
+ *   Replaces the old 10-snapshot Revert ring. We list every past
+ *   Released entry for the note (newest first) under a "Previous
+ *   releases" row. Each entry is a frozen archive (path + body +
+ *   frontmatter as they were at release time). Clicking an entry
+ *   dispatches nc:note-open-archived-release, which EditorPage
+ *   listens for and uses to mount a read-only archive viewer in
+ *   place of the live editor. Entries never disappear on their own
+ *   — they're immutable once written; the only way to lose one is
+ *   to re-release the same version (overwrites in place) or delete
+ *   the note.
+ *
+ * Undo / Redo:
+ *   In-memory TipTap history. Buttons drive editor.commands.undo /
+ *   redo via nc:note-tiptap-undo / nc:note-tiptap-redo events; state
+ *   (canUndo / canRedo) is mirrored from nc:note-undo-state events
+ *   the editor dispatches on every transaction. There is no longer
+ *   a server-side Revert button — the per-version release archive
+ *   above subsumes it.
  */
 export interface PropertiesPanelProps {
   vaultId: string;
@@ -80,7 +93,7 @@ export interface PropertiesPanelProps {
   /**
    * Whether the caller has at least editor role on this vault.
    * Drives the read/write split throughout the panel:
-   *   - All Editable* fields (Name, Tags, Locked, Version,
+   *   - All Editable* fields (Name, Tags, Version + state,
    *     Appearance) become disabled — values still render so the
    *     viewer can see them, but inputs are inert.
    *   - The action buttons block (Move, Delete, Add Note Widget)
@@ -89,12 +102,13 @@ export interface PropertiesPanelProps {
    *     viewer-allowed).
    *   - The folder cover Upload/Replace/Delete affordances are
    *     hidden; the thumbnail itself still renders.
-   *   - Undo / Redo / Revert remain interactive — they only affect
-   *     local editor state and the server's history fetch is
-   *     viewer-allowed, but the buttons are useless without write
+   *   - Undo / Redo remain interactive — they only affect local
+   *     editor state, but the buttons are useless without write
    *     access. We disable them by way of canUndo/canRedo already
    *     reporting false (the viewer's read-only editor never enters
    *     the dirty state).
+   *   - Previous-releases entries remain clickable: viewing an
+   *     archived version is a read operation.
    * Dashboard mode (dashboardSelection != null) ignores canEdit;
    * dashboard rename/delete are still parent-owned and the parent
    * gates them itself.
@@ -226,13 +240,11 @@ export function PropertiesPanel({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
-  // Per-note undo history (server-side snapshot ring). Fetched on
-  // selection change + after every refreshTick bump so the Revert
-  // button label stays current. Null while loading or when no note
-  // is selected; a zero count means snapshots exist but the count is
-  // legitimately 0 (a brand-new note with no body changes yet).
-  const [historyInfo, setHistoryInfo] = useState<NoteHistoryInfo | null>(null);
-  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
+  // Per-note release archive. Populated by notesApi.listReleases on
+  // selection change. Each entry is one frozen Released version of
+  // the note (newest first). Empty when the note has never been
+  // released. Replaces the old 10-snapshot history ring.
+  const [archivedReleases, setArchivedReleases] = useState<ReleasedVersionSummary[]>([]);
 
   useEffect(() => {
     setNote(null);
@@ -245,12 +257,11 @@ export function PropertiesPanel({
     setViewMode('rendered');
     // Reset editor-history mirror — the editor will dispatch a fresh
     // nc:note-undo-state on its own mount once the new note loads.
-    // Reset server-history info — we'll refetch below if this is a
-    // note selection.
+    // Reset the archived-releases list — we'll refetch below if this
+    // is a note selection.
     setCanUndo(false);
     setCanRedo(false);
-    setHistoryInfo(null);
-    setReleaseInfo(null);
+    setArchivedReleases([]);
     if (!selection) return;
 
     let cancelled = false;
@@ -263,33 +274,14 @@ export function PropertiesPanel({
             if (n === null) setError('Note not found.');
             else setNote(n);
           }
-          // History info is a separate, cheap fetch — runs even if the
-          // note GET above errors, since the count tells the user
-          // "snapshots exist on disk" independently of whether the
-          // note itself is currently loadable.
+          // Archived releases — cheap, best-effort fetch. Drives the
+          // "Previous releases" list. A failure here just shows an
+          // empty list, which is the safe default.
           try {
-            const info = await notesApi.getHistory(vaultId, selection.path);
-            if (!cancelled) setHistoryInfo(info);
+            const rels = await notesApi.listReleases(vaultId, selection.path);
+            if (!cancelled) setArchivedReleases(rels.archived);
           } catch {
-            // Best-effort. A failure here just leaves the Revert
-            // button disabled, which is the safe default.
-            if (!cancelled) setHistoryInfo({ count: 0, latest: null });
-          }
-          // Release info: also a cheap, best-effort fetch. Drives the
-          // version editor's recall line.
-          try {
-            const rel = await notesApi.getRelease(vaultId, selection.path);
-            if (!cancelled) setReleaseInfo(rel);
-          } catch {
-            if (!cancelled) {
-              setReleaseInfo({
-                exists: false,
-                versionMajor: 0,
-                versionMinor: 0,
-                savedAt: null,
-                developmentStashed: false,
-              });
-            }
+            if (!cancelled) setArchivedReleases([]);
           }
         } else {
           const f = await notesApi.listFolder(vaultId, selection.path);
@@ -359,27 +351,15 @@ export function PropertiesPanel({
     }
   }
 
-  async function saveLocked(locked: boolean) {
-    if (!selection || selection.kind !== 'note' || !note) return;
-    try {
-      // See header doc: property saves never send `body`. The
-      // server's update endpoint treats a missing body as
-      // "leave it alone" and only rewrites frontmatter.
-      await notesApi.update(vaultId, selection.path, {
-        locked,
-      });
-      setRefreshTick((t) => t + 1);
-    } catch (e) {
-      throw e instanceof ApiError ? new Error(e.message) : e;
-    }
-  }
-
   /**
    * Save a version and/or state change. Sends only the fields in the
    * patch (server treats missing fields as "leave alone"); never sends
-   * body. A state change between development/released drives the
-   * server's release-copy swap. After the save we bump refreshTick,
-   * which refetches the note + release info so the editor reflects the
+   * body. On a Released note, both a stepper bump and an explicit
+   * state→development patch trigger the server's archive-and-unlock
+   * flow: the just-released version is archived in place and the live
+   * note transitions to development at the new (auto-bumped) minor.
+   * After the save we bump refreshTick, which refetches the note (and
+   * the archived-releases list) so the panel and editor reflect the
    * canonical version/state.
    */
   async function saveVersionState(patch: VersionStatePatch) {
@@ -438,20 +418,13 @@ export function PropertiesPanel({
     }
   }
 
-  // ------------------------------------------------- undo / revert
+  // ------------------------------------------------- undo
 
   // Mirror the editor's undo state into local React state by listening
   // for the nc:note-undo-state events NoteEditor dispatches on every
   // transaction. The detail.path check filters events for other notes
   // (multi-tab safety) — same pattern as the appearance listener in
   // the editor.
-  //
-  // Also listens for nc:note-body-saved (dispatched by NoteEditor
-  // after every successful body save) so the panel's history count
-  // stays current as the user types-and-autosaves. Without this, the
-  // Revert button would be stuck at the count we fetched when the
-  // panel first loaded — wrong (and sometimes disabled-when-shouldn't-
-  // be) the moment any autosave creates a new snapshot.
   useEffect(() => {
     if (!selection || selection.kind !== 'note') return;
     function onUndoState(e: Event) {
@@ -464,23 +437,9 @@ export function PropertiesPanel({
       setCanUndo(ce.detail.canUndo);
       setCanRedo(ce.detail.canRedo);
     }
-    let cancelled = false;
-    async function onBodySaved(e: Event) {
-      const ce = e as CustomEvent<{ path: string }>;
-      if (!ce.detail || ce.detail.path !== selection!.path) return;
-      try {
-        const info = await notesApi.getHistory(vaultId, selection!.path);
-        if (!cancelled) setHistoryInfo(info);
-      } catch {
-        // Best-effort. The next save will retry.
-      }
-    }
     window.addEventListener('nc:note-undo-state', onUndoState);
-    window.addEventListener('nc:note-body-saved', onBodySaved);
     return () => {
-      cancelled = true;
       window.removeEventListener('nc:note-undo-state', onUndoState);
-      window.removeEventListener('nc:note-body-saved', onBodySaved);
     };
   }, [selection, vaultId]);
 
@@ -508,67 +467,23 @@ export function PropertiesPanel({
   }
 
   /**
-   * Revert to the last server-side snapshot.
-   *
-   * Distinct from Undo (in-memory TipTap history): this goes through
-   * the server, replacing the on-disk body with the most recent
-   * snapshot from `.notesapp/history/<encoded>/`. The server snapshots
-   * the *current* content before popping, so a subsequent Revert
-   * brings the just-replaced content back — undo-of-undo works.
-   *
-   * Flow:
-   *   1. Confirm with the user. The Revert button is a much bigger
-   *      action than Undo (jumps back to a save boundary, not one
-   *      transaction), so a confirm dialog is part of the contract.
-   *   2. POST /history/pop → get the restored NoteDto.
-   *   3. Dispatch nc:note-reload-body so the open editor adopts the
-   *      restored body + etag without a remount.
-   *   4. Bump refreshTick so the panel refetches the note (gets fresh
-   *      frontmatter) and re-reads the history count.
-   *
-   * Errors surface in the panel's existing `error` state. The most
-   * common failure is 404 (no snapshots), which the button-disabled
-   * state should prevent in practice but we handle defensively for
-   * the rare race.
+   * Open one archived released version of the current note in the
+   * editor surface. We don't fetch the archive here — EditorPage
+   * does, since it owns the editor mount. This just dispatches the
+   * intent with the version pair; EditorPage filters by note path
+   * and ignores events for other notes.
    */
-  async function confirmAndRevert() {
-    if (!selection || selection.kind !== 'note' || !note) return;
-    if (!historyInfo || historyInfo.count === 0) return;
-
-    const latestLabel = historyInfo.latest
-      ? formatNoteTimestamp(historyInfo.latest)
-      : 'the previous save';
-    const ok = window.confirm(
-      `Revert this note to the version saved at ${latestLabel}?\n\n` +
-        `Your current content will be saved as a snapshot first, so this ` +
-        `action is reversible (click Revert again to bring back what you ` +
-        `have now).`,
+  function openArchivedRelease(versionMajor: number, versionMinor: number) {
+    if (!selection || selection.kind !== 'note') return;
+    window.dispatchEvent(
+      new CustomEvent('nc:note-open-archived-release', {
+        detail: {
+          path: selection.path,
+          versionMajor,
+          versionMinor,
+        },
+      }),
     );
-    if (!ok) return;
-
-    try {
-      const restored = await notesApi.popHistory(vaultId, selection.path);
-      // Tell the open editor to adopt the restored body + fresh etag.
-      // We pass etag along so the editor's autosave doesn't 412 the
-      // very next time it fires.
-      window.dispatchEvent(
-        new CustomEvent('nc:note-reload-body', {
-          detail: {
-            path: selection.path,
-            body: restored.body,
-            etag: restored.etag,
-          },
-        }),
-      );
-      // Refetch panel data (note + history count). The history count
-      // stays roughly the same after a pop: we added 1 (snapshot of
-      // current) and removed 1 (the popped one), net zero — unless
-      // the ring was at cap, in which case the prune dropped the
-      // oldest and net is -1. The new fetch sorts it either way.
-      setRefreshTick((t) => t + 1);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Revert failed.');
-    }
   }
 
   /**
@@ -663,7 +578,16 @@ export function PropertiesPanel({
             <dd>
               <EditableName
                 value={stripMd(selection.name)}
-                disabled={!canEdit}
+                /*
+                  A Released note's name is locked: the name is part
+                  of its identity as a published artifact, and the
+                  archived release entries reference this very path.
+                  Unlock by transitioning state back to development
+                  (or bumping the version) — both paths auto-bump
+                  the minor and the rename then becomes editable
+                  again.
+                */
+                disabled={!canEdit || note.frontmatter.state === 'released'}
                 onSave={saveNoteRename}
               />
             </dd>
@@ -690,7 +614,6 @@ export function PropertiesPanel({
                 major={note.frontmatter.versionMajor}
                 minor={note.frontmatter.versionMinor}
                 state={note.frontmatter.state}
-                release={releaseInfo}
                 disabled={!canEdit}
                 onSave={saveVersionState}
               />
@@ -702,15 +625,6 @@ export function PropertiesPanel({
                 tags={note.frontmatter.tags}
                 disabled={!canEdit}
                 onSave={saveTags}
-              />
-            </dd>
-
-            <dt>Locked</dt>
-            <dd>
-              <EditableLocked
-                value={note.frontmatter.locked}
-                disabled={!canEdit}
-                onSave={saveLocked}
               />
             </dd>
 
@@ -773,37 +687,52 @@ export function PropertiesPanel({
             </dd>
 
             {/*
-              Revert to last save — server-side snapshot pop. Bigger
-              hammer than Undo: jumps back to a save boundary, not a
-              single transaction. Confirmation prompt is part of the
-              contract since the action replaces editor content; the
-              prompt also reassures the user the pop is reversible
-              (current content is snapshotted server-side before the
-              swap).
+              Previous releases — the per-version release archive that
+              replaces the old 10-snapshot Revert ring. One row per
+              past Released entry, newest first. Each entry is a frozen
+              copy of the note as it was at the moment it entered
+              Released state. Clicking opens a read-only archive viewer
+              in place of the live editor (EditorPage handles the
+              swap). Entries persist until the note is deleted or the
+              same (major, minor) is re-released (which overwrites the
+              existing archive in place).
 
-              Disabled when no snapshots exist on disk. Label includes
-              the count so the user knows how many saves they can
-              walk back.
+              The whole row is hidden when there are no entries — a
+              note that has never been Released has nothing to show
+              here, and a blank-but-present "Previous releases: (none)"
+              row would be noise.
             */}
-            <dt>Revert</dt>
-            <dd>
-              <button
-                type="button"
-                className="nc-btn"
-                onClick={confirmAndRevert}
-                disabled={!historyInfo || historyInfo.count === 0}
-                title={
-                  historyInfo && historyInfo.count > 0 && historyInfo.latest
-                    ? `Replace the current note content with the version saved at ${formatNoteTimestamp(historyInfo.latest)}. Reversible.`
-                    : 'No saved snapshots available to revert to'
-                }
-              >
-                ⏮ Revert to last save
-                {historyInfo && historyInfo.count > 0
-                  ? ` (${historyInfo.count})`
-                  : ''}
-              </button>
-            </dd>
+            {archivedReleases.length > 0 && (
+              <>
+                <dt>Previous releases</dt>
+                <dd>
+                  <ul className="nc-archived-releases">
+                    {archivedReleases.map((r) => (
+                      <li
+                        key={`${r.versionMajor}.${r.versionMinor}`}
+                        className="nc-archived-release"
+                      >
+                        <button
+                          type="button"
+                          className="nc-archived-release-btn"
+                          onClick={() =>
+                            openArchivedRelease(r.versionMajor, r.versionMinor)
+                          }
+                          title={`Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`}
+                        >
+                          <span className="nc-archived-release-version">
+                            v{r.versionMajor}.{r.versionMinor}
+                          </span>
+                          <span className="nc-archived-release-time">
+                            {formatNoteTimestamp(r.savedAt)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </>
+            )}
 
             {/*
               View toggle. Lives at the bottom of the editable rows

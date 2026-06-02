@@ -2,6 +2,7 @@
 // rationale. All DTOs use camelCase; this file's wire payloads follow.
 
 import type {
+  ArchivedRelease,
   AuthMeDto,
   AssignmentsConfigDto,
   CreateNoteRequest,
@@ -15,6 +16,7 @@ import type {
   NoteWidgetsConfigDto,
   ProblemDetails,
   ReleaseInfo,
+  ReleasedVersions,
   SearchResponseDto,
   StartpageConfigDto,
   UpdateNoteRequest,
@@ -273,10 +275,13 @@ export const notesApi = {
 
   /**
    * GET /api/vaults/{id}/note/history?path=...
-   * Summary of available undo history for one note. The Properties
-   * panel calls this on mount + after each save-that-changes-body
-   * to decide whether the "Revert to last save" button is enabled
-   * and to label the timestamp tooltip.
+   *
+   * @deprecated The 10-snapshot Revert ring was replaced by per-version
+   * release archives (see {@link listReleases}). The endpoint survives
+   * on the server as a stub that always returns `count: 0`, which keeps
+   * the legacy pre-Ship-C mobile properties surface working — its
+   * Revert button just stays disabled. Desktop code uses listReleases
+   * instead and does not call this method.
    */
   getHistory: (vaultId: string, notePath: string) =>
     request<NoteHistoryInfo>(
@@ -284,31 +289,58 @@ export const notesApi = {
     ),
 
   /**
-   * POST /api/vaults/{id}/note/history/pop?path=...
-   * Pop the most recent snapshot off the per-note history ring and
-   * restore it as the note's content. The server first snapshots the
-   * CURRENT content (so the pop is reversible — a subsequent pop will
-   * bring back the state we just replaced), then deletes the popped
-   * snapshot file. Returns the restored NoteDto, including a fresh
-   * etag the editor should adopt before its next autosave.
-   *
-   * 404 when there are no snapshots to pop.
-   */
-  popHistory: (vaultId: string, notePath: string) =>
-    request<NoteDto>(
-      `/api/vaults/${vaultId}/note/history/pop?path=${encodeURIComponent(notePath)}`,
-      { method: 'POST' },
-    ),
-
-  /**
    * GET /api/vaults/{id}/note/release?path=...
-   * Info about the note's single frozen released copy (if any). The
-   * Properties panel calls this on mount + after each state change to
-   * label the recall affordance.
+   *
+   * @deprecated The single-frozen-release model was replaced by per-
+   * version release archives (see {@link listReleases}). The endpoint
+   * survives on the server as a stub that always returns
+   * `exists: false`, which keeps the legacy pre-Ship-C mobile
+   * properties surface working — its recall affordance just hides
+   * itself. Desktop code uses listReleases instead and does not call
+   * this method.
    */
   getRelease: (vaultId: string, notePath: string) =>
     request<ReleaseInfo>(
       `/api/vaults/${vaultId}/note/release?path=${encodeURIComponent(notePath)}`,
+    ),
+
+  /**
+   * GET /api/vaults/{id}/note/releases?path=...
+   *
+   * List the archived released versions of a note, newest first. Each
+   * entry was frozen at the moment the note entered Released state at
+   * that (major, minor) version; archive entries are immutable and the
+   * list grows monotonically (an unlock bumps the minor by one, and a
+   * subsequent re-release adds a new entry without disturbing the
+   * existing ones).
+   *
+   * Drives the Properties panel's "Previous releases" list. The list
+   * is empty when the note has never been released.
+   */
+  listReleases: (vaultId: string, notePath: string) =>
+    request<ReleasedVersions>(
+      `/api/vaults/${vaultId}/note/releases?path=${encodeURIComponent(notePath)}`,
+    ),
+
+  /**
+   * GET /api/vaults/{id}/note/releases/content?path=&versionMajor=&versionMinor=
+   *
+   * Read one archived released version's full body + frontmatter for
+   * the read-only archive viewer. Returns 404 if no archive exists at
+   * the requested version (e.g. the user opened a list entry that was
+   * concurrently deleted by an admin sweep).
+   */
+  getReleaseContent: (
+    vaultId: string,
+    notePath: string,
+    versionMajor: number,
+    versionMinor: number,
+  ) =>
+    request<ArchivedRelease>(
+      `/api/vaults/${vaultId}/note/releases/content` +
+        `?path=${encodeURIComponent(notePath)}` +
+        `&versionMajor=${versionMajor}` +
+        `&versionMinor=${versionMinor}`,
     ),
 
   /** GET /api/vaults/{id}/folder?path=... — list one folder. */

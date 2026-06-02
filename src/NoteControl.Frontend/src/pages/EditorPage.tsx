@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 
 import { ApiError, notesApi, noteWidgetsApi } from '../api/client';
-import type { NoteDto, NoteWidgetDto, NoteWidgetsConfigDto } from '../api/types';
+import type {
+  ArchivedRelease,
+  NoteDto,
+  NoteWidgetDto,
+  NoteWidgetsConfigDto,
+} from '../api/types';
 import {
   NoteEditor,
   type EditorUpload,
@@ -49,19 +54,29 @@ import type { VaultLayoutContext } from '../components/VaultLayout';
  * handler in NoteEditor (which prompts the browser's generic
  * "Leave site?" dialog when there are unsaved changes).
  *
- * View mode: the page can render either the live TipTap editor OR
- * a read-only markdown source viewer. The toggle is driven by the
- * properties panel via a window event (nc:note-view-mode-changed).
+ * View mode: the page can render one of three surfaces — the live
+ * TipTap editor ('rendered'), a read-only markdown source viewer
+ * ('source'), or a read-only archive viewer that mounts the live
+ * editor in forceReadOnly mode against a synthesized NoteDto built
+ * from one of the note's archived released versions ('archive').
+ *
+ * 'rendered' ↔ 'source' is driven by the properties panel via
+ * nc:note-view-mode-changed. 'archive' is entered when the panel
+ * dispatches nc:note-open-archived-release with a version pair; we
+ * fetch the archive content and swap. The user exits via the "Back
+ * to live" button in the banner, or by navigating to a different
+ * note (the load effect resets us to 'rendered').
+ *
  * Whenever the URL note path changes the view mode resets to
- * 'rendered' — opening a different note always lands in the
- * rendered editor. When swapping into source mode we first flush
- * any pending save (so the source we display is what's on disk)
- * and refetch the note (so freshly-saved body is what gets shown).
- * If the flush fails or the refetch fails, we still swap but log
- * a warning — the existing save-state badge surfaces the real
- * failure to the user.
+ * 'rendered' and viewingArchive clears — opening a different note
+ * always lands in the rendered editor. When swapping into source
+ * mode we first flush any pending save (so the source we display is
+ * what's on disk) and refetch the note (so freshly-saved body is
+ * what gets shown). If the flush fails or the refetch fails, we
+ * still swap but log a warning — the existing save-state badge
+ * surfaces the real failure to the user.
  */
-type ViewMode = 'rendered' | 'source';
+type ViewMode = 'rendered' | 'source' | 'archive';
 
 export function EditorPage() {
   const { vaultId } = useParams<{ vaultId: string }>();
@@ -83,6 +98,17 @@ export function EditorPage() {
   // cross-component signal that matters is the user clicking the
   // toggle (which fires the event we listen for here).
   const [viewMode, setViewMode] = useState<ViewMode>('rendered');
+
+  // The archived release currently being viewed, or null when not in
+  // archive mode. Holds the full body + frontmatter + savedAt for the
+  // archived version. We mount NoteEditor against a synthesized
+  // NoteDto built from this (forceReadOnly true) so all editor
+  // chrome — TipTap rendering, math, code blocks, links — works
+  // exactly as on the live note. The synthesized note's etag is a
+  // sentinel ("archive"); the editor never PUTs in forceReadOnly so
+  // the value is unused, but having it non-empty keeps the existing
+  // editor invariants happy without a NoteDto type change.
+  const [viewingArchive, setViewingArchive] = useState<ArchivedRelease | null>(null);
 
   // Save status + uploads live here so the breadcrumb row can show
   // them. NoteEditor reports them via callbacks; we don't try to
@@ -319,8 +345,11 @@ export function EditorPage() {
     setUploads([]);
     // Always start a freshly-loaded note in rendered mode. This
     // is the "toggle back when the note loads" behaviour the user
-    // asked for: the source view never persists across notes.
+    // asked for: the source view never persists across notes. The
+    // archive viewer also clears: opening a different note can't
+    // leave us staring at an unrelated note's archive.
     setViewMode('rendered');
+    setViewingArchive(null);
     // Drop the saveNow handle from the previous editor mount so a
     // stray Retry click on a stale error chip can't fire a save
     // against the new note's editor (it'll just no-op until the
@@ -394,9 +423,15 @@ export function EditorPage() {
           // body. The user will see at most an autosave-debounce
           // worth of staleness (~800ms).
         }
-        if (!cancelled) setViewMode('source');
+        if (!cancelled) {
+          setViewingArchive(null);
+          setViewMode('source');
+        }
       } else {
-        if (!cancelled) setViewMode('rendered');
+        if (!cancelled) {
+          setViewingArchive(null);
+          setViewMode('rendered');
+        }
       }
     }
 
@@ -411,6 +446,72 @@ export function EditorPage() {
     return () => {
       cancelled = true;
       window.removeEventListener('nc:note-view-mode-changed', onChangeSync);
+    };
+  }, [vaultId, notePath]);
+
+  // Listen for "open archived release" requests from the properties
+  // panel. The panel emits with { path, versionMajor, versionMinor };
+  // we filter by note path, fetch the archive content, and switch to
+  // 'archive' view mode. Errors set the page-level error banner —
+  // a missing archive (404) is rare in practice but possible if the
+  // archive was deleted between the panel listing the entry and the
+  // user clicking it; surfacing it lets the user click another entry
+  // rather than silently doing nothing.
+  useEffect(() => {
+    if (!vaultId || !notePath) return;
+
+    let cancelled = false;
+
+    async function onOpen(e: Event) {
+      const ce = e as CustomEvent<{
+        path: string;
+        versionMajor: number;
+        versionMinor: number;
+      }>;
+      if (!ce.detail || ce.detail.path !== notePath) return;
+      // Flush any pending save on the live editor before swapping
+      // the surface — otherwise the archive viewer would mount, the
+      // live editor would unmount, and an in-flight autosave timer
+      // would silently drop. Same idea as the source-view flush.
+      const saveNow = saveNowRef.current;
+      if (saveNow) {
+        try {
+          await saveNow();
+        } catch {
+          // Editor surfaces its own error; we just want to land
+          // in archive mode with the on-disk state as the next
+          // "Back to live" target.
+        }
+      }
+      try {
+        const archive = await notesApi.getReleaseContent(
+          vaultId!,
+          ce.detail.path,
+          ce.detail.versionMajor,
+          ce.detail.versionMinor,
+        );
+        if (cancelled) return;
+        setViewingArchive(archive);
+        setViewMode('archive');
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof ApiError
+              ? err.message
+              : 'Could not load archived release.',
+          );
+        }
+      }
+    }
+
+    function onOpenSync(e: Event) {
+      void onOpen(e);
+    }
+
+    window.addEventListener('nc:note-open-archived-release', onOpenSync);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nc:note-open-archived-release', onOpenSync);
     };
   }, [vaultId, notePath]);
 
@@ -473,6 +574,14 @@ export function EditorPage() {
               source
             </span>
           )}
+          {viewMode === 'archive' && viewingArchive && (
+            <span
+              className="nc-source-mode-pill"
+              title={`Archived v${viewingArchive.versionMajor}.${viewingArchive.versionMinor} — read-only`}
+            >
+              archive v{viewingArchive.versionMajor}.{viewingArchive.versionMinor}
+            </span>
+          )}
         </div>
         <div className="nc-breadcrumb-status">
           {uploads.length > 0 && (
@@ -529,13 +638,17 @@ export function EditorPage() {
 
       {/*
         Surface swap. Rendered mode mounts the live TipTap editor;
-        source mode mounts a read-only markdown viewer. We use the
+        source mode mounts a read-only markdown viewer; archive mode
+        mounts the editor again against a synthesized NoteDto built
+        from the archived release (forceReadOnly true). We use the
         viewMode in the key for the editor so swapping back to
         rendered remounts it fresh — an editor that was just
         unmounted into source mode shouldn't carry stale handlers
         across the swap. The note path remains in the key as well
         so navigating to a different note also forces a remount,
-        same as before.
+        same as before. In archive mode the version pair joins the
+        key so clicking a different archived entry remounts the
+        editor with the new content.
       */}
       {note && viewMode === 'rendered' && (
         <NoteEditor
@@ -543,10 +656,10 @@ export function EditorPage() {
           vaultId={vaultId}
           initialNote={note}
           /* Viewer-role users get the editor in read-only mode even
-             on unlocked notes. NoteEditor ORs this with the note's
-             frontmatter.locked flag so the existing locked-note path
-             (TipTap editable: false + .nc-editor-locked styling +
-             link click-through) handles both cases uniformly. */
+             on development notes. NoteEditor ORs this with the
+             state===released check so the locked-note path (TipTap
+             editable: false + .nc-editor-locked styling + link
+             click-through) handles both cases uniformly. */
           forceReadOnly={!canEdit}
           onSaveStateChange={setSaveState}
           onUploadsChange={setUploads}
@@ -557,6 +670,72 @@ export function EditorPage() {
       )}
       {note && viewMode === 'source' && (
         <MarkdownSourceView note={note} />
+      )}
+      {note && viewMode === 'archive' && viewingArchive && (
+        <>
+          {/*
+            Archive viewer banner. Tells the user what they're
+            looking at and gives them a clear way out. Sits above
+            the editor surface, same place a save-error banner
+            would sit. "Back to live" returns to rendered mode
+            against the LIVE note (which we've kept in `note`
+            state the whole time — the archive doesn't replace
+            it).
+          */}
+          <div className="nc-archive-banner" role="status">
+            <span className="nc-archive-banner-text">
+              Viewing archived v{viewingArchive.versionMajor}
+              .{viewingArchive.versionMinor} · saved{' '}
+              {new Date(viewingArchive.savedAt).toLocaleString()}
+            </span>
+            <button
+              type="button"
+              className="nc-btn nc-archive-banner-back"
+              onClick={() => {
+                setViewingArchive(null);
+                setViewMode('rendered');
+              }}
+              title="Return to the live editor"
+            >
+              ← Back to live
+            </button>
+          </div>
+          <NoteEditor
+            /*
+              Key includes the archive version so switching from one
+              archived entry to another forces a remount. Without
+              the version in the key, React would reuse the same
+              NoteEditor instance and the new body wouldn't be
+              picked up (NoteEditor reads initialNote.body only on
+              mount).
+            */
+            key={`${note.path}::archive::${viewingArchive.versionMajor}.${viewingArchive.versionMinor}`}
+            vaultId={vaultId}
+            initialNote={{
+              path: viewingArchive.path,
+              body: viewingArchive.body,
+              frontmatter: viewingArchive.frontmatter,
+              // Sentinel etag. The editor never PUTs in
+              // forceReadOnly mode, so this value is unused, but a
+              // non-empty string keeps the NoteDto shape intact
+              // without a type relaxation.
+              etag: 'archive',
+              lastModified: viewingArchive.savedAt,
+            }}
+            forceReadOnly={true}
+            /*
+              We don't wire save callbacks for the archive viewer.
+              No save will fire (editable: false → no transactions
+              → no body change → performSave returns 'ok' early
+              without PUT-ing), so save state stays at whatever the
+              live editor last reported. We also deliberately don't
+              overwrite saveNowRef — leaving it pointing at the
+              previously-unmounted live editor's saveNow is fine
+              because we already flushed before swapping, and the
+              live editor will re-register on the way back.
+            */
+          />
+        </>
       )}
 
       {dialogOpen && (

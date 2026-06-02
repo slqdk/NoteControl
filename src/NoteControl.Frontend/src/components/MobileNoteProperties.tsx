@@ -90,7 +90,11 @@ export function MobileNoteProperties({
   const [note, setNote] = useState<NoteDto>(initialNote);
   const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
+  // Ship C will rework this surface to consume archivedReleases
+  // instead. Until then, the setter stays so the existing best-effort
+  // /note/release fetch keeps running (server stubs the endpoint, so
+  // it's harmless); the value isn't read by anything in this ship.
+  const [, setReleaseInfo] = useState<ReleaseInfo | null>(null);
 
   // Resync the local note when the route changes to a different
   // note (parent passes a fresh initialNote). Without this the
@@ -377,7 +381,6 @@ export function MobileNoteProperties({
                     major={note.frontmatter.versionMajor}
                     minor={note.frontmatter.versionMinor}
                     state={note.frontmatter.state}
-                    release={releaseInfo}
                     disabled={!canEdit}
                     onSave={saveVersionState}
                   />

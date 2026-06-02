@@ -70,6 +70,16 @@ export interface FrontmatterDto {
   created: string | null;
   updated: string | null;
   tags: string[];
+  /**
+   * Legacy field — the `locked` frontmatter key is no longer the source
+   * of truth for editor read-only mode. Body lock is now derived from
+   * `state === 'released'` (a Released note is locked; Under-development
+   * is unlocked). The server still parses this field for round-trip
+   * safety on pre-existing notes, but next save drops the key. The
+   * desktop frontend ignores it; reading it remains supported only so
+   * existing notes don't crash type-checking and so the mobile surface
+   * (pre-Ship-C) keeps working unchanged.
+   */
   locked: boolean;
   /**
    * Step 14 fields. Optional — null/undefined means "use the default".
@@ -122,6 +132,11 @@ export interface UpdateNoteRequest {
    */
   body?: string | null;
   tags?: string[] | null;
+  /**
+   * Legacy — the server accepts this for backward compatibility but no
+   * longer acts on it (body lock is derived from `state === 'released'`).
+   * Desktop saves should omit it; sending it is harmless but pointless.
+   */
   locked?: boolean | null;
   etag?: string | null;
   /**
@@ -147,14 +162,14 @@ export interface UpdateNoteRequest {
 
 /**
  * Info about a note's single frozen released copy. Mirrors
- * ReleaseInfoDto in the C# server. Drives the Properties panel's recall
- * affordance.
+ * ReleaseInfoDto in the C# server.
  *
- * `exists` is false when the note has never been released. When true,
- * versionMajor/versionMinor are the frozen copy's own version, `savedAt`
- * is when it was last written, and `developmentStashed` is true while
- * the note is currently showing the release live (so switching back to
- * development restores the parked work).
+ * Deprecated as of the per-version release archive change. The server
+ * now keeps one frozen entry per past Released entry, listed via
+ * ReleasedVersions below. This endpoint survives as a stub that
+ * always returns `exists: false` so the older mobile properties
+ * surface (which hasn't been migrated yet) hides its recall affordance
+ * cleanly. New desktop code should not call /note/release.
  */
 export interface ReleaseInfo {
   exists: boolean;
@@ -165,14 +180,54 @@ export interface ReleaseInfo {
 }
 
 /**
+ * One archived released version of a note. Mirrors
+ * ReleasedVersionSummaryDto in the C# server.
+ *
+ * Each entry is a frozen snapshot of the note as it was at the moment
+ * it entered Released state at the given (major, minor) version.
+ * Entries are immutable — leaving Released (which bumps the minor by
+ * one) doesn't touch the existing archive.
+ */
+export interface ReleasedVersionSummary {
+  versionMajor: number;
+  versionMinor: number;
+  savedAt: string;
+}
+
+/**
+ * The full list of archived released versions for one note. Mirrors
+ * ReleasedVersionsDto in the C# server. The list is newest first
+ * (highest version on top), suitable for direct rendering in the
+ * Properties panel's "Previous releases" section.
+ */
+export interface ReleasedVersions {
+  archived: ReleasedVersionSummary[];
+}
+
+/**
+ * One archived released version's full content for the read-only
+ * archive viewer. Mirrors ArchivedReleaseDto in the C# server. The
+ * frontmatter here reflects the snapshot's own version/state at the
+ * time of release — not the live note's current values.
+ */
+export interface ArchivedRelease {
+  path: string;
+  versionMajor: number;
+  versionMinor: number;
+  body: string;
+  frontmatter: FrontmatterDto;
+  savedAt: string;
+}
+
+/**
  * Summary of how much undo-history is available for a single note.
  * Mirrors NoteHistoryInfoDto in the C# server.
  *
- * `count` is 0..10 (server caps the per-note history ring at 10
- * snapshots). The Properties panel uses count > 0 to enable its
- * "Revert to last save" button. `latest` is the ISO timestamp of
- * the newest snapshot, suitable for a relative-time tooltip
- * ("12 minutes ago"). When count is 0, latest is null.
+ * Deprecated as of the per-version release archive change. The 10-
+ * snapshot ring was removed in favour of per-Released-entry archive
+ * files (see ReleasedVersions). The endpoint survives as a stub that
+ * always returns `count: 0` so older clients disable their Revert
+ * button cleanly. New desktop code should not call /note/history.
  */
 export interface NoteHistoryInfo {
   count: number;
