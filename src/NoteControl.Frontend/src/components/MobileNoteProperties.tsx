@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, notesApi } from '../api/client';
-import type { NoteDto, ReleaseInfo } from '../api/types';
+import type { NoteDto, ReleasedVersionSummary } from '../api/types';
 import { formatNoteTimestamp } from '../utils/time';
 import { EditableName } from './EditableName';
 import { EditableTags } from './EditableTags';
-import { EditableLocked } from './EditableLocked';
 import { VersionStateEditor, type VersionStatePatch } from './VersionStateEditor';
 import { EditableNoteAppearance } from './EditableNoteAppearance';
 
@@ -15,9 +14,9 @@ import { EditableNoteAppearance } from './EditableNoteAppearance';
  * Renders inside NoteEditor when the viewport is mobile (≤768px),
  * placed below the editor's page area so the user scrolls past the
  * note's last line to reach it. Collapsed by default — the chevron
- * header expands the slim section (Name / Tags / Locked / Delete);
- * a nested "More" expander reveals the rest (Type / Path / Modified
- * / Created / Size / Version / Appearance / Export / ETag).
+ * header expands the slim section (Name / Tags / Delete); a nested
+ * "More" expander reveals the rest (Type / Path / Modified / Created
+ * / Size / Version / Previous releases / Appearance / Export / ETag).
  *
  * Why a separate component instead of conditionally re-rendering
  * the desktop PropertiesPanel below the editor:
@@ -29,7 +28,7 @@ import { EditableNoteAppearance } from './EditableNoteAppearance';
  *      subset, with field order and grouping that don't match the
  *      desktop dl. Building two views is cleaner than one with
  *      "if mobile then hide rows X and Y".
- *   3. The reusable Editable* components (Name/Tags/Locked/Version/
+ *   3. The reusable Editable* components (Name/Tags/Version/
  *      NoteAppearance) are the actual save-logic primitives. Both
  *      the desktop panel and this mobile view glue them differently;
  *      no logic is duplicated, only the layout shell.
@@ -49,6 +48,29 @@ import { EditableNoteAppearance } from './EditableNoteAppearance';
  * the on-disk body with the panel's stale view. A real user lost a
  * whole program to this on the desktop panel; the mobile panel had
  * the same race documented as "acceptable in practice". It is not.
+ *
+ * Lock-by-state (no manual Locked toggle):
+ *   A note is locked iff its lifecycle state is `released`. There
+ *   is no Locked checkbox in the slim section — the user unlocks
+ *   by switching the state selector in the More expander back to
+ *   "Under development" (server auto-bumps the minor) or by
+ *   bumping the version steppers on a Released note (same effect
+ *   plus an archive entry). The Name field also locks when the
+ *   note is Released since the path is part of the published
+ *   artifact's identity.
+ *
+ * Previous releases:
+ *   Replaces the old release recall affordance. We list every past
+ *   Released entry for the note (newest first) under the Version
+ *   row in the More expander. Each entry is a frozen archive
+ *   (path + body + frontmatter as they were at release time).
+ *   Tapping an entry dispatches nc:note-open-archived-release,
+ *   which EditorPage listens for and uses to mount a read-only
+ *   archive viewer in place of the live editor — the same flow
+ *   the desktop panel uses, so the user gets identical behaviour
+ *   on both surfaces. Entries persist until the note is deleted or
+ *   the same (major, minor) is re-released (which overwrites the
+ *   existing archive in place).
  *
  * Tree refresh after rename / delete:
  *   The desktop panel calls onAfterRename / onDelete callbacks
@@ -90,11 +112,12 @@ export function MobileNoteProperties({
   const [note, setNote] = useState<NoteDto>(initialNote);
   const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // Ship C will rework this surface to consume archivedReleases
-  // instead. Until then, the setter stays so the existing best-effort
-  // /note/release fetch keeps running (server stubs the endpoint, so
-  // it's harmless); the value isn't read by anything in this ship.
-  const [, setReleaseInfo] = useState<ReleaseInfo | null>(null);
+  // Per-note release archive. Populated by notesApi.listReleases on
+  // mount, on refreshTick bumps, and on notePath changes. Each entry
+  // is one frozen Released version of the note (newest first); empty
+  // when the note has never been released. Replaces the old release
+  // recall info that drove the recall button on the version editor.
+  const [archivedReleases, setArchivedReleases] = useState<ReleasedVersionSummary[]>([]);
 
   // Resync the local note when the route changes to a different
   // note (parent passes a fresh initialNote). Without this the
@@ -124,25 +147,18 @@ export function MobileNoteProperties({
     };
   }, [refreshTick, vaultId, notePath]);
 
-  // Frozen-release info for the version editor's recall line. Fetched
-  // on mount and after each save (refreshTick) and when the route note
-  // changes. Best-effort — a failure just hides the recall line.
+  // Per-note archived-releases list for the "Previous releases" row
+  // in the More expander. Fetched on mount, after each save
+  // (refreshTick), and on notePath changes. Best-effort — a failure
+  // just shows an empty list, which is the safe default.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const rel = await notesApi.getRelease(vaultId, notePath);
-        if (!cancelled) setReleaseInfo(rel);
+        const rels = await notesApi.listReleases(vaultId, notePath);
+        if (!cancelled) setArchivedReleases(rels.archived);
       } catch {
-        if (!cancelled) {
-          setReleaseInfo({
-            exists: false,
-            versionMajor: 0,
-            versionMinor: 0,
-            savedAt: null,
-            developmentStashed: false,
-          });
-        }
+        if (!cancelled) setArchivedReleases([]);
       }
     })();
     return () => {
@@ -187,17 +203,6 @@ export function MobileNoteProperties({
       // missing body as "leave the body alone".
       await notesApi.update(vaultId, notePath, {
         tags: newTags,
-      });
-      setRefreshTick((t) => t + 1);
-    } catch (e) {
-      throw e instanceof ApiError ? new Error(e.message) : e;
-    }
-  }
-
-  async function saveLocked(locked: boolean) {
-    try {
-      await notesApi.update(vaultId, notePath, {
-        locked,
       });
       setRefreshTick((t) => t + 1);
     } catch (e) {
@@ -261,6 +266,25 @@ export function MobileNoteProperties({
     );
   }
 
+  /**
+   * Open one archived released version of the current note in the
+   * editor surface. Same dispatcher the desktop panel uses — we
+   * don't fetch the archive here; EditorPage's listener does that
+   * and swaps the surface. Filtering by note path is EditorPage's
+   * job; we just include the path in the detail.
+   */
+  function openArchivedRelease(versionMajor: number, versionMinor: number) {
+    window.dispatchEvent(
+      new CustomEvent('nc:note-open-archived-release', {
+        detail: {
+          path: notePath,
+          versionMajor,
+          versionMinor,
+        },
+      }),
+    );
+  }
+
   // Filename without .md for the rename input — matches what
   // PropertiesPanel does on desktop.
   const nameForRename = notePath.slice(notePath.lastIndexOf('/') + 1);
@@ -286,16 +310,19 @@ export function MobileNoteProperties({
         <div className="nc-mobile-props-body">
           {error && <div className="nc-form-error">{error}</div>}
 
-          {/* Slim section: the four things you actually want on
-              mobile. Tags, Locked, Name (rename), and Delete.
-              All Editable fields render disabled for viewers; the
-              Delete button is hidden entirely (it would 403). */}
+          {/* Slim section: the three things you actually want on
+              mobile — Name (rename), Tags, Delete. All editable
+              fields render disabled for viewers; the Delete button
+              is hidden entirely (it would 403). Released notes also
+              lock the Name field since the path is part of the
+              published artifact's identity (unlock via state →
+              development in the More expander). */}
           <dl className="nc-props-grid">
             <dt>Name</dt>
             <dd>
               <EditableName
                 value={displayName}
-                disabled={!canEdit}
+                disabled={!canEdit || note.frontmatter.state === 'released'}
                 onSave={saveRename}
               />
             </dd>
@@ -306,15 +333,6 @@ export function MobileNoteProperties({
                 tags={note.frontmatter.tags}
                 disabled={!canEdit}
                 onSave={saveTags}
-              />
-            </dd>
-
-            <dt>Locked</dt>
-            <dd>
-              <EditableLocked
-                value={note.frontmatter.locked}
-                disabled={!canEdit}
-                onSave={saveLocked}
               />
             </dd>
           </dl>
@@ -385,6 +403,50 @@ export function MobileNoteProperties({
                     onSave={saveVersionState}
                   />
                 </dd>
+
+                {/*
+                  Previous releases — the per-version release archive
+                  that replaces the old release recall affordance. One
+                  row per past Released entry, newest first. Tapping
+                  opens a read-only archive viewer in place of the
+                  live editor (EditorPage handles the swap; same
+                  dispatcher the desktop panel uses).
+
+                  Hidden when the list is empty — a note that has
+                  never been Released has nothing to show, and a
+                  blank-but-present row would be noise on a phone.
+                */}
+                {archivedReleases.length > 0 && (
+                  <>
+                    <dt>Previous releases</dt>
+                    <dd>
+                      <ul className="nc-archived-releases">
+                        {archivedReleases.map((r) => (
+                          <li
+                            key={`${r.versionMajor}.${r.versionMinor}`}
+                            className="nc-archived-release"
+                          >
+                            <button
+                              type="button"
+                              className="nc-archived-release-btn"
+                              onClick={() =>
+                                openArchivedRelease(r.versionMajor, r.versionMinor)
+                              }
+                              title={`Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`}
+                            >
+                              <span className="nc-archived-release-version">
+                                v{r.versionMajor}.{r.versionMinor}
+                              </span>
+                              <span className="nc-archived-release-time">
+                                {formatNoteTimestamp(r.savedAt)}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </>
+                )}
 
                 {/* Appearance renders three dt/dd pairs as a
                     fragment — same as PropertiesPanel does.
