@@ -412,7 +412,16 @@ public static class FrontmatterCodec
         output["tags"] = fm.Tags.Count == 0
             ? new List<object>()
             : fm.Tags.Cast<object>().ToList();
-        output["locked"] = fm.Locked;
+
+        // The `locked` frontmatter key is no longer emitted. Body lock is
+        // derived from `state == released`, so an explicit Locked flag
+        // would be redundant and could drift out of sync with the state.
+        // We continue to PARSE `locked` from existing files (the reader
+        // tolerates it as an Extra-free legacy key — see ParseYaml) so
+        // notes saved before this change don't break, but the next save
+        // of any such note will silently drop the key. ParsedFrontmatter
+        // still carries a Locked bool for FrontmatterDto round-trip
+        // compatibility; it just no longer influences the on-disk file.
 
         // Optional appearance fields: emit only if set. Unset keys are
         // simply omitted from the YAML so a default-styled note has a

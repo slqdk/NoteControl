@@ -171,37 +171,29 @@ public sealed record FolderListingDto(
     string? CoverUrl = null);
 
 /// <summary>
-/// GET /api/vaults/{id}/note/history?path= — a summary of how much
-/// undo-history is available for one note. Drives the Properties
-/// panel's "Revert to last save" button (enable/disable + tooltip).
-///
-/// <see cref="Count"/> is the number of snapshots on disk for this
-/// note, 0..10 (capped server-side). <see cref="Latest"/> is the
-/// timestamp of the most-recently-written snapshot, or null when
-/// there are none. The endpoint deliberately does NOT return the
-/// full snapshot list — the UI only ever pops the most recent, so
-/// any listing would be busy work.
+/// GET /api/vaults/{id}/note/history?path= — legacy snapshot-ring summary,
+/// retained as a deprecated stub to soften the transition window between
+/// Ship A (server) and Ship B (frontend). The server-side snapshot ring
+/// was removed in favour of per-version release archives, so this
+/// endpoint now always returns <c>Count = 0, Latest = null</c> — the
+/// effect is that the legacy "Revert to last save" button disables
+/// itself until the frontend stops calling /note/history altogether.
+/// New code uses the archived releases endpoints instead.
 /// </summary>
 public sealed record NoteHistoryInfoDto(
     int Count,
     DateTimeOffset? Latest);
 
 /// <summary>
-/// GET /api/vaults/{id}/note/release?path= — info about the single
-/// frozen released copy a note may carry. Drives the Properties panel's
-/// "recall the released version" affordance.
+/// GET /api/vaults/{id}/note/release?path= — legacy single-frozen-release
+/// shape, retained as a deprecated stub to soften the transition window
+/// between Ship A (server) and Ship B (frontend). New code uses
+/// <see cref="ReleasedVersionsDto"/> via /note/releases.
 ///
-/// A note has at most ONE released copy (the frozen snapshot taken when
-/// it was released). <see cref="Exists"/> is false when the note has
-/// never been released. When true, <see cref="VersionMajor"/> /
-/// <see cref="VersionMinor"/> are the released copy's own version and
-/// <see cref="SavedAt"/> is when the frozen copy was last written.
-///
-/// <see cref="DevelopmentStashed"/> is true while the note is currently
-/// showing the released copy live and the user's development copy is
-/// parked in the dev stash — i.e. switching the state back to
-/// development will restore that parked work rather than continue from
-/// the released content.
+/// In the new archived-releases model a note can carry many frozen
+/// snapshots (one per past Released entry). The server now always
+/// returns <c>Exists = false</c> here so the legacy recall affordance
+/// hides itself; the frontend should migrate off this endpoint.
 /// </summary>
 public sealed record ReleaseInfoDto(
     bool Exists,
@@ -209,3 +201,48 @@ public sealed record ReleaseInfoDto(
     int VersionMinor,
     DateTimeOffset? SavedAt,
     bool DevelopmentStashed);
+
+/// <summary>
+/// One archived released version of a note. The note's per-vault
+/// release folder (<c>.notesapp/releases/&lt;encoded&gt;/</c>) holds one
+/// frozen <c>v{major}.{minor}.md</c> file per past Released entry, and
+/// each turns into one of these rows.
+///
+/// Snapshots are taken at the moment a note enters Released state and
+/// are immutable thereafter — they record the content that was released
+/// at that version. A subsequent unlock (Released → Under development,
+/// always paired with a +1 minor bump) doesn't touch the previous
+/// archive entries.
+/// </summary>
+public sealed record ReleasedVersionSummaryDto(
+    int VersionMajor,
+    int VersionMinor,
+    DateTimeOffset SavedAt);
+
+/// <summary>
+/// GET /api/vaults/{id}/note/releases?path= — full list of archived
+/// released versions for one note, newest first. Drives the Properties
+/// panel's "Previous releases" list, which replaces the old "Revert to
+/// last save" snapshot ring.
+/// </summary>
+public sealed record ReleasedVersionsDto(
+    IReadOnlyList<ReleasedVersionSummaryDto> Archived);
+
+/// <summary>
+/// GET /api/vaults/{id}/note/releases/content?path=&amp;versionMajor=&amp;versionMinor=
+/// — return the full content of one archived release for the
+/// read-only viewer. Same shape as a live <see cref="NoteDto"/>; the
+/// caller is expected to render it in a clearly-labelled read-only mode
+/// and not attempt to save edits back through the normal PUT path.
+///
+/// The frontmatter in the response reflects the archived snapshot's own
+/// frontmatter at the time of release — including its own version /
+/// state — not the live note's current values.
+/// </summary>
+public sealed record ArchivedReleaseDto(
+    string Path,
+    int VersionMajor,
+    int VersionMinor,
+    string Body,
+    FrontmatterDto Frontmatter,
+    DateTimeOffset SavedAt);

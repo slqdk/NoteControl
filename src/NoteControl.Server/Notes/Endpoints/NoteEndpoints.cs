@@ -36,22 +36,23 @@ public static class NoteEndpoints
         app.MapPut("/api/vaults/{vaultId:guid}/note/move", MoveNoteAsync)
             .RequireVault(VaultService.RoleEditor);
 
-        // Per-note undo history. GET is a summary; POST pops the most
-        // recent snapshot. Editor role on both — the GET is technically
-        // read-only but is paired with a write affordance, and gating
-        // the listing behind viewer would let a viewer infer activity
-        // (count + timestamps) that they can't act on, which adds
-        // surface area without a use case. If a real read-only consumer
-        // appears, this can be relaxed.
-        app.MapGet("/api/vaults/{vaultId:guid}/note/history", GetNoteHistoryAsync)
+        // Archived release versions for a note. List returns one entry
+        // per past Released-state entry (frozen at the moment of release
+        // and immutable thereafter). Content returns one archived
+        // version's full body + frontmatter for the read-only viewer.
+        // Editor role on both — matches the rest of the note surface.
+        app.MapGet("/api/vaults/{vaultId:guid}/note/releases", ListNoteReleasesAsync)
             .RequireVault(VaultService.RoleEditor);
-        app.MapPost("/api/vaults/{vaultId:guid}/note/history/pop", PopNoteHistoryAsync)
+        app.MapGet("/api/vaults/{vaultId:guid}/note/releases/content", GetNoteArchivedReleaseAsync)
             .RequireVault(VaultService.RoleEditor);
 
-        // Per-note frozen-release info. Drives the Properties panel's
-        // recall affordance (does a release exist, what version, when
-        // saved, is dev work currently parked). Editor role to match the
-        // history endpoints' rationale.
+        // Legacy stubs — retained for the Ship A -> Ship B transition
+        // window so a pre-Ship-B frontend keeps working (its Revert
+        // button stays disabled, its recall affordance hides). Both
+        // always return empty/Exists=false responses now; both go away
+        // once Ship B lands.
+        app.MapGet("/api/vaults/{vaultId:guid}/note/history", GetNoteHistoryAsync)
+            .RequireVault(VaultService.RoleEditor);
         app.MapGet("/api/vaults/{vaultId:guid}/note/release", GetNoteReleaseAsync)
             .RequireVault(VaultService.RoleEditor);
 
@@ -265,7 +266,7 @@ public static class NoteEndpoints
         }
     }
 
-    private static async Task<IResult> PopNoteHistoryAsync(
+    private static async Task<IResult> ListNoteReleasesAsync(
         Guid vaultId,
         string path,
         INoteService notes,
@@ -277,8 +278,38 @@ public static class NoteEndpoints
         }
         try
         {
-            var note = await notes.PopHistoryAsync(vaultId, path, ct);
-            return Results.Ok(note);
+            var list = await notes.ListArchivedReleasesAsync(vaultId, path, ct);
+            return Results.Ok(list);
+        }
+        catch (NoteException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+    }
+
+    private static async Task<IResult> GetNoteArchivedReleaseAsync(
+        Guid vaultId,
+        string path,
+        int? versionMajor,
+        int? versionMinor,
+        INoteService notes,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Results.Problem(statusCode: 400, title: "?path= is required.");
+        }
+        if (!versionMajor.HasValue || !versionMinor.HasValue)
+        {
+            return Results.Problem(
+                statusCode: 400,
+                title: "?versionMajor= and ?versionMinor= are required.");
+        }
+        try
+        {
+            var release = await notes.GetArchivedReleaseAsync(
+                vaultId, path, versionMajor.Value, versionMinor.Value, ct);
+            return Results.Ok(release);
         }
         catch (NoteException ex)
         {

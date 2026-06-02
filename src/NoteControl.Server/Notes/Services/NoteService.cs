@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -27,34 +28,54 @@ public interface INoteService
     /// <summary>
     /// Rename or relocate a note. Both paths are canonical (.md included).
     /// On success, also moves the sibling <c>{name}.assets/</c> folder if
-    /// present, moves the <c>.notesapp/history/&lt;encoded&gt;/</c> folder if
-    /// present, and re-indexes under the new path. Same source and
-    /// destination is a no-op (returns the existing note).
+    /// present, moves the <c>.notesapp/releases/&lt;encoded&gt;/</c> folder
+    /// (the archived release versions) if present, and re-indexes under
+    /// the new path. Same source and destination is a no-op.
     /// </summary>
     Task<NoteDto> MoveAsync(Guid vaultId, string oldPath, string newPath, CancellationToken ct = default);
 
     Task<FolderListingDto> ListFolderAsync(Guid vaultId, string folderPath, CancellationToken ct = default);
 
     /// <summary>
-    /// Per-note undo-history summary. Drives the Properties panel's
-    /// "Revert to last save" button: count > 0 means the button is
-    /// enabled, latest provides the tooltip / label timestamp.
+    /// List the archived released versions for a note, newest first.
+    /// Each entry comes from a frozen <c>v&lt;maj&gt;.&lt;min&gt;.md</c>
+    /// file under <c>.notesapp/releases/&lt;encoded&gt;/</c>. An empty
+    /// list means the note has never been released.
+    /// </summary>
+    Task<ReleasedVersionsDto> ListArchivedReleasesAsync(
+        Guid vaultId, string notePath, CancellationToken ct = default);
+
+    /// <summary>
+    /// Read one archived released version's content for the read-only
+    /// viewer. The returned <see cref="ArchivedReleaseDto"/> mirrors a
+    /// regular <see cref="NoteDto"/> body + frontmatter, plus the
+    /// archive's saved-at timestamp. Throws a 404 NoteException if no
+    /// archive exists at the requested (major, minor) pair.
+    /// </summary>
+    Task<ArchivedReleaseDto> GetArchivedReleaseAsync(
+        Guid vaultId, string notePath, int versionMajor, int versionMinor,
+        CancellationToken ct = default);
+
+    // ---------------------------------------------------------------
+    // Legacy stubs — retained for the Ship A → Ship B transition window
+    // so an older frontend doesn't crash when the server is upgraded
+    // first. Both will be removed once Ship B lands.
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Legacy snapshot-ring summary. Always returns
+    /// <c>Count = 0, Latest = null</c> in the new model — the snapshot
+    /// ring was removed in favour of per-version release archives. The
+    /// effect on the legacy frontend is that "Revert to last save" goes
+    /// permanently disabled, which is the intended behaviour.
     /// </summary>
     Task<NoteHistoryInfoDto> GetHistoryInfoAsync(Guid vaultId, string notePath, CancellationToken ct = default);
 
     /// <summary>
-    /// Pop the most recent snapshot off the per-note history stack and
-    /// restore it to the note file. Before doing so, snapshots the
-    /// *current* note content so the pop is itself reversible (one
-    /// subsequent pop will return the state we just replaced). Returns
-    /// the new <see cref="NoteDto"/> reflecting the restored content.
-    /// </summary>
-    Task<NoteDto> PopHistoryAsync(Guid vaultId, string notePath, CancellationToken ct = default);
-
-    /// <summary>
-    /// Info about the note's single frozen released copy, if any. Drives
-    /// the Properties panel's recall affordance. See
-    /// <see cref="ReleaseInfoDto"/>.
+    /// Legacy single-frozen-release info. Always returns
+    /// <c>Exists = false</c> in the new model — the single-slot release
+    /// was replaced by an archive list. The legacy "Recall released
+    /// version" affordance disappears as a result.
     /// </summary>
     Task<ReleaseInfoDto> GetReleaseInfoAsync(Guid vaultId, string notePath, CancellationToken ct = default);
 }
@@ -74,26 +95,34 @@ public sealed class NoteService : INoteService
     private const int RecentlyUpdatedLimit = 10;
     private const string AppFolder = ".notesapp";
     private const string TrashFolder = "trash";
-    private const string HistoryFolder = "history";
 
-    /// <summary>Per-note frozen-release folder under .notesapp/releases/.</summary>
+    // ----- Release archive layout -------------------------------------
+    //
+    // Each note that has been released at least once gets one folder
+    //
+    //     {vault}/.notesapp/releases/{encoded-note-path}/
+    //
+    // and inside, one file per past Released entry:
+    //
+    //     v{major}.{minor}.md
+    //
+    // A snapshot is written on the transition into Released (the moment
+    // of release) and never modified after. Subsequent unlocks
+    // (Released -> Under development, paired with a +1 minor bump on
+    // the live note) leave the archive entries intact. Re-entering
+    // Released at a new version creates a new file; re-entering at the
+    // SAME version (an edge case — would require an intervening manual
+    // version change) overwrites the same file in place.
     private const string ReleasesFolder = "releases";
 
-    /// <summary>The single frozen released copy of a note.</summary>
-    private const string ReleasedFileName = "released.md";
-
-    /// <summary>
-    /// The parked development copy, present only while a note is currently
-    /// showing its released copy live (state == released). Restored to the
-    /// live note when the user switches back to development.
-    /// </summary>
-    private const string DevStashFileName = "development.md";
-
-    /// <summary>
-    /// Per-note snapshot cap. Each save that changes the body writes one
-    /// snapshot file; the oldest are pruned once this cap is exceeded.
-    /// </summary>
-    private const int HistorySnapshotCap = 10;
+    // Legacy layout — both the abandoned server-side snapshot ring
+    // (.notesapp/history/<encoded>/{ms}.md) and the old two-slot
+    // release model (.notesapp/releases/<encoded>/{released,development}.md)
+    // are gone. Folders/files on disk from those models are orphaned
+    // in place and ignored by the new readers (the archive-listing
+    // filter rejects anything that isn't shaped v{int}.{int}.md). They
+    // get no constants here because nothing in the new code path
+    // creates or reads them by name; sweeping is a separate concern.
 
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _vaultPaths;
@@ -238,201 +267,132 @@ public sealed class NoteService : INoteService
 
         var (fm, existingBody) = FrontmatterCodec.Split(existingRaw);
 
-        // Pre-update lifecycle state, used to detect transitions below.
+        // Pre-update lifecycle state + version, used to detect transitions
+        // below.
         var oldState = fm.State;
+        var oldMajor = fm.VersionMajor;
+        var oldMinor = fm.VersionMinor;
 
-        // Resolved by the version-state logic. bodyToWrite defaults to the
-        // property-save path ("leave the body alone"); freezeReleaseAfterWrite
-        // mirrors the live note into the single frozen release slot after the
-        // write when the note is (and stays) released.
-        string bodyToWrite;
-        var freezeReleaseAfterWrite = false;
+        // ----- Released auto-unlock on version change ------------------
+        //
+        // If the live note is currently Released and the request bumps the
+        // version (either component) WITHOUT explicitly setting state, we
+        // auto-transition it to Under development. This is the "stepper
+        // tick on a Released note" path the user sees in the panel: there
+        // is no separate Unlock button — incrementing the version IS the
+        // unlock.
+        //
+        // The request still has to carry a higher version than current —
+        // the monotonic check below (in ApplyUpdate) catches anything
+        // else. A request that bumps the version AND explicitly sets a
+        // state takes the explicit state (so a Released -> Released bump
+        // is still possible, e.g. when the user picks +1 minor and then
+        // immediately picks Released from the dropdown).
+        var bumpsVersion =
+            (request.VersionMajor.HasValue && request.VersionMajor.Value > oldMajor)
+            || (request.VersionMinor.HasValue
+                && request.VersionMinor.Value > oldMinor
+                && (request.VersionMajor ?? oldMajor) == oldMajor);
 
+        var effectiveStateRequest = request.State;
+        if (effectiveStateRequest is null
+            && string.Equals(oldState, FrontmatterCodec.StateReleased, StringComparison.Ordinal)
+            && bumpsVersion)
+        {
+            effectiveStateRequest = FrontmatterCodec.StateDevelopment;
+        }
+
+        // The mirror of the auto-unlock-on-version-bump above: an explicit
+        // Released -> Development request (state selector route) carries no
+        // version bump, but the spec is "unlocking ticks the minor up by
+        // one". We surface that as a server-side minor++ so the frontend
+        // can't accidentally leave the note at the same version that's
+        // already in the archive (which would then show up in the
+        // archive list as a duplicate-ish entry on the next re-release).
+        var effectiveMinorRequest = request.VersionMinor;
+        var effectiveMajorRequest = request.VersionMajor;
+        if (string.Equals(oldState, FrontmatterCodec.StateReleased, StringComparison.Ordinal)
+            && string.Equals(effectiveStateRequest, FrontmatterCodec.StateDevelopment, StringComparison.Ordinal)
+            && !bumpsVersion)
+        {
+            effectiveMinorRequest = oldMinor + 1;
+            // Major stays put — the spec is +1 minor, not +1 major.
+            effectiveMajorRequest = oldMajor;
+        }
+
+        // Resolve whether the request will end up touching version/state at
+        // all. Used below to suppress the archive-on-entering-released check
+        // for pure body/property saves on an already-released note.
         var touchesVersionState =
-            request.VersionMajor.HasValue
-            || request.VersionMinor.HasValue
-            || request.State is not null;
+            effectiveMajorRequest.HasValue
+            || effectiveMinorRequest.HasValue
+            || effectiveStateRequest is not null;
 
-        // null request.State = keep the current state (a version-only bump
-        // doesn't change state).
-        var targetState = request.State is null
-            ? oldState
-            : FrontmatterCodec.NormaliseState(
-                request.VersionMajor ?? fm.VersionMajor,
-                request.VersionMinor ?? fm.VersionMinor,
-                request.State);
-
-        var releasedPath = ReleasedFilePath(vaultRoot, canonical);
-        var devStashPath = DevStashFilePath(vaultRoot, canonical);
-
-        // --- Lifecycle transitions (the two-slot release model) --------
+        // ----- Ordinary update ----------------------------------------
         //
-        // A note carries at most ONE frozen released copy plus, while it is
-        // currently showing that release live, a parked development copy.
-        // The live .md is whichever the current state points at; switching
-        // state swaps the live content and preserves the other side so the
-        // user can flip back and forth without losing either:
-        //
-        //   dev -> released, no frozen release yet : promote — the current
-        //       content becomes the release (frozen after the write).
-        //   dev -> released, release already frozen: recall — park the dev
-        //       copy, load the frozen release into the live note.
-        //   released -> development                : freeze a fresh copy of
-        //       the released content (the "save the released version"
-        //       trigger), then restore the parked dev copy if one exists,
-        //       else continue development from the released content.
-        //
-        // Recall / restore load a stored slot verbatim and deliberately
-        // bypass ApplyUpdate's monotonic check: the version they carry comes
-        // from the slot, which is a legitimate switch, not a user lowering
-        // the number.
+        // The two-slot release model (frozen released.md + parked
+        // development.md) is gone. Body resolution stays the same: a
+        // null request.Body means "leave the body alone" (the property
+        // panel's safe path); non-null is the editor's new body, paired
+        // with an ETag.
+        try
+        {
+            FrontmatterCodec.ApplyUpdate(
+                fm, _clock.GetUtcNow(),
+                request.Tags, request.Locked,
+                request.Font, request.FontSize, request.Width,
+                effectiveMajorRequest, effectiveMinorRequest,
+                effectiveStateRequest);
+        }
+        catch (FrontmatterValidationException ex)
+        {
+            throw new NoteException(ex.Message, statusCode: 400);
+        }
 
+        var bodyToWrite = request.Body ?? existingBody;
+
+        // ----- Archive on entering Released ---------------------------
+        //
+        // The dev -> released transition is the moment of release. We
+        // write the about-to-be-saved content into the archive folder as
+        // v{major}.{minor}.md AFTER we know the new bodyToWrite + fm but
+        // BEFORE the live note is written, so a failure to archive
+        // surfaces as a failed save rather than a successful save with
+        // a missing archive entry.
+        //
+        // Leaving Released (released -> development) takes no archive
+        // action — the archive was already taken on the entry. The +1
+        // minor bump that pairs with the unlock happens via ApplyUpdate
+        // on the same request.
+        //
+        // Re-entering Released at the SAME (major, minor) overwrites the
+        // existing file in place. This shouldn't happen in practice
+        // (the unlock path bumps minor, and a fresh release will land
+        // on a new version) but the overwrite keeps the invariant
+        // "the archive entry IS the released content at that version"
+        // honest if the user manually wrestles the version back.
         var enteringReleased =
             touchesVersionState
-            && targetState == FrontmatterCodec.StateReleased
-            && oldState != FrontmatterCodec.StateReleased;
+            && string.Equals(fm.State, FrontmatterCodec.StateReleased, StringComparison.Ordinal)
+            && !string.Equals(oldState, FrontmatterCodec.StateReleased, StringComparison.Ordinal);
 
-        var leavingReleased =
-            touchesVersionState
-            && oldState == FrontmatterCodec.StateReleased
-            && targetState == FrontmatterCodec.StateDevelopment;
-
-        if (enteringReleased && File.Exists(releasedPath))
+        if (enteringReleased)
         {
-            // Recall: park the current development copy, then load the
-            // frozen release into the live note verbatim.
-            await SafeWriteSlotAsync(devStashPath, existingRaw, ct);
-            var releasedRaw = await File.ReadAllTextAsync(releasedPath, Encoding.UTF8, ct);
-            var (relFm, relBody) = FrontmatterCodec.Split(releasedRaw);
-            fm = relFm;
-            bodyToWrite = relBody;
-        }
-        else if (leavingReleased)
-        {
-            // Freeze a fresh copy of the released content (in case it was
-            // edited while released) — the confirmed "save the released
-            // version" trigger.
-            await SafeWriteSlotAsync(releasedPath, existingRaw, ct);
-
-            if (File.Exists(devStashPath))
-            {
-                // Restore the parked development copy and clear the stash.
-                var devRaw = await File.ReadAllTextAsync(devStashPath, Encoding.UTF8, ct);
-                var (devFm, devBody) = FrontmatterCodec.Split(devRaw);
-                fm = devFm;
-                bodyToWrite = devBody;
-                TryDeleteFile(devStashPath);
-            }
-            else
-            {
-                // No parked dev copy (leaving the very first release):
-                // continue development from the released content.
-                try
-                {
-                    FrontmatterCodec.ApplyUpdate(
-                        fm, _clock.GetUtcNow(),
-                        request.Tags, request.Locked,
-                        request.Font, request.FontSize, request.Width,
-                        request.VersionMajor, request.VersionMinor,
-                        FrontmatterCodec.StateDevelopment);
-                }
-                catch (FrontmatterValidationException ex)
-                {
-                    throw new NoteException(ex.Message, statusCode: 400);
-                }
-                bodyToWrite = request.Body ?? existingBody;
-            }
-        }
-        else
-        {
-            // Ordinary update: tags / locked / appearance / body and/or a
-            // version bump or a promote-to-release. ApplyUpdate enforces the
-            // invariants (monotonic version, released >= 1.0, no lifecycle
-            // state at 0.0) and throws FrontmatterValidationException -> 400.
-            //
-            // Body resolution (the property-save data-loss fix): request.Body
-            // == null means "leave the body alone" (the panel's path for
-            // Locked / Tags / Version / State / appearance); non-null is the
-            // editor's "this is the new body", paired with an ETag.
-            try
-            {
-                FrontmatterCodec.ApplyUpdate(
-                    fm, _clock.GetUtcNow(),
-                    request.Tags, request.Locked,
-                    request.Font, request.FontSize, request.Width,
-                    request.VersionMajor, request.VersionMinor,
-                    request.State);
-            }
-            catch (FrontmatterValidationException ex)
-            {
-                throw new NoteException(ex.Message, statusCode: 400);
-            }
-
-            bodyToWrite = request.Body ?? existingBody;
-
-            // Keep the single frozen release in step with the live note while
-            // the note is released: a first promote freezes the new release;
-            // a save while released refreshes it.
-            if (string.Equals(fm.State, FrontmatterCodec.StateReleased, StringComparison.Ordinal))
-            {
-                freezeReleaseAfterWrite = true;
-            }
-        }
-
-        // Undo-history snapshot: if this save is replacing the body
-        // (i.e. the editor is saving content, not the panel toggling a
-        // property), and the new body actually differs from the old,
-        // update the history ring with cursor-truncate semantics:
-        //
-        //   - If the existing on-disk content matches a snapshot
-        //     already in the ring (i.e. the user is editing from a
-        //     reverted state), DELETE every snapshot above that one
-        //     and don't add a new entry. This is the standard "edit
-        //     truncates the redo branch" behaviour the user knows
-        //     from every other undo system.
-        //
-        //   - If the existing content matches no snapshot (the
-        //     normal case: user typed, autosaved), snapshot the
-        //     existing content as a new entry and prune the ring
-        //     back to the cap. Same as the original snapshot-on-save
-        //     behaviour.
-        //
-        // We snapshot/truncate BEFORE writing the new content so an
-        // exception during the write doesn't leave the disk in a
-        // half-truncated state where some future snapshots have been
-        // deleted but the note still holds the old content. Failure
-        // to update the ring is non-fatal — we swallow — losing a
-        // single point on the history ring is acceptable. Losing the
-        // save itself wouldn't be.
-        //
-        // Property-only saves (request.Body == null) don't reach this
-        // branch — they don't change the body, so the cursor doesn't
-        // move and the ring is left alone.
-        if (request.Body != null
-            && !string.Equals(request.Body, existingBody, StringComparison.Ordinal))
-        {
-            try
-            {
-                await UpdateHistoryForBodyChangeAsync(
-                    vaultRoot, canonical, existingRaw, ct);
-            }
-            catch
-            {
-                // Best-effort. See note above.
-            }
+            var archivePath = ArchiveFilePath(vaultRoot, canonical, fm.VersionMajor, fm.VersionMinor);
+            var archiveContent = FrontmatterCodec.Combine(fm, bodyToWrite);
+            await SafeWriteArchiveAsync(archivePath, archiveContent, ct);
         }
 
         var newText = FrontmatterCodec.Combine(fm, bodyToWrite);
         await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);
 
-        // Mirror the live note into the single frozen release slot when the
-        // note is released (first promote, or a save while released). Recall
-        // / restore transitions leave this false — they don't change the
-        // frozen release.
-        if (freezeReleaseAfterWrite)
-        {
-            await SafeWriteSlotAsync(releasedPath, newText, ct);
-        }
+        // The server-side snapshot ring (.notesapp/history/) is gone. The
+        // archived release versions list (written on entering Released
+        // above) replaces it as the user-facing history surface. The
+        // legacy /history endpoints survive as stubs (see
+        // GetHistoryInfoAsync below) that always report an empty ring,
+        // so any pre-Ship-B frontend still talking to them disables its
+        // Revert button cleanly.
 
         var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
         await _indexer.OnNoteSavedAsync(
@@ -535,31 +495,18 @@ public sealed class NoteService : INoteService
             }
         }
 
-        // Move the .notesapp/history/<encoded>/ folder if it exists, so
-        // the per-note undo stack follows the note under its new
-        // identity. Same try/catch convention as the assets-folder move:
-        // best-effort; failure leaves the .md move intact and just
-        // orphans the old history folder (which a future cleanup pass
-        // could sweep). The encoded folder name is derived from the
-        // canonical path, so a path change always means a folder
-        // rename here, even when only the parent folder changes.
-        var oldHistoryFolder = HistoryFolderFor(vaultRoot, oldCanonical);
-        if (Directory.Exists(oldHistoryFolder))
-        {
-            var newHistoryFolder = HistoryFolderFor(vaultRoot, newCanonical);
-            try
-            {
-                Directory.Move(oldHistoryFolder, newHistoryFolder);
-            }
-            catch
-            {
-                // History orphaned at the old name. Note itself is fine.
-            }
-        }
-
-        // Move the .notesapp/releases/<encoded>/ folder (frozen release +
-        // dev stash) the same way, so the release copy follows the note
-        // under its new identity. Best-effort; failure just orphans it.
+        // Move the .notesapp/releases/<encoded>/ folder (the archived
+        // release versions) so the release archive follows the note
+        // under its new identity. Best-effort; failure just orphans the
+        // archive at the old encoded name — the .md move stays intact.
+        // The encoded folder name is derived from the canonical path,
+        // so a path change always means a folder rename here, even when
+        // only the parent folder changes.
+        //
+        // Legacy .notesapp/history/<encoded>/ folders (the abandoned
+        // server-side snapshot ring) are NOT moved — they're orphaned
+        // in place. New saves don't create them, so existing ones are
+        // dead data; sweeping them is a separate concern.
         var oldReleaseFolder = ReleaseFolderFor(vaultRoot, oldCanonical);
         if (Directory.Exists(oldReleaseFolder))
         {
@@ -708,25 +655,33 @@ public sealed class NoteService : INoteService
             }
         }
 
-        // Per-note history: deliberately NOT preserved through delete-to-
-        // trash for v1. The trash itself has no restore UI today (per
-        // docs/notes.md#trash), so symmetric preservation of the history
-        // folder through delete would be work for an unused recovery
-        // path. We simply drop the history folder. If a user manually
-        // restores a deleted note via the filesystem, they'd start with
-        // an empty history (the snapshot ring rebuilds from subsequent
-        // saves). Revisit if/when a trash-restore UI lands.
-        var historyFolder = HistoryFolderFor(vaultRoot, canonical);
-        if (Directory.Exists(historyFolder))
+        // Per-note release archive: NOT preserved through delete-to-
+        // trash. The trash itself has no restore UI today (per
+        // docs/notes.md#trash), so symmetric preservation of the
+        // archive through delete would be work for an unused recovery
+        // path. Drop it. If a user manually restores a deleted note
+        // via the filesystem they'd start with an empty release
+        // archive (a new archive entry gets written on the next
+        // Released entry). Revisit if/when a trash-restore UI lands.
+        //
+        // Legacy .notesapp/history/<encoded>/ folders (the abandoned
+        // server-side snapshot ring) are NOT touched here — they're
+        // orphaned in place, exactly as Move handles them. We don't
+        // proactively sweep on delete, partly because deleting a note
+        // shouldn't be the moment we cascade into legacy-data cleanup
+        // and partly because the legacy data isn't keyed by the live
+        // .md any longer.
+        var releaseFolder = ReleaseFolderFor(vaultRoot, canonical);
+        if (Directory.Exists(releaseFolder))
         {
             try
             {
-                Directory.Delete(historyFolder, recursive: true);
+                Directory.Delete(releaseFolder, recursive: true);
             }
             catch
             {
-                // Acceptable inconsistency — orphan history folder under
-                // .notesapp/history/. A future cleanup pass could sweep.
+                // Acceptable inconsistency — orphan archive folder
+                // under .notesapp/releases/.
             }
         }
 
@@ -825,160 +780,131 @@ public sealed class NoteService : INoteService
             CoverUrl: coverUrl);
     }
 
-    public async Task<NoteHistoryInfoDto> GetHistoryInfoAsync(
+    // ---------------------------------------------------------------
+    // Release archives (new model)
+    // ---------------------------------------------------------------
+
+    public async Task<ReleasedVersionsDto> ListArchivedReleasesAsync(
         Guid vaultId,
         string notePath,
         CancellationToken ct = default)
     {
         var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
-        string canonical, absolute;
+        string canonical;
         try
         {
             canonical = _notePaths.CanonicalizeNote(notePath);
-            absolute = _notePaths.Resolve(vaultRoot, canonical);
         }
         catch (InvalidNotePathException ex)
         {
             throw new NoteException(ex.Message);
         }
 
-        var folder = HistoryFolderFor(vaultRoot, canonical);
-        if (!Directory.Exists(folder) || !File.Exists(absolute))
-        {
-            return new NoteHistoryInfoDto(0, null);
-        }
-
-        // The "count" the panel cares about is "how many steps backward
-        // can the user still Revert" — i.e. the cursor position. With
-        // cursor-truncate semantics, this is:
-        //
-        //   - All N snapshots, if the live note has fresh content not
-        //     matching any snapshot ("above the stack").
-        //   - i, if the live note matches the snapshot at index i (0
-        //     = oldest, N-1 = newest). The user has already walked
-        //     past N-i snapshots and can walk i more.
-        //   - 0, if the live note matches the oldest snapshot.
-        //
-        // We compare by content hash (ComputeEtag = SHA-256). The
-        // current note's etag against each snapshot's etag.
-        var currentRaw = await File.ReadAllTextAsync(absolute, Encoding.UTF8, ct);
-        var currentEtag = ComputeEtag(currentRaw);
-
-        var snapshots = await LoadSnapshotsAsync(folder, ct);
-        if (snapshots.Count == 0)
-        {
-            return new NoteHistoryInfoDto(0, null);
-        }
-
-        var cursor = FindCursor(snapshots, currentEtag);
-        if (cursor == 0)
-        {
-            // Live note matches the oldest snapshot — no more steps
-            // back. Latest timestamp returns null because there's no
-            // snapshot to walk *to*.
-            return new NoteHistoryInfoDto(0, null);
-        }
-
-        // Cursor > 0: stepping back lands on snapshots[cursor - 1].
-        // That snapshot's timestamp is what the panel's tooltip uses
-        // ("Revert to the version saved at ...").
-        var targetMs = snapshots[cursor - 1].Ms;
-        var target = DateTimeOffset.FromUnixTimeMilliseconds(targetMs);
-        return new NoteHistoryInfoDto(cursor, target);
-    }
-
-    public async Task<NoteDto> PopHistoryAsync(
-        Guid vaultId,
-        string notePath,
-        CancellationToken ct = default)
-    {
-        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
-        string canonical, absolute;
-        try
-        {
-            canonical = _notePaths.CanonicalizeNote(notePath);
-            absolute = _notePaths.Resolve(vaultRoot, canonical);
-        }
-        catch (InvalidNotePathException ex)
-        {
-            throw new NoteException(ex.Message);
-        }
-
-        if (!File.Exists(absolute))
-        {
-            throw new NoteException("Note not found.", statusCode: 404);
-        }
-
-        var folder = HistoryFolderFor(vaultRoot, canonical);
+        var folder = ReleaseFolderFor(vaultRoot, canonical);
         if (!Directory.Exists(folder))
         {
-            throw new NoteException("No history available for this note.", statusCode: 404);
+            return new ReleasedVersionsDto(Array.Empty<ReleasedVersionSummaryDto>());
         }
 
-        var snapshots = await LoadSnapshotsAsync(folder, ct);
-        if (snapshots.Count == 0)
+        var entries = new List<ReleasedVersionSummaryDto>();
+        foreach (var file in Directory.EnumerateFiles(folder, "v*.md", SearchOption.TopDirectoryOnly))
         {
-            throw new NoteException("No history available for this note.", statusCode: 404);
+            var name = Path.GetFileNameWithoutExtension(file); // e.g. "v1.2"
+            if (!TryParseArchiveFileName(name, out var maj, out var min))
+            {
+                // Skip anything that isn't shaped like an archive entry —
+                // includes the legacy "released.md" / "development.md"
+                // files from the old two-slot model, plus any
+                // miscellaneous junk a user might have dropped in here
+                // by hand.
+                continue;
+            }
+
+            var savedAt = new DateTimeOffset(new FileInfo(file).LastWriteTimeUtc, TimeSpan.Zero);
+            entries.Add(new ReleasedVersionSummaryDto(maj, min, savedAt));
         }
 
-        // Cursor walk: read the live note, find its position in the
-        // ring, step one back. The ring itself is NOT modified by a
-        // pop — we don't delete the target, don't snapshot the
-        // current. This means a sequence of pops walks the user all
-        // the way down the ring (which was the whole reason for the
-        // cursor redesign — the old "snapshot current, delete popped"
-        // version ping-ponged between two states).
-        //
-        // The cursor is "above the stack" (= snapshots.Count) when
-        // the live note has fresh content not matching any snapshot.
-        // After a pop, the cursor moves down by 1; after another pop
-        // it moves down again; and so on until it hits 0, at which
-        // point Revert returns 404 and the panel disables the button.
-        //
-        // Forward motion (server-side Redo) is intentionally not
-        // implemented in v1. The user gets forward motion via
-        // TipTap's in-memory Undo (setContent on Revert adds to
-        // TipTap's history stack), which covers single-session
-        // recovery from a mistaken Revert. Cross-session forward
-        // motion is a v2 feature if it ever earns the UI surface.
-        var currentRaw = await File.ReadAllTextAsync(absolute, Encoding.UTF8, ct);
-        var currentEtag = ComputeEtag(currentRaw);
-        var cursor = FindCursor(snapshots, currentEtag);
-        if (cursor == 0)
+        // Newest first — the panel renders the list top-down with v2.1
+        // above v1.0 etc. Compare by (major, minor) descending; the
+        // file mtime is not authoritative because a sysadmin
+        // restore-from-backup can reset all mtimes to the same minute.
+        entries.Sort((a, b) =>
         {
-            // Already at the oldest snapshot, or somehow below the
-            // ring. Nothing further to revert to.
-            throw new NoteException("No more history to revert.", statusCode: 404);
+            var byMajor = b.VersionMajor.CompareTo(a.VersionMajor);
+            return byMajor != 0 ? byMajor : b.VersionMinor.CompareTo(a.VersionMinor);
+        });
+
+        return new ReleasedVersionsDto(entries);
+    }
+
+    public async Task<ArchivedReleaseDto> GetArchivedReleaseAsync(
+        Guid vaultId,
+        string notePath,
+        int versionMajor,
+        int versionMinor,
+        CancellationToken ct = default)
+    {
+        if (versionMajor < 0 || versionMinor < 0)
+        {
+            throw new NoteException("Version components cannot be negative.");
         }
 
-        // The snapshot we're walking the cursor onto.
-        var target = snapshots[cursor - 1];
-        var poppedRaw = await File.ReadAllTextAsync(target.Path, Encoding.UTF8, ct);
-
-        // Single write to the note file. No snapshot writes, no
-        // deletes — the ring is intentionally untouched.
-        await File.WriteAllTextAsync(absolute, poppedRaw, NoBomUtf8, ct);
-
-        // Parse the restored content for the indexer + return DTO.
-        var (fm, body) = FrontmatterCodec.Split(poppedRaw);
-        var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
+        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
+        string canonical;
         try
         {
-            await _indexer.OnNoteSavedAsync(
-                vaultId, canonical, fm, body,
-                new DateTimeOffset(lastModified, TimeSpan.Zero), ct);
+            canonical = _notePaths.CanonicalizeNote(notePath);
         }
-        catch
+        catch (InvalidNotePathException ex)
         {
-            // Index drift recoverable via rebuild.
+            throw new NoteException(ex.Message);
         }
 
-        return new NoteDto(
+        var archivePath = ArchiveFilePath(vaultRoot, canonical, versionMajor, versionMinor);
+        if (!File.Exists(archivePath))
+        {
+            throw new NoteException(
+                $"No archived release at v{versionMajor}.{versionMinor} for this note.",
+                statusCode: 404);
+        }
+
+        var raw = await File.ReadAllTextAsync(archivePath, Encoding.UTF8, ct);
+        var (fm, body) = FrontmatterCodec.Split(raw);
+        var savedAt = new DateTimeOffset(new FileInfo(archivePath).LastWriteTimeUtc, TimeSpan.Zero);
+
+        return new ArchivedReleaseDto(
             Path: canonical,
+            VersionMajor: versionMajor,
+            VersionMinor: versionMinor,
             Body: body,
             Frontmatter: fm.ToDto(),
-            Etag: ComputeEtag(poppedRaw),
-            LastModified: lastModified);
+            SavedAt: savedAt);
+    }
+
+    // ---------------------------------------------------------------
+    // Legacy stubs — see interface for rationale
+    // ---------------------------------------------------------------
+
+    public Task<NoteHistoryInfoDto> GetHistoryInfoAsync(
+        Guid vaultId,
+        string notePath,
+        CancellationToken ct = default)
+    {
+        // The snapshot ring no longer exists; the legacy endpoint just
+        // returns an empty summary so pre-Ship-B clients render their
+        // Revert button as permanently disabled.
+        return Task.FromResult(new NoteHistoryInfoDto(0, null));
+    }
+
+    public Task<ReleaseInfoDto> GetReleaseInfoAsync(
+        Guid vaultId,
+        string notePath,
+        CancellationToken ct = default)
+    {
+        // The single-slot frozen release is gone; the legacy endpoint
+        // reports no release so pre-Ship-B clients hide the recall
+        // affordance. New code should use ListArchivedReleasesAsync.
+        return Task.FromResult(new ReleaseInfoDto(false, 0, 0, null, false));
     }
 
     // ---------------------------------------------------------------
@@ -986,233 +912,69 @@ public sealed class NoteService : INoteService
     // ---------------------------------------------------------------
 
     /// <summary>
-    /// Apply the history-ring side effects for an editor save that is
-    /// about to overwrite <paramref name="canonical"/>'s body with new
-    /// content. The previous on-disk raw content (frontmatter + body)
-    /// is supplied in <paramref name="existingRaw"/>.
-    ///
-    /// Two paths, picked by where the existing content sits in the ring:
-    ///
-    /// <list type="bullet">
-    ///   <item><description><b>No cursor match</b> — the existing
-    ///     content is fresh ("above the stack"). Take the standard
-    ///     snapshot: write <paramref name="existingRaw"/> as a new
-    ///     entry, then prune to <see cref="HistorySnapshotCap"/>.
-    ///     This is the common path for a user typing-and-autosaving.
-    ///     </description></item>
-    ///   <item><description><b>Cursor hit at index i</b> — the existing
-    ///     content matches a snapshot already in the ring (the user is
-    ///     editing from a reverted state). Delete every snapshot above
-    ///     index i (the "redo branch" the user is abandoning) and add
-    ///     no new entry. The ring shrinks to i+1 entries; the live
-    ///     note's content is about to become fresh again ("above the
-    ///     stack"). This is the cursor-truncate semantics every
-    ///     undo/redo system the user has used elsewhere.</description></item>
-    /// </list>
-    /// </summary>
-    private async Task UpdateHistoryForBodyChangeAsync(
-        string vaultRoot,
-        string canonical,
-        string existingRaw,
-        CancellationToken ct)
-    {
-        var folder = HistoryFolderFor(vaultRoot, canonical);
-        // Fast path: no folder yet → no ring to consult, just append.
-        // (Directory will be created inside WriteHistorySnapshotAsync.)
-        if (!Directory.Exists(folder))
-        {
-            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
-            return;
-        }
-
-        var snapshots = await LoadSnapshotsAsync(folder, ct);
-        if (snapshots.Count == 0)
-        {
-            // Folder exists but is empty (e.g. all snapshots pruned).
-            // Treat as "above the stack" — append.
-            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
-            return;
-        }
-
-        var existingEtag = ComputeEtag(existingRaw);
-        var cursor = FindCursor(snapshots, existingEtag);
-
-        if (cursor == snapshots.Count)
-        {
-            // No match — existing content is above the stack. Standard
-            // snapshot + prune behaviour.
-            await WriteHistorySnapshotAsync(vaultRoot, canonical, existingRaw, ct);
-            return;
-        }
-
-        // Match at index `cursor`. Truncate the redo branch: delete
-        // every snapshot with index > cursor. Best-effort per file —
-        // a stuck file lingers but isn't fatal.
-        for (var i = cursor + 1; i < snapshots.Count; i++)
-        {
-            try
-            {
-                File.Delete(snapshots[i].Path);
-            }
-            catch
-            {
-                // Lingering forward-branch entry. The next save will
-                // find it again and try to delete it again.
-            }
-        }
-    }
-
-    /// <summary>
-    /// One snapshot, parsed from disk. <see cref="Etag"/> is computed
-    /// lazily by <see cref="LoadSnapshotsAsync"/> — it's only needed
-    /// for cursor lookup, not for ordering.
-    /// </summary>
-    private readonly record struct SnapshotEntry(long Ms, string Path, string Etag);
-
-    /// <summary>
-    /// Read the per-note history folder, parse all snapshot files,
-    /// compute their content hashes, and return them in chronological
-    /// order (oldest first, newest last).
-    /// </summary>
-    /// <remarks>
-    /// Filenames are <c>{unixMs}.md</c> with an optional collision
-    /// suffix (<c>{unixMs}-a.md</c>, etc.). We parse the leading digits
-    /// as the timestamp; suffixes group under the same numeric ms.
-    /// Each snapshot's raw file content is hashed via
-    /// <see cref="ComputeEtag"/> for cursor lookup; this is at most
-    /// <see cref="HistorySnapshotCap"/> small reads per call (~50 KB
-    /// worst case for 10 × 5 KB notes), which is fine even on a
-    /// slow disk.
-    /// </remarks>
-    private static async Task<List<SnapshotEntry>> LoadSnapshotsAsync(
-        string folder,
-        CancellationToken ct)
-    {
-        var raw = new List<(long Ms, string Path)>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
-        {
-            var name = Path.GetFileNameWithoutExtension(file);
-            var digits = 0;
-            while (digits < name.Length && char.IsDigit(name[digits])) digits++;
-            if (digits == 0) continue;
-            if (long.TryParse(name.AsSpan(0, digits), out var ms))
-            {
-                raw.Add((ms, file));
-            }
-            ct.ThrowIfCancellationRequested();
-        }
-
-        // Sort oldest-first by ms. Ties (collision-suffix entries)
-        // break by filename to keep the order deterministic — the
-        // cursor logic doesn't care about a within-ms ordering as
-        // long as it's stable.
-        raw.Sort((a, b) =>
-        {
-            var byMs = a.Ms.CompareTo(b.Ms);
-            return byMs != 0 ? byMs : string.CompareOrdinal(a.Path, b.Path);
-        });
-
-        // Read + hash each. We only need the etag; the body itself is
-        // re-read by PopHistoryAsync directly for the chosen target.
-        var result = new List<SnapshotEntry>(raw.Count);
-        foreach (var (ms, path) in raw)
-        {
-            string content;
-            try
-            {
-                content = await File.ReadAllTextAsync(path, Encoding.UTF8, ct);
-            }
-            catch
-            {
-                // Unreadable snapshot — skip. Could be a transient lock
-                // or a stale temp file. The cursor logic will treat it
-                // as "doesn't exist" which is the safe choice.
-                continue;
-            }
-            result.Add(new SnapshotEntry(ms, path, ComputeEtag(content)));
-        }
-        return result;
-    }
-
-    /// <summary>
-    /// Find the position of <paramref name="currentEtag"/> within the
-    /// chronologically-ordered <paramref name="snapshots"/>. Returns
-    /// the index of the first match if one exists, otherwise
-    /// <c>snapshots.Count</c> (= "above the stack", fresh content).
-    /// </summary>
-    /// <remarks>
-    /// "First match" handles the corner case where two distinct
-    /// snapshots happen to have identical content (e.g. the user
-    /// returned to an earlier state and saved again). In that case,
-    /// the earlier matching snapshot wins — which means a Revert will
-    /// skip the intermediate snapshots and walk further back than
-    /// strict timestamp order would suggest. This is acceptable and
-    /// arguably what the user wants: they're at content X; the
-    /// "previous distinct state" is whatever came before the first X.
-    /// </remarks>
-    private static int FindCursor(IReadOnlyList<SnapshotEntry> snapshots, string currentEtag)
-    {
-        for (var i = 0; i < snapshots.Count; i++)
-        {
-            if (string.Equals(snapshots[i].Etag, currentEtag, StringComparison.Ordinal))
-            {
-                return i;
-            }
-        }
-        return snapshots.Count;
-    }
-
-    /// <summary>
-    /// Convenience wrapper around <c>Path.Combine(vaultRoot,
-    /// .notesapp, history, encoded(canonical))</c>. The encoded folder
-    /// name is derived from the canonical path; see
-    /// <see cref="EncodeHistoryFolderName"/> for the encoding choice.
-    /// </summary>
-    private static string HistoryFolderFor(string vaultRoot, string canonical)
-    {
-        return Path.Combine(
-            vaultRoot, AppFolder, HistoryFolder,
-            EncodeHistoryFolderName(canonical));
-    }
-
-    /// <summary>
-    /// The per-note release folder (<c>.notesapp/releases/encoded/</c>),
-    /// home of the single frozen release copy and the parked dev stash.
-    /// Reuses the same path encoding as history so rename handling is
-    /// symmetric.
+    /// Per-note release-archive folder under
+    /// <c>{vault}/.notesapp/releases/{encoded-note-path}/</c>. Home of
+    /// the <c>v&lt;maj&gt;.&lt;min&gt;.md</c> archive entries, one per past
+    /// Released entry on the note.
     /// </summary>
     private static string ReleaseFolderFor(string vaultRoot, string canonical)
-        => Path.Combine(vaultRoot, AppFolder, ReleasesFolder, EncodeHistoryFolderName(canonical));
-
-    private static string ReleasedFilePath(string vaultRoot, string canonical)
-        => Path.Combine(ReleaseFolderFor(vaultRoot, canonical), ReleasedFileName);
-
-    private static string DevStashFilePath(string vaultRoot, string canonical)
-        => Path.Combine(ReleaseFolderFor(vaultRoot, canonical), DevStashFileName);
+        => Path.Combine(vaultRoot, AppFolder, ReleasesFolder, EncodeNoteFolderName(canonical));
 
     /// <summary>
-    /// Write a release-slot file (frozen release or dev stash), creating the
-    /// per-note release folder on demand. UTF-8 without BOM, like every
-    /// other note write.
+    /// Absolute path of the archive file for one (major, minor) release
+    /// of a note. The file may or may not exist; callers test
+    /// <c>File.Exists</c> before reading.
     /// </summary>
-    private async Task SafeWriteSlotAsync(string path, string content, CancellationToken ct)
+    private static string ArchiveFilePath(string vaultRoot, string canonical, int versionMajor, int versionMinor)
+        => Path.Combine(ReleaseFolderFor(vaultRoot, canonical), ArchiveFileName(versionMajor, versionMinor));
+
+    /// <summary>
+    /// Format an archive filename: <c>v{major}.{minor}.md</c>. The "v"
+    /// prefix is there so the folder lists nicely when browsed by hand
+    /// and so a human-dropped file (e.g. "1.0.md" without the prefix)
+    /// isn't mistaken for an archive entry.
+    /// </summary>
+    private static string ArchiveFileName(int versionMajor, int versionMinor)
+        => $"v{versionMajor.ToString(CultureInfo.InvariantCulture)}.{versionMinor.ToString(CultureInfo.InvariantCulture)}.md";
+
+    /// <summary>
+    /// Parse an archive filename back to (major, minor). Returns false
+    /// for anything that doesn't match the <c>v{int}.{int}</c> shape,
+    /// including the legacy <c>released.md</c> / <c>development.md</c>
+    /// files that may linger from the old two-slot model.
+    /// </summary>
+    private static bool TryParseArchiveFileName(string nameWithoutExtension, out int versionMajor, out int versionMinor)
+    {
+        versionMajor = 0;
+        versionMinor = 0;
+
+        if (string.IsNullOrEmpty(nameWithoutExtension)) return false;
+        if (nameWithoutExtension[0] != 'v' && nameWithoutExtension[0] != 'V') return false;
+
+        var rest = nameWithoutExtension.AsSpan(1);
+        var dot = rest.IndexOf('.');
+        if (dot <= 0 || dot == rest.Length - 1) return false;
+
+        if (!int.TryParse(rest[..dot], NumberStyles.None, CultureInfo.InvariantCulture, out var maj)) return false;
+        if (!int.TryParse(rest[(dot + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var min)) return false;
+        if (maj < 0 || min < 0) return false;
+
+        versionMajor = maj;
+        versionMinor = min;
+        return true;
+    }
+
+    /// <summary>
+    /// Write one archive entry, creating the per-note release folder on
+    /// demand. UTF-8 without BOM, like every other note write.
+    /// Overwrites in place when the (major, minor) entry already exists
+    /// — that's the documented edge case where the same version is
+    /// re-released (atypical but supported).
+    /// </summary>
+    private async Task SafeWriteArchiveAsync(string path, string content, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, content, NoBomUtf8, ct);
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-        catch
-        {
-            // Best-effort. A lingering stash file is harmless — it's only
-            // consulted on a released->development transition, which
-            // overwrites/clears it next time anyway.
-        }
     }
 
     /// <summary>
@@ -1259,139 +1021,11 @@ public sealed class NoteService : INoteService
         }
     }
 
-    public async Task<ReleaseInfoDto> GetReleaseInfoAsync(
-        Guid vaultId,
-        string notePath,
-        CancellationToken ct = default)
-    {
-        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
-        string canonical;
-        try
-        {
-            canonical = _notePaths.CanonicalizeNote(notePath);
-        }
-        catch (InvalidNotePathException ex)
-        {
-            throw new NoteException(ex.Message);
-        }
-
-        var releasedPath = ReleasedFilePath(vaultRoot, canonical);
-        if (!File.Exists(releasedPath))
-        {
-            return new ReleaseInfoDto(false, 0, 0, null, false);
-        }
-
-        var raw = await File.ReadAllTextAsync(releasedPath, Encoding.UTF8, ct);
-        var (fm, _) = FrontmatterCodec.Split(raw);
-        var savedAt = new DateTimeOffset(new FileInfo(releasedPath).LastWriteTimeUtc, TimeSpan.Zero);
-        var devStashed = File.Exists(DevStashFilePath(vaultRoot, canonical));
-
-        return new ReleaseInfoDto(
-            true, fm.VersionMajor, fm.VersionMinor, savedAt, devStashed);
-    }
-
     /// <summary>
-    /// Write one history snapshot for the note at <paramref name="canonical"/>.
-    /// Creates the per-note history folder on demand, writes a single
-    /// "{unixMs}.md" file containing the supplied raw content, then
-    /// prunes the folder back to <see cref="HistorySnapshotCap"/> entries
-    /// (oldest deleted first).
-    /// </summary>
-    /// <remarks>
-    /// Two clock concerns:
-    /// 1. Filename collisions. The clock is millisecond-resolution; two
-    ///    saves arriving in the same millisecond would clash. We append
-    ///    a short suffix only if the bare name already exists, so the
-    ///    common path stays a clean "{ms}.md" filename. The
-    ///    sort-by-unix-ms-prefix logic in the readers tolerates the
-    ///    suffix transparently because they parse the prefix before
-    ///    the first non-digit.
-    /// 2. Clock skew on the host. We use the injected TimeProvider, so
-    ///    tests can use a deterministic clock; in production the system
-    ///    clock is fine (file timestamps already rely on it).
-    ///
-    /// This helper is called only from
-    /// <see cref="UpdateHistoryForBodyChangeAsync"/> in the "no cursor
-    /// match" path. The pop endpoint deliberately does NOT call it —
-    /// pop is read-only with respect to the ring (the cursor walks
-    /// down; entries are not added).
-    /// </remarks>
-    private async Task WriteHistorySnapshotAsync(
-        string vaultRoot,
-        string canonical,
-        string rawContent,
-        CancellationToken ct)
-    {
-        var folder = HistoryFolderFor(vaultRoot, canonical);
-        Directory.CreateDirectory(folder);
-
-        var nowMs = _clock.GetUtcNow().ToUnixTimeMilliseconds();
-        var fileName = $"{nowMs}.md";
-        var target = Path.Combine(folder, fileName);
-
-        // Collision-handle the same-millisecond case. The sort-by-prefix
-        // readers parse digits up to the first non-digit, so any of
-        // "{ms}.md", "{ms}-a.md", "{ms}-b.md", etc. all sort under the
-        // same numeric ms and are treated as adjacent timestamps.
-        if (File.Exists(target))
-        {
-            // Pick the next available suffix. Caps at single-letter
-            // ('a' through 'z') because two saves in the same ms is
-            // already pathological; 26 collisions in one ms is fantasy.
-            for (var c = 'a'; c <= 'z'; c++)
-            {
-                var candidate = Path.Combine(folder, $"{nowMs}-{c}.md");
-                if (!File.Exists(candidate))
-                {
-                    target = candidate;
-                    break;
-                }
-            }
-        }
-
-        await File.WriteAllTextAsync(target, rawContent, NoBomUtf8, ct);
-
-        // Prune oldest if we're over the cap. List all snapshot files,
-        // sort by numeric ms prefix, delete from the front until the
-        // count is at most HistorySnapshotCap.
-        var all = new List<(long Ms, string Path)>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*.md", SearchOption.TopDirectoryOnly))
-        {
-            var name = Path.GetFileNameWithoutExtension(file);
-            // Parse leading digits as the timestamp; collision-suffix
-            // entries fall under the same ms.
-            var digits = 0;
-            while (digits < name.Length && char.IsDigit(name[digits])) digits++;
-            if (digits == 0) continue;
-            if (long.TryParse(name.AsSpan(0, digits), out var ms))
-            {
-                all.Add((ms, file));
-            }
-        }
-
-        if (all.Count <= HistorySnapshotCap) return;
-
-        all.Sort((a, b) => a.Ms.CompareTo(b.Ms));
-        var toDelete = all.Count - HistorySnapshotCap;
-        for (var i = 0; i < toDelete; i++)
-        {
-            try
-            {
-                File.Delete(all[i].Path);
-            }
-            catch
-            {
-                // Best-effort prune; an over-cap file lingers until next
-                // save reattempts the prune.
-            }
-        }
-    }
-
-    /// <summary>
-    /// Map a canonical note path to a flat folder name under
-    /// <c>.notesapp/history/</c>. Slashes are replaced with the
-    /// double-underscore sentinel <c>__</c>; the <c>.md</c> extension is
-    /// kept so the folder name parallels the note's filename and is
+    /// Map a canonical note path to a flat folder name for use under
+    /// <c>.notesapp/releases/</c>. Slashes are replaced with the
+    /// double-underscore sentinel <c>__</c>; the <c>.md</c> extension
+    /// is kept so the folder name parallels the note's filename and is
     /// recognisable when listing directories by hand.
     /// </summary>
     /// <remarks>
@@ -1401,13 +1035,19 @@ public sealed class NoteService : INoteService
     /// reserved character we have to escape is the path separator
     /// itself. We use <c>__</c> rather than e.g. percent-encoding so
     /// the folder names stay reasonably legible to a human reading
-    /// <c>.notesapp/history/</c>: a note at <c>XTS/Pullforce.md</c>
+    /// <c>.notesapp/releases/</c>: a note at <c>XTS/Pullforce.md</c>
     /// becomes <c>XTS__Pullforce.md</c>. The likelihood of a legitimate
     /// note filename containing the literal sequence <c>__</c> as part
     /// of its actual name is low, and even when it does occur the
     /// collision space is per-vault, not global.
+    ///
+    /// Historically this also encoded the legacy
+    /// <c>.notesapp/history/</c> snapshot-ring folders, hence the
+    /// shared sentinel convention; the snapshot ring is gone but the
+    /// encoding is unchanged so any pre-existing <c>releases/</c>
+    /// folder lines up byte-for-byte under the same name.
     /// </remarks>
-    private static string EncodeHistoryFolderName(string canonical)
+    private static string EncodeNoteFolderName(string canonical)
     {
         return canonical.Replace("/", "__");
     }
