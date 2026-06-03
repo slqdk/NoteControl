@@ -271,13 +271,17 @@ function serializeTableAsPipe(state: unknown, node: unknown): void {
  * Serialize a prosemirror table node as a raw HTML <table> block.
  * Used when the table has attributes that pipe syntax cannot express
  * (custom rowHeight, cell alignment, merged cells, header column,
- * multi-block cell content).
+ * column widths, multi-block cell content).
  *
- * Cell content is serialized as `textContent` plus a manual rebuild
- * for inline marks. Multi-block cell content (paragraphs, lists)
- * gets serialized with `state.render(cell)` to preserve the full
- * markdown of each block — this is what makes a list-inside-a-cell
- * round-trip correctly.
+ * Cell content is rendered by `renderCellContents` (see below): the
+ * supported block nodes (paragraph, heading, bulletList, orderedList,
+ * listItem, hardBreak) emit their proper HTML tags, and inline marks
+ * (bold, italic, strike, code, underline, link, color, font-family,
+ * font-size) wrap their text in the corresponding open/close tags.
+ * Unknown block nodes fall through to escaped textContent — code
+ * blocks, callouts, images etc. inside a cell are exotic enough that
+ * we don't try to round-trip their full structure (they'll come back
+ * as plain text on next load).
  *
  * The shape we emit:
  *
@@ -334,7 +338,9 @@ function serializeTableAsHtml(state: unknown, node: unknown): void {
           rowspan?: number;
           colwidth?: number[] | null;
         };
-        textContent: string;
+        // Also has childCount/child(i)/textContent at runtime — see
+        // the narrower CellChildNode interface used by the helpers
+        // below. We assert into it when passing to renderCellContents.
       };
       const tag = cellNode.type.name === 'tableHeader' ? 'th' : 'td';
       const attrs: string[] = [];
@@ -362,21 +368,29 @@ function serializeTableAsHtml(state: unknown, node: unknown): void {
       }
       const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
 
-      // Cell text — escape `<` so embedded < don't accidentally
-      // open new tags. We deliberately don't escape `&` because
-      // round-trip parsing through markdown-it handles `&amp;`
-      // back to `&` in some cases but not all, and inconsistent
-      // round-tripping is worse than leaving `&` alone.
+      // Cell content. We render supported block nodes (paragraphs,
+      // headings, bullet/ordered lists, list items, hard breaks) with
+      // their proper HTML tags, and supported inline marks (bold,
+      // italic, strike, code, underline, link, color, font-family,
+      // font-size) with their wrapping tags. See `renderCellContents`
+      // below.
       //
-      // Limitation: we render only textContent, dropping inline
-      // marks (bold, italic, etc.) inside HTML-fallback cells.
-      // The user paid for this trade-off: tables with custom
-      // height get HTML-flat content. Future ship could call into
-      // a sub-state to render inline marks here. Acceptable for
-      // now — most tables that need a custom height are tabular
-      // data, not formatted prose.
-      const text = cellNode.textContent.replace(/</g, '&lt;');
-      s.write(`<${tag}${attrStr}>${text}</${tag}>`);
+      // Why not just `state.renderInline` like the pipe path does?
+      // renderInline only handles inline content (text + marks); it
+      // doesn't know what to do with multi-block cell content like
+      // a paragraph followed by a bullet list. Hand-rolling the cell
+      // emitter lets us own exactly what shows up inside <td> on
+      // disk, and matches what TipTap's own parseHTML rules expect
+      // on the way back in.
+      //
+      // Limitation (documented honestly): nodes outside the supported
+      // set — code blocks, callouts, images, math, embedded videos —
+      // fall back to escaped textContent inside cells. They're rare
+      // enough inside tables that fixing them isn't worth carrying
+      // a per-mark/per-node case for each one; the user would notice
+      // if they tried, at which point we'd extend the emitter.
+      const inner = renderCellContents(cellNode as unknown as CellChildNode);
+      s.write(`<${tag}${attrStr}>${inner}</${tag}>`);
     });
     s.write('</tr>');
     s.ensureNewLine();
@@ -386,4 +400,288 @@ function serializeTableAsHtml(state: unknown, node: unknown): void {
   s.ensureNewLine();
   s.write('</table>');
   s.closeBlock(node);
+}
+// ---- Cell HTML content emitter -------------------------------------
+
+/**
+ * Build the inner HTML of a single <td> / <th> in the HTML fallback
+ * path. Walks the cell's block children and the inline content of
+ * each, emitting tags for the supported set of block nodes and
+ * inline marks. Unknown nodes fall through to escaped textContent
+ * (the previous file-wide behaviour, now localised to one block).
+ *
+ * Supported blocks: paragraph, heading, bulletList, orderedList,
+ *                   listItem, hardBreak.
+ * Supported marks:  bold, italic, strike, code, underline, link,
+ *                   nccolor, ncfont, ncsize.
+ *
+ * Round-trip: TipTap's standard parseHTML for each node/mark reads
+ * exactly what we emit, so reload reconstructs the same prosemirror
+ * tree. tiptap-markdown is configured with `html: true`, so the raw
+ * HTML inside the <table> block is preserved verbatim through the
+ * markdown layer in both directions.
+ *
+ * Why these as the supported set and not more: every block/mark
+ * that ships on the NoteEditor today is covered EXCEPT exotic
+ * block kinds (callout, code block, image, math, video) which
+ * almost nobody puts inside a table cell. If someone does, the
+ * fallback emits the textContent and we'd extend the emitter on
+ * demand. Keeping the set small keeps the diff small and the
+ * round-trip predictable.
+ */
+
+// Inline marks rendered in a deterministic outer→inner nesting so
+// that two saves of the same content produce byte-identical output.
+// The order itself doesn't affect rendering — HTML mark nesting is
+// commutative in the browser — it just stabilises the .md on disk.
+const MARK_ORDER: readonly string[] = [
+  'link',
+  'nccolor',
+  'ncfont',
+  'ncsize',
+  'underline',
+  'bold',
+  'italic',
+  'strike',
+  'code',
+];
+
+// Escape only `<` in inline text. We deliberately don't escape `&`,
+// matching the file's existing convention for HTML-fallback cells
+// (see serializeTableAsHtml's docblock and the old textContent path
+// it replaces): inconsistent `&` ↔ `&amp;` round-tripping through
+// markdown-it is worse than leaving `&` alone.
+function escapeHtmlText(s: string): string {
+  return s.replace(/</g, '&lt;');
+}
+
+// Attribute values DO get full escaping. Unlike inline text these go
+// inside `"..."`, so `"` and `&` must be entity-encoded; without that
+// a stray `&` in a URL would silently start a (probably-invalid)
+// entity reference on parse-back.
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+interface MarkLike {
+  type: { name: string };
+  attrs?: Record<string, unknown>;
+}
+
+interface InlineChild {
+  isText?: boolean;
+  text?: string;
+  type: { name: string };
+  marks?: MarkLike[];
+  textContent?: string;
+}
+
+interface CellChildNode {
+  type: { name: string };
+  attrs?: Record<string, unknown>;
+  childCount: number;
+  child: (i: number) => CellChildNode & InlineChild;
+  textContent: string;
+}
+
+// Return the open/close tag pair for a mark, or null if the mark
+// is unknown or its required attribute is missing (in which case the
+// caller silently skips the mark and emits the bare text).
+function markTags(mark: MarkLike): { open: string; close: string } | null {
+  const name = mark.type.name;
+  const attrs = mark.attrs ?? {};
+  switch (name) {
+    case 'bold':
+      return { open: '<strong>', close: '</strong>' };
+    case 'italic':
+      return { open: '<em>', close: '</em>' };
+    case 'strike':
+      return { open: '<s>', close: '</s>' };
+    case 'code':
+      return { open: '<code>', close: '</code>' };
+    case 'underline':
+      return { open: '<u>', close: '</u>' };
+    case 'link': {
+      const href = attrs.href;
+      if (typeof href !== 'string' || !href) return null;
+      const target = attrs.target;
+      const rel = attrs.rel;
+      const t =
+        typeof target === 'string' && target
+          ? ` target="${escapeAttr(target)}"`
+          : '';
+      const r =
+        typeof rel === 'string' && rel ? ` rel="${escapeAttr(rel)}"` : '';
+      return {
+        open: `<a href="${escapeAttr(href)}"${t}${r}>`,
+        close: '</a>',
+      };
+    }
+    case 'nccolor': {
+      const color = attrs.color;
+      if (typeof color !== 'string' || !color) return null;
+      return {
+        open: `<span style="color: ${escapeAttr(color)}">`,
+        close: '</span>',
+      };
+    }
+    case 'ncfont': {
+      const font = attrs.font;
+      if (typeof font !== 'string' || !font) return null;
+      return {
+        open: `<span style="font-family: ${escapeAttr(font)}">`,
+        close: '</span>',
+      };
+    }
+    case 'ncsize': {
+      const size = attrs.size;
+      if (typeof size !== 'number' || !Number.isFinite(size)) return null;
+      return {
+        open: `<span style="font-size: ${Math.round(size)}px">`,
+        close: '</span>',
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// Render the inline content of a block (paragraph, heading, etc).
+// For each text child, sort its marks by MARK_ORDER and wrap. For
+// hard-break children, emit `<br>`. For any other inline node type
+// (unexpected in practice), fall back to its escaped textContent.
+function renderInlineHtml(block: CellChildNode): string {
+  let out = '';
+  for (let i = 0; i < block.childCount; i++) {
+    const child = block.child(i);
+    if (child.type.name === 'hardBreak') {
+      out += '<br>';
+      continue;
+    }
+    if (!child.isText || typeof child.text !== 'string') {
+      out += escapeHtmlText(child.textContent ?? '');
+      continue;
+    }
+    const text = escapeHtmlText(child.text);
+    const marks = (child.marks ?? []).slice().sort((a, b) => {
+      const ai = MARK_ORDER.indexOf(a.type.name);
+      const bi = MARK_ORDER.indexOf(b.type.name);
+      // Unknown marks sort to the end. They render to no tags
+      // anyway (markTags returns null), so their relative order
+      // doesn't matter — keeping the sort stable is what counts.
+      const aRank = ai === -1 ? MARK_ORDER.length : ai;
+      const bRank = bi === -1 ? MARK_ORDER.length : bi;
+      return aRank - bRank;
+    });
+    let opens = '';
+    let closes = '';
+    for (const m of marks) {
+      const tags = markTags(m);
+      if (!tags) continue;
+      opens += tags.open;
+      closes = tags.close + closes;
+    }
+    out += opens + text + closes;
+  }
+  return out;
+}
+
+// Render a single block node found inside a cell or a list item.
+// Returns the full HTML string for the node, opening and closing
+// tags included. Unsupported block types fall back to their
+// escaped textContent (no surrounding tags), the same degraded
+// behaviour the file used file-wide before this ship.
+function renderBlockHtml(block: CellChildNode): string {
+  const name = block.type.name;
+  switch (name) {
+    case 'paragraph':
+      return `<p>${renderInlineHtml(block)}</p>`;
+    case 'heading': {
+      // Heading level lives on the node attrs. Default to 1 if it's
+      // missing or out of bounds — defensive only; the schema won't
+      // produce that, but a hand-edited .md file might.
+      const raw = (block.attrs ?? {}).level;
+      const level =
+        typeof raw === 'number' && raw >= 1 && raw <= 6 ? Math.floor(raw) : 1;
+      return `<h${level}>${renderInlineHtml(block)}</h${level}>`;
+    }
+    case 'bulletList':
+      return `<ul>${renderListItemsHtml(block)}</ul>`;
+    case 'orderedList': {
+      // Ordered lists may carry a `start` attribute (the first
+      // item's index). Only emit the attribute when it's not the
+      // default 1, to keep the .md tidy.
+      const raw = (block.attrs ?? {}).start;
+      const start =
+        typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : 1;
+      const startAttr = start === 1 ? '' : ` start="${start}"`;
+      return `<ol${startAttr}>${renderListItemsHtml(block)}</ol>`;
+    }
+    default:
+      // Unknown block — code block, callout, image, math, etc.
+      // Fall back to escaped textContent. See the docblock above
+      // renderCellContents for the rationale.
+      return escapeHtmlText(block.textContent ?? '');
+  }
+}
+
+// Render the `<li>...</li>` items of a bulletList / orderedList.
+// Defensive: if a non-listItem child sneaks in (shouldn't happen
+// with the default schema), wrap its textContent in `<li>...</li>`
+// rather than emit a bare block — keeps the HTML valid.
+function renderListItemsHtml(listNode: CellChildNode): string {
+  let out = '';
+  for (let i = 0; i < listNode.childCount; i++) {
+    const li = listNode.child(i);
+    if (li.type.name !== 'listItem') {
+      out += `<li>${escapeHtmlText(li.textContent ?? '')}</li>`;
+      continue;
+    }
+    out += `<li>${renderListItemContents(li)}</li>`;
+  }
+  return out;
+}
+
+// Render the contents of a `<li>`. A listItem's schema is
+// `paragraph block*`. The common case is exactly one paragraph
+// child, which we emit as bare inline content (no `<p>` wrap) for
+// the cleaner `<li>text</li>` shape — matches typical hand-written
+// HTML lists, and parses back as a listItem-with-one-paragraph
+// just the same. With nested lists or multiple paragraphs, each
+// child renders with its own tag.
+function renderListItemContents(li: CellChildNode): string {
+  if (li.childCount === 1) {
+    const only = li.child(0);
+    if (only.type.name === 'paragraph') {
+      return renderInlineHtml(only);
+    }
+  }
+  let out = '';
+  for (let i = 0; i < li.childCount; i++) {
+    out += renderBlockHtml(li.child(i));
+  }
+  return out;
+}
+
+// Render the contents of a `<td>` / `<th>`. Same shape simplification
+// as a listItem: a cell with exactly one paragraph child emits just
+// the inline content (no `<p>` wrap), matching the cleaner shape the
+// previous textContent path used for simple cells. With any extra
+// children (a list, a heading, multiple paragraphs), each child
+// renders with its own block tag.
+function renderCellContents(cell: CellChildNode): string {
+  if (cell.childCount === 1) {
+    const only = cell.child(0);
+    if (only.type.name === 'paragraph') {
+      return renderInlineHtml(only);
+    }
+  }
+  let out = '';
+  for (let i = 0; i < cell.childCount; i++) {
+    out += renderBlockHtml(cell.child(i));
+  }
+  return out;
 }
