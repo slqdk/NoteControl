@@ -282,32 +282,69 @@ The custom extensions include LaTeX/KaTeX math rendering
 (inline and block); see [notes.md § Math](notes.md#math) for
 delimiter rules, the edit popover, and the symbol palette.
 
-**Read-only mode**: the editor renders read-only when either
-the note's frontmatter `locked` flag is true OR the active
-vault is viewer-role (the host page passes `forceReadOnly` into
-`NoteEditor`). Both flow through the same TipTap `editable:
-false` path and the same `.nc-editor-locked` styling — caret
-suppressed, keystrokes discarded, links click-through to a new
-tab instead of opening the link-edit popover. The two
-conditions are OR'd; a viewer on a locked note sees the same
-read-only behaviour as on any other note.
+**Read-only mode**: the editor renders read-only when either the
+note's lifecycle state is `released` OR the active vault is
+viewer-role (the host page passes `forceReadOnly` into
+`NoteEditor`). Both flow through the same TipTap `editable: false`
+path and the same `.nc-editor-locked` styling — caret suppressed,
+keystrokes discarded, links click-through to a new tab instead of
+opening the link-edit popover. The two conditions are OR'd; a
+viewer on a released note sees the same read-only behaviour as on
+any other note. Live state changes from the Properties panel
+re-evaluate the lock without remounting the editor: switching to
+*Under development* unlocks mid-session, switching to *Released*
+re-locks. (The `locked` frontmatter key is no longer the UI
+trigger; it's preserved on disk but state drives the surface.)
 
 ## Properties panel
 
 Shows the selected note or folder's metadata. For notes:
 
-- **Editable inline**: name, tags, locked toggle, version + state,
-  per-note appearance (font / font size / page width).
+- **Editable inline**: name, tags, version + state, per-note
+  appearance (font / font size / page width).
 - **Version + state**: the Version row is two numeric steppers
   (major `.` minor) plus a state selector. The version is monotonic
   — the steppers won't go below the current value, and bumping the
   major resets the minor to 0. The selector offers *Under
   development* and *Released*; *Released* is disabled below version
   1.0. At version 0.0 the row shows a non-selectable "Not
-  versioned". When a frozen released copy exists, a recall line
-  shows its version and save time, with a **Recall released
-  version** button (switching to *Released* loads the frozen copy;
-  switching back to *Under development* restores the working copy).
+  versioned". A released note auto-unlocks when the user touches a
+  stepper: the server bumps minor by one and flips the state back
+  to *Under development* in the same write, so editing the just-
+  released note doesn't require a separate state toggle first.
+- **Locking** is state-driven and not a separate row: a note with
+  `state === 'released'` is locked, everything else is editable.
+  The editor reads the lock at mount and re-evaluates live on
+  state changes — switching to *Under development* unlocks the
+  surface mid-session without a reload, switching to *Released*
+  re-locks it. The `locked` frontmatter key still exists on disk
+  for tools that don't know about lifecycle state but is no longer
+  surfaced as a toggle.
+- **Previous releases**: every time a note enters the *Released*
+  state the server freezes its current body + frontmatter to
+  `.notesapp/releases/<encoded>/v{major}.{minor}.md` (see
+  [notes.md § Release archive](notes.md#release-archive)). The
+  panel lists every frozen entry newest-first under "Previous
+  releases", each row is a button that opens the archived version
+  in a read-only viewer. The currently-viewed row gets a filled
+  accent background so the user can see at a glance which
+  version is open.
+- **Archive viewer**: when a previous-release row is clicked, the
+  editor surface swaps to a read-only TipTap mounted on the
+  archive's body (a separate instance keyed by version, so
+  switching between archives remounts cleanly). The live editor
+  is unmounted; the panel still shows the live note's properties.
+  A banner sits above the archive surface — *Viewing archived
+  vX.Y · saved <timestamp>* on the left, **← Back to live** and
+  **🗑 Delete release vX.Y** grouped on the right. Back to live
+  remounts the live editor. Delete release confirms via
+  `window.confirm`, calls the DELETE endpoint, exits archive
+  mode, and re-fetches the list — the deletion is permanent and
+  irreversible (no trash for archive files). Pre-flush note:
+  before entering archive mode the live editor's pending autosave
+  is force-flushed and the live note is re-fetched so the eventual
+  "Back to live" remount picks up the canonical post-flush body
+  instead of a stale snapshot.
 - **Read-only**: full path, parent folder, created/updated
   timestamps, size in bytes, frontmatter dump (raw YAML for
   debugging).
@@ -337,14 +374,19 @@ The panel toggles via the rail-toggle button in the topbar (or
 collapses automatically on narrow viewports).
 
 **Viewer-role vaults**: every editable field renders **disabled**
-— Name, Tags, Locked, Version + state, Font / Font size /
-Width — so the viewer can read the values but inputs are inert.
-The action buttons (Move, Delete, ＋ Add Note Widget) are
-**hidden entirely**. The folder Cover row (Upload / Replace /
-Delete) is also hidden; the cover banner itself still renders
-on the Folder page. Export buttons remain — export is a read
-operation. The mobile `MobileNoteProperties` slim-section
-mirrors the desktop disable/hide propagation.
+— Name, Tags, Version + state, Font / Font size / Width — so the
+viewer can read the values but inputs are inert. The action
+buttons (Move, Delete, ＋ Add Note Widget) are **hidden
+entirely**. The folder Cover row (Upload / Replace / Delete) is
+also hidden; the cover banner itself still renders on the Folder
+page. Export buttons remain — export is a read operation. The
+mobile `MobileNoteProperties` slim-section mirrors the desktop
+disable/hide propagation. The "Previous releases" list itself
+remains visible to viewers (it's metadata about the note's
+history); clicking an entry opens the archive viewer in
+read-only mode, same as any view. The archive viewer's **Delete
+release** button is not currently gated client-side — the server
+rejects with 403, which the user sees as an inline error.
 
 ## Note widgets
 

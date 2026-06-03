@@ -37,9 +37,9 @@ Frontmatter fields the server understands:
 | `created` | ISO 8601 datetime | When the note was first created. Server sets it on first save; preserved across edits. |
 | `updated` | ISO 8601 datetime | Last write. Server bumps it on every successful save. |
 | `tags` | string array | Comma-separable tag list. Lowercased on save. Indexed for search. |
-| `locked` | boolean | When true, the editor renders read-only and the save endpoint rejects writes. Toggleable from the properties panel. |
-| `version` | string `major.minor` | Per-note version as two non-negative integers, stored bare (e.g. `1.2`). Defaults to `0.0` when missing. **Monotonic** — the server rejects any save that lowers it (equal is allowed, for a pure state change). Edited in the properties panel via two steppers. |
-| `state` | string | Lifecycle state: `development` or `released`. Written **only when the version is above 0.0**; at `0.0` the note is "not versioned" (the key is omitted) and no state is selectable. `released` is only valid at version `1.0` or higher. Switching between `development` and `released` drives the release-copy swap (see [storage.md](storage.md#notesapp-subfolder)). |
+| `locked` | boolean | Legacy lock flag. **Derived from `state` in the UI** — a note with `state: released` is locked, anything else is editable. The key is still preserved on disk for tools that don't know about lifecycle state, but the Properties panel no longer surfaces it as a toggle and the editor reads its lock state from `state` directly. The server accepts the key on `PUT /note` and writes it through unchanged. |
+| `version` | string `major.minor` | Per-note version as two non-negative integers, stored bare (e.g. `1.2`). Defaults to `0.0` when missing. **Monotonic** — the server rejects any save that lowers it (equal is allowed, for a pure state change). Edited in the properties panel via two steppers. Bumping either stepper on a released note **also flips `state` back to `development` in the same write** (server-side auto-unlock); this is the supported way to amend a released note — no separate state toggle needed first. |
+| `state` | string | Lifecycle state: `development` or `released`. Written **only when the version is above 0.0**; at `0.0` the note is "not versioned" (the key is omitted) and no state is selectable. `released` is only valid at version `1.0` or higher. Entering `released` freezes a copy of the note to `.notesapp/releases/<encoded>/v{major}.{minor}.md` (see [Release archive](#release-archive) below). Leaving `released` does not delete the archive — every past Released entry stays in the folder until explicitly deleted via the Properties panel's archive viewer. |
 | `font` | string | Optional CSS font family / alias. When set, the editor renders the note in this font. |
 | `fontSize` | integer | Optional font size in pixels. |
 | `width` | integer | Optional page width in pixels (default 700). |
@@ -62,6 +62,82 @@ re-key the sidecar either; tracked separately). See
 [note-widgets.md](note-widgets.md) for the catalog and
 [storage.md § note-widgets.json](storage.md#notesapp-subfolder)
 for the file shape.
+
+## Release archive
+
+Every time a note enters the *Released* lifecycle state, the
+server freezes a full copy of it (body + frontmatter at that
+moment) to a per-version file:
+
+```
+<vault>/.notesapp/releases/<encoded-note-path>/v{major}.{minor}.md
+```
+
+Where `<encoded-note-path>` is the note's path with `/` replaced
+by `__` (so the archive sits in one flat folder per note, not a
+parallel tree). The filename is literally `v` followed by the
+released version, dot-separated, with `.md` extension —
+`v1.0.md`, `v1.1.md`, `v2.0.md`. Each archive is **immutable**
+once written; subsequent edits to the live note don't touch any
+existing archive.
+
+There is **no upper bound** on archive count. Re-releasing the
+same `(major, minor)` overwrites the existing archive for that
+version (the released frontmatter is rewritten in place); moving
+to a new minor/major version writes a new file alongside the
+existing ones. The Properties panel's "Previous releases" list
+enumerates them newest-first and offers per-version delete (see
+[frontend.md § Properties panel](frontend.md#properties-panel)).
+
+Lifecycle:
+- **On rename / move**: the archive folder moves with the note —
+  same flow as `<note>.assets/`, so all version files keep
+  matching their note.
+- **On note delete**: the archive folder is removed alongside the
+  note (the trashed `.md` itself goes to `.notesapp/trash/`, but
+  the archive folder is purged outright — archives don't follow a
+  note into trash and are not restorable from trash).
+- **On per-archive delete** (the panel's 🗑 Delete release vX.Y
+  button): the server removes the one `v{maj}.{min}.md` file and
+  sweeps the per-note release folder if it's now empty.
+  Permanent — no trash, no undo.
+
+The dual-slot model that previously lived here
+(`released.md` + parked `development.md`, "switch to *Released*
+to load the frozen copy, switch back to restore") is gone.
+Every Released entry is a free-standing archive, and the live
+note's body is the live note's body in all states.
+
+## Empty paragraphs on disk
+
+Pressing Enter several times to add vertical spacing creates
+empty paragraphs in the editor's ProseMirror document. Standard
+markdown can't represent these — multiple blank lines between
+paragraphs are equivalent to a single blank line under
+CommonMark, and the default `prosemirror-markdown` serializer
+drops empty paragraphs entirely.
+
+NoteControl preserves empty paragraphs across save/load by
+emitting a single **zero-width space** (U+200B) on its own line
+for each empty paragraph. ZWSP is invisible when rendered but
+survives both markdown-it parsing and ProseMirror's DOMParser
+without the paragraph being collapsed. A companion strip pass on
+load removes ZWSPs from any line that ISN'T ZWSP-only, so when
+the user types into a previously-empty paragraph the next save
+doesn't leave a stray ZWSP at the start of the content line.
+
+Consequences:
+- Notes with empty paragraphs contain `\u200B` characters on
+  disk (UTF-8: `E2 80 8B`, three bytes per empty line). Other
+  markdown tools opening the file will see these characters;
+  well-behaved parsers treat them as paragraph content (matching
+  the intent — the paragraph is preserved).
+- The convention is one-way for stray ZWSPs: the strip pass
+  removes ZWSP from content lines on every load, so a user who
+  intentionally pastes ZWSPs into a content line will lose them.
+- Notes without empty paragraphs are byte-identical to what they
+  were before this convention existed; only notes that have used
+  the spacing feature carry ZWSPs.
 
 ## Path conventions
 
