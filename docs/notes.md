@@ -295,6 +295,25 @@ with a non-default alignment, merged cells (colspan/rowspan
 a cell (e.g. a list), and user-set column widths from the
 column-resize handle.
 
+Cells in HTML form preserve formatting on reload: the inline
+marks the editor exposes (bold, italic, strike, inline code,
+underline, link, colour, font family, font size) and the
+block kinds typically found in cells (paragraphs, headings,
+bullet & ordered lists, hard breaks) all round-trip. Exotic
+content inside a cell (code blocks, callouts, images, math)
+falls back to escaped plain text on save.
+
+Grips and the popup are suppressed entirely when the editor
+is read-only — a released note, a viewer-role user, or the
+archive viewer for a past release. Every action behind a
+grip is a structural edit, so the chrome doesn't surface at
+all; hover, grip clicks, and stray open events are all
+ignored, and an open popup auto-dismisses if the lock flips
+on while it's up. Bumping the version on a released note
+auto-unlocks it (see the `version` row in
+[File-on-disk model](#file-on-disk-model) above) and the
+grips return.
+
 Mobile uses a different editor surface and does not show
 grips today — table editing is desktop-only for now.
 
