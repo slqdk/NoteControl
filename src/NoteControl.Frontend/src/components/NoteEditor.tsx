@@ -1252,14 +1252,23 @@ export function NoteEditor({
           editor. Clicking a grip selects the row/column/whole table
           and opens the TablePopup. See TableGripOverlay.tsx for the
           full behaviour notes.
+
+          locked is passed so the grips suppress themselves when the
+          note is in read-only mode (released, viewer role, archive
+          viewer). Every action behind a grip is a structural edit,
+          which has no business surfacing on a locked note.
         */}
-        <TableGripOverlay editor={editor} />
+        <TableGripOverlay editor={editor} locked={locked} />
         {/*
           Unified table-editing popup. Listens for grip-driven open
           events from TableGripOverlay. Hidden until a grip has been
           clicked. See TablePopup.tsx.
+
+          locked is passed so the popup also refuses to open while
+          read-only, and auto-dismisses if the user transitions to
+          locked while the popup happens to be open.
         */}
-        <TablePopup editor={editor} />
+        <TablePopup editor={editor} locked={locked} />
         {/*
           Selection-driven formatting toolbar (bold / italic / inline
           code / link). Appears whenever the user has selected at

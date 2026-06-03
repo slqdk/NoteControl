@@ -51,6 +51,19 @@ import type { Editor } from '@tiptap/core';
  */
 export interface TableGripOverlayProps {
   editor: Editor | null;
+  /**
+   * When true, the editor is in read-only mode (released note, viewer
+   * role, archive viewer). The grips suppress themselves entirely —
+   * no hover detection, no render — because every action the grip
+   * would expose is a structural edit (add/delete row, add/delete
+   * column, change row height, merge cells, etc.) and those make no
+   * sense against a locked note.
+   *
+   * Defaults to false so existing call sites that don't know about
+   * lock state (TemplateEditor — templates are never locked) keep
+   * working without churn.
+   */
+  locked?: boolean;
 }
 
 type SelectionScope = 'row' | 'column' | 'table';
@@ -79,7 +92,7 @@ const GRIP_SIZE = 8;
 // better than touching the border.
 const GRIP_OFFSET = 4;
 
-export function TableGripOverlay({ editor }: TableGripOverlayProps) {
+export function TableGripOverlay({ editor, locked = false }: TableGripOverlayProps) {
   const [hoveredTable, setHoveredTable] = useState<HTMLTableElement | null>(null);
   const [geometry, setGeometry] = useState<GripGeometry | null>(null);
   const [active, setActive] = useState<ActiveSelection | null>(null);
@@ -88,6 +101,19 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
   // the latest value without re-binding when active changes.
   const activeRef = useRef<ActiveSelection | null>(null);
   useEffect(() => { activeRef.current = active; }, [active]);
+
+  // When the editor transitions to locked (release lock or viewer
+  // role takeover), drop any in-flight hover / active state so the
+  // grips disappear immediately. The render early-return below also
+  // covers the steady-state case; this effect handles the live
+  // transition where state was set up moments before lock flipped.
+  useEffect(() => {
+    if (locked) {
+      setHoveredTable(null);
+      setGeometry(null);
+      setActive(null);
+    }
+  }, [locked]);
 
   // Compute grip positions for a given table. Returns null on bad
   // input (table detached, etc).
@@ -134,6 +160,11 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
   // table cell, grip, or popup.
   useEffect(() => {
     if (!editor) return;
+    // Locked editor: don't bind the hover detector at all. The hover-
+    // drop effect above already cleared any existing state; this just
+    // saves the per-mousemove work. The effect re-runs when `locked`
+    // flips, so we re-bind once on unlock.
+    if (locked) return;
     const editorRoot = editor.view.dom; // .ProseMirror
 
     function onMove(e: MouseEvent) {
@@ -170,7 +201,7 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
     return () => {
       document.removeEventListener('mousemove', onMove);
     };
-  }, [editor, hoveredTable, recomputeGeometry]);
+  }, [editor, hoveredTable, recomputeGeometry, locked]);
 
   // Geometry refresh on editor / window changes while a table is
   // active. Cheap — only bound when hoveredTable exists.
@@ -241,6 +272,10 @@ export function TableGripOverlay({ editor }: TableGripOverlayProps) {
   // ---- render -----------------------------------------------------
 
   if (!editor) return null;
+  // Locked editor: render nothing. The effects above also keep state
+  // clear and skip the mousemove listener — this is the steady-state
+  // guard.
+  if (locked) return null;
   if (!hoveredTable || !geometry) return null;
 
   const rowGrips = geometry.rowRects.map((r, i) => {

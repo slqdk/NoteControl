@@ -60,6 +60,20 @@ import type { Editor } from '@tiptap/core';
  */
 export interface TablePopupProps {
   editor: Editor | null;
+  /**
+   * When true, the editor is in read-only mode. The popup refuses to
+   * open on stray `nc:table-popup-open` events and auto-closes if it
+   * was already open at the moment the lock flipped. The TableGripOverlay
+   * normally won't emit the open event when locked, but treating the
+   * popup defensively means a future code path firing the same event
+   * (or a race where lock flips between grip-click and popup-mount)
+   * still does the right thing.
+   *
+   * Defaults to false so existing call sites that don't know about
+   * lock state (TemplateEditor — templates are never locked) keep
+   * working without churn.
+   */
+  locked?: boolean;
 }
 
 type SelectionScope = 'row' | 'column' | 'table';
@@ -92,7 +106,7 @@ const POPUP_WIDTH_ESTIMATE = 360;
 
 const FALLBACK_TOP_INSET = 8;
 
-export function TablePopup({ editor }: TablePopupProps) {
+export function TablePopup({ editor, locked = false }: TablePopupProps) {
   // The popup is "open" iff this state is non-null. Set by the open
   // event; cleared on dismissal.
   const [state, setState] = useState<PopupState | null>(null);
@@ -117,10 +131,24 @@ export function TablePopup({ editor }: TablePopupProps) {
   // clicks on the popup itself.
   const popupRef = useRef<HTMLDivElement | null>(null);
 
+  // Mirror `locked` in a ref so the `nc:table-popup-open` listener
+  // (which is bound once with empty deps) can read the current value
+  // without re-binding. Same pattern as activeRef in TableGripOverlay
+  // and lockedRef in NoteEditor.
+  const lockedRef = useRef(locked);
+  useEffect(() => {
+    lockedRef.current = locked;
+  }, [locked]);
+
   // ----- open / close wiring ---------------------------------------
 
   useEffect(() => {
     function onOpen(e: Event) {
+      // Defensive: even though TableGripOverlay won't fire this event
+      // when locked, a stray fire from some future code path should
+      // still be ignored. lockedRef gives us the current value without
+      // re-binding the listener on every lock change.
+      if (lockedRef.current) return;
       const ce = e as CustomEvent<{ scope: SelectionScope; index?: number }>;
       if (!ce.detail) return;
       setState({ scope: ce.detail.scope, index: ce.detail.index });
@@ -136,6 +164,18 @@ export function TablePopup({ editor }: TablePopupProps) {
     setPosition(null);
     window.dispatchEvent(new CustomEvent('nc:table-popup-close'));
   }
+
+  // Auto-close on lock transition. If the user releases the note (or
+  // switches to viewer role / archive view) while the popup is open,
+  // dismiss it — every action it exposes is a structural edit. Only
+  // fires when the popup is actually open; otherwise close() would
+  // just dispatch a stray nc:table-popup-close.
+  useEffect(() => {
+    if (locked && state) {
+      close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locked]);
 
   // Escape key closes.
   useEffect(() => {
