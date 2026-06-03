@@ -365,11 +365,24 @@ export function PropertiesPanel({
   async function saveVersionState(patch: VersionStatePatch) {
     if (!selection || selection.kind !== 'note' || !note) return;
     try {
-      await notesApi.update(vaultId, selection.path, {
+      const updated = await notesApi.update(vaultId, selection.path, {
         versionMajor: patch.versionMajor,
         versionMinor: patch.versionMinor,
         state: patch.state,
       });
+      // Live lock/unlock the open editor. The returned note carries
+      // the canonical post-save state, so a stepper bump on a
+      // Released note (server auto-transitions to development) or a
+      // promote to Released both flip the editor's read-only mode
+      // without a page reload. Mirrors the appearance live-update.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-lock-changed', {
+          detail: {
+            path: selection.path,
+            locked: updated.frontmatter.state === 'released',
+          },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;

@@ -150,6 +150,24 @@ export function NoteEditor({
 
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
 
+  // Whether the editor surface is read-only right now. Derived from
+  // the note's lifecycle state (released ⇒ locked) OR forceReadOnly
+  // (viewer role / archive viewer). Held in state so a state change
+  // from the properties panel can flip the editor live — without
+  // this, TipTap evaluates `editable` only at creation and the user
+  // would have to reload the page to see a release lock/unlock take
+  // effect. lockedRef mirrors it for the editorProps.attributes
+  // function (which closes over creation-time scope and can't read
+  // React state directly), so the .nc-editor-locked class stays in
+  // sync across ProseMirror view rebuilds.
+  const [locked, setLocked] = useState(
+    () => initialNote.frontmatter.state === 'released' || forceReadOnly,
+  );
+  const lockedRef = useRef(locked);
+  useEffect(() => {
+    lockedRef.current = locked;
+  }, [locked]);
+
   /**
    * Active uploads (paste/drop in flight). The host page renders the
    * pills; we just keep the list and emit it on change.
@@ -581,14 +599,24 @@ export function NoteEditor({
       // affordances (no caret, link clicks navigate instead of
       // editing) are identical and a second class would only add CSS
       // surface area.
-      editable: !(initialNote.frontmatter.state === 'released' || forceReadOnly),
+      // Initial editable state. Live changes (release lock/unlock
+      // from the properties panel) flow through the `locked` state +
+      // the effect further down that calls editor.setEditable — see
+      // the nc:note-lock-changed listener. We read lockedRef here
+      // rather than the frontmatter expression so the creation value
+      // and the live value share one source of truth.
+      editable: !lockedRef.current,
       editorProps: {
-        attributes: {
-          class: (initialNote.frontmatter.state === 'released' || forceReadOnly)
-            ? 'nc-editor nc-editor-locked'
-            : 'nc-editor',
+        // Function form so the .nc-editor-locked class re-evaluates
+        // on every ProseMirror view update (including the one
+        // setEditable triggers), reading the current lock state from
+        // the ref. A static object would freeze the class at the
+        // creation-time value and the lock styling wouldn't follow a
+        // live state change.
+        attributes: () => ({
+          class: lockedRef.current ? 'nc-editor nc-editor-locked' : 'nc-editor',
           spellcheck: 'false',
-        },
+        }),
         // Override the text/plain channel of the clipboard. Default
         // prosemirror behaviour, when copying from inside a table
         // cell (especially via CellSelection — double-click,
@@ -909,6 +937,45 @@ export function NoteEditor({
       window.removeEventListener('nc:note-appearance-changed', onChange);
     };
   }, [initialNote.path]);
+
+  // Apply the lock state to the live editor. setEditable flips
+  // ProseMirror's contenteditable + triggers a view update (which
+  // re-runs the editorProps.attributes function, syncing the
+  // .nc-editor-locked class). We also toggle the class directly as a
+  // belt-and-suspenders so the visual change is immediate even if a
+  // particular TipTap version defers the attribute re-eval.
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!locked);
+    const dom = editor.view.dom as HTMLElement;
+    dom.classList.toggle('nc-editor-locked', locked);
+  }, [editor, locked]);
+
+  // Reset lock on note swap or when the host flips forceReadOnly.
+  // Without this, opening a different note (or the archive viewer
+  // mounting forceReadOnly) would keep the previous note's lock
+  // until a panel event arrived.
+  useEffect(() => {
+    setLocked(initialNote.frontmatter.state === 'released' || forceReadOnly);
+  }, [initialNote.path, initialNote.frontmatter.state, forceReadOnly]);
+
+  // Live release lock/unlock from the properties panel. The panel
+  // dispatches this after a successful version/state save, carrying
+  // the authoritative post-save lock (the server's auto-bump is
+  // already reflected). forceReadOnly always wins — a viewer-role
+  // user or the archive viewer stays read-only regardless of what
+  // the underlying note's lock does.
+  useEffect(() => {
+    function onLockChange(e: Event) {
+      const ce = e as CustomEvent<{ path: string; locked: boolean }>;
+      if (!ce.detail || ce.detail.path !== initialNote.path) return;
+      setLocked(ce.detail.locked || forceReadOnly);
+    }
+    window.addEventListener('nc:note-lock-changed', onLockChange);
+    return () => {
+      window.removeEventListener('nc:note-lock-changed', onLockChange);
+    };
+  }, [initialNote.path, forceReadOnly]);
 
   // Undo/Redo bridge to the Properties panel.
   //

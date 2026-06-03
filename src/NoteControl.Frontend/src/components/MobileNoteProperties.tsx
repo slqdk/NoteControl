@@ -212,11 +212,23 @@ export function MobileNoteProperties({
 
   async function saveVersionState(patch: VersionStatePatch) {
     try {
-      await notesApi.update(vaultId, notePath, {
+      const updated = await notesApi.update(vaultId, notePath, {
         versionMajor: patch.versionMajor,
         versionMinor: patch.versionMinor,
         state: patch.state,
       });
+      // Live lock/unlock the open editor — same flow as the desktop
+      // panel. The returned note has the canonical post-save state
+      // (server auto-bump included), so the editor flips read-only
+      // mode without a page reload.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-lock-changed', {
+          detail: {
+            path: notePath,
+            locked: updated.frontmatter.state === 'released',
+          },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
