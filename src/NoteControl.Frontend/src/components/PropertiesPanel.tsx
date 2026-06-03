@@ -342,9 +342,18 @@ export function PropertiesPanel({
       // Also no `etag` — tag changes from this panel are user-
       // driven, immediate, and infrequent enough that ETag
       // conflict UX would be more annoying than helpful here.
-      await notesApi.update(vaultId, selection.path, {
+      const updated = await notesApi.update(vaultId, selection.path, {
         tags: newTags,
       });
+      // Hand the post-save etag to the open editor so its next body
+      // autosave doesn't 412 on a stale etag — every frontmatter
+      // write bumps the server etag and the editor only refreshes
+      // from its own body PUTs otherwise.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: selection.path, etag: updated.etag },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
@@ -383,6 +392,13 @@ export function PropertiesPanel({
           },
         }),
       );
+      // Frontmatter changed → server etag bumped. Hand the new one
+      // to the editor so its next body autosave doesn't 412.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: selection.path, etag: updated.etag },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
@@ -417,13 +433,20 @@ export function PropertiesPanel({
         ? { fontSize: value as number }
         : { width: value as number };
     try {
-      await notesApi.update(vaultId, selection.path, patch);
+      const updated = await notesApi.update(vaultId, selection.path, patch);
       setRefreshTick((t) => t + 1);
       // Live-update the open editor. Detail mirrors the on-disk
       // semantics: empty string / 0 means "default / cleared".
       window.dispatchEvent(
         new CustomEvent('nc:note-appearance-changed', {
           detail: { path: selection.path, field, value },
+        }),
+      );
+      // Frontmatter rewrite bumped the server etag — hand it to the
+      // editor so the next body autosave doesn't 412.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: selection.path, etag: updated.etag },
         }),
       );
     } catch (e) {

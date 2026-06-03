@@ -977,6 +977,53 @@ export function NoteEditor({
     };
   }, [initialNote.path, forceReadOnly]);
 
+  // Pick up a fresh etag whenever the properties panel rewrites the
+  // note's frontmatter (tags, version/state, appearance, etc.).
+  //
+  // Why this is needed: property saves write to the same on-disk file
+  // and bump the server's etag. The editor's etagRef is otherwise
+  // only refreshed by its own successful body PUTs, so after any
+  // property save the next body autosave fires with a stale etag and
+  // 412s — getting the editor stuck in "Conflict — reload required"
+  // even though the body never diverged. The fix: every property
+  // save in the panel dispatches this event with the post-save etag
+  // from the server's response; we adopt it here.
+  //
+  // Recovery: if we're currently stuck in 'conflict' or 'error'
+  // (from a save that 412'd because of this exact race), trigger
+  // performSave immediately. The user's unsaved local edits then PUT
+  // with the fresh etag and the badge clears, no keystroke needed.
+  // If the local body actually diverged from on-disk (a real
+  // concurrent edit, not just frontmatter), the retry will 412
+  // again — accurate signal.
+  useEffect(() => {
+    function onEtagChange(e: Event) {
+      const ce = e as CustomEvent<{ path: string; etag: string }>;
+      if (!ce.detail || ce.detail.path !== initialNote.path) return;
+      etagRef.current = ce.detail.etag;
+      // Kick a retry if we were stuck. We read saveState off the
+      // ref-via-closure problem by checking the current React state
+      // through a functional setSaveState dance: only retry if
+      // status was a save-failure state.
+      setSaveState((current) => {
+        if (current.kind === 'conflict' || current.kind === 'error') {
+          // Fire the retry on a microtask so the state update has
+          // committed first. performSave itself flips state to
+          // 'saving' / 'saved' / 'conflict' / 'error' as appropriate.
+          queueMicrotask(() => {
+            void performSave();
+          });
+          return { kind: 'idle' };
+        }
+        return current;
+      });
+    }
+    window.addEventListener('nc:note-etag-changed', onEtagChange);
+    return () => {
+      window.removeEventListener('nc:note-etag-changed', onEtagChange);
+    };
+  }, [initialNote.path, performSave]);
+
   // Undo/Redo bridge to the Properties panel.
   //
   // The panel and the editor are siblings in the React tree, with no

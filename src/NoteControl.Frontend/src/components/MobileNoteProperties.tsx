@@ -201,9 +201,17 @@ export function MobileNoteProperties({
     try {
       // No `body` field — see header doc. The server treats a
       // missing body as "leave the body alone".
-      await notesApi.update(vaultId, notePath, {
+      const updated = await notesApi.update(vaultId, notePath, {
         tags: newTags,
       });
+      // Hand the post-save etag to the open editor so its next body
+      // autosave doesn't 412 on a stale etag (every frontmatter
+      // write bumps the server etag).
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: notePath, etag: updated.etag },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
@@ -229,6 +237,12 @@ export function MobileNoteProperties({
           },
         }),
       );
+      // Frontmatter rewrite bumped the server etag too — pass it on.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: notePath, etag: updated.etag },
+        }),
+      );
       setRefreshTick((t) => t + 1);
     } catch (e) {
       throw e instanceof ApiError ? new Error(e.message) : e;
@@ -246,7 +260,7 @@ export function MobileNoteProperties({
           ? { fontSize: value as number }
           : { width: value as number };
     try {
-      await notesApi.update(vaultId, notePath, patch);
+      const updated = await notesApi.update(vaultId, notePath, patch);
       setRefreshTick((t) => t + 1);
       // Live-update the open editor — same window event the
       // desktop panel emits. NoteEditor listens for this and
@@ -254,6 +268,12 @@ export function MobileNoteProperties({
       window.dispatchEvent(
         new CustomEvent('nc:note-appearance-changed', {
           detail: { path: notePath, field, value },
+        }),
+      );
+      // Frontmatter rewrite bumped the server etag — pass it on.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-etag-changed', {
+          detail: { path: notePath, etag: updated.etag },
         }),
       );
     } catch (e) {
