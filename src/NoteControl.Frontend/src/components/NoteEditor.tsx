@@ -19,7 +19,9 @@ import { CalloutExtension } from '../editor/CalloutExtension';
 import { TableDeleteShortcut } from '../editor/TableDeleteShortcut';
 import { tableAwareClipboardTextSerializer } from '../editor/tableClipboardSerializer';
 import { TrailingParagraph } from '../editor/TrailingParagraph';
+import { ParagraphWithEmpty } from '../editor/ParagraphWithEmpty';
 import { MarkdownExtension } from '../markdown/markdownExtension';
+import { stripStrayZeroWidthSpaces } from '../markdown/zwsp';
 import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
@@ -399,12 +401,17 @@ export function NoteEditor({
     {
       extensions: [
         // We disable StarterKit's codeBlock and use our custom
-        // CodeBlockWithTitle instead. The rest of StarterKit
-        // (paragraphs, headings, lists, code marks, etc.) stays
+        // CodeBlockWithTitle instead. We also disable StarterKit's
+        // paragraph and use our own ParagraphWithEmpty so empty
+        // paragraphs survive the markdown serialize → parse round
+        // trip (see ParagraphWithEmpty for the rationale). The rest
+        // of StarterKit (headings, lists, code marks, etc.) stays
         // as-is.
         StarterKit.configure({
           codeBlock: false,
+          paragraph: false,
         }),
+        ParagraphWithEmpty,
         CodeBlockWithTitle,
         // Tables — GFM-style. Resizable=true so users can drag
         // column widths via the right edge of any cell. Our extended
@@ -565,18 +572,32 @@ export function NoteEditor({
         // pollute markdown saves or undo history.
         TrailingParagraph,
       ],
-      // The body string is pre-processed to inline math placeholders
-      // BEFORE tiptap-markdown parses it. preprocessMarkdownForMath
-      // converts `$..$`, `$$..$$`, `\(..\)`, `\[..\]` into the
-      // `<span data-math-inline>` / `<div data-math-block>` HTML
-      // markers that the MathExtension's parseHTML rules turn into
-      // real math nodes. Without this step, math nodes would survive
-      // a save (the serializer emits `$..$` / `$$..$$`) but would
-      // NOT render on the next load — they'd come back as literal
-      // dollar-delimited text. See editor/MathPasteExtension.ts and
-      // editor/mathParser.ts for the scanner rules (Pandoc whitespace
-      // protection, currency-safe `$5 and $10`, code-fence skipping).
-      content: preprocessMarkdownForMath(initialNote.body),
+      // The body string is pre-processed before tiptap-markdown
+      // parses it. Two passes, applied in order:
+      //
+      //   1. stripStrayZeroWidthSpaces — clean up any ZWSPs that have
+      //      crept into content lines from past saves through
+      //      ParagraphWithEmpty. ZWSPs on a line by themselves are
+      //      our empty-paragraph placeholders and are preserved;
+      //      everywhere else they get stripped. See markdown/zwsp.ts.
+      //
+      //   2. preprocessMarkdownForMath — convert `$..$`, `$$..$$`,
+      //      `\(..\)`, `\[..\]` into the `<span data-math-inline>` /
+      //      `<div data-math-block>` HTML markers that the
+      //      MathExtension's parseHTML rules turn into real math
+      //      nodes. Without this step, math nodes would survive a
+      //      save (the serializer emits `$..$` / `$$..$$`) but would
+      //      NOT render on the next load — they'd come back as
+      //      literal dollar-delimited text. See
+      //      editor/MathPasteExtension.ts and editor/mathParser.ts
+      //      for the scanner rules (Pandoc whitespace protection,
+      //      currency-safe `$5 and $10`, code-fence skipping).
+      //
+      // Order matters: strip ZWSPs first so the math scanner doesn't
+      // have to handle them.
+      content: preprocessMarkdownForMath(
+        stripStrayZeroWidthSpaces(initialNote.body),
+      ),
       // When a note is in the Released lifecycle state, the editor
       // becomes read-only. The user can still navigate to it, copy
       // text out, and inspect its properties, but typing has no
