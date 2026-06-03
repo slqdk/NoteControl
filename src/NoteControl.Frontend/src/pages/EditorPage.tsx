@@ -515,6 +515,83 @@ export function EditorPage() {
     };
   }, [vaultId, notePath]);
 
+  // Broadcast which archived release (if any) is currently being
+  // viewed. The Properties panel + mobile properties listen so they
+  // can mark the matching entry in the "Previous releases" list as
+  // active (filled background). Detail is null when not in archive
+  // mode so listeners can clear their highlight on exit. Fires on
+  // entering archive mode, on switching between archives, on
+  // "Back to live", and on note-path navigation (which clears
+  // viewingArchive in its own effect).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('nc:note-archive-view-changed', {
+        detail:
+          notePath && viewingArchive
+            ? {
+                path: notePath,
+                versionMajor: viewingArchive.versionMajor,
+                versionMinor: viewingArchive.versionMinor,
+              }
+            : null,
+      }),
+    );
+  }, [notePath, viewingArchive]);
+
+  /**
+   * Delete the archive currently being viewed. Wired into the
+   * banner's Delete button (only rendered when viewingArchive is
+   * non-null, so the closure capture is always defined). Confirms
+   * because the operation is irreversible — once a frozen
+   * v{maj}.{min}.md file is removed it's gone for good (the live
+   * note's body / frontmatter are not touched).
+   *
+   * After a successful delete we:
+   *   1. Exit archive mode (clear viewingArchive + flip to rendered).
+   *   2. Dispatch nc:note-archive-deleted so the panel + mobile
+   *      properties refresh their archive lists without us having
+   *      to lift their refresh-tick state up here.
+   */
+  async function deleteCurrentArchive() {
+    if (!vaultId || !notePath || !viewingArchive) return;
+    const label = `v${viewingArchive.versionMajor}.${viewingArchive.versionMinor}`;
+    const ok = window.confirm(
+      `Permanently delete the archived ${label} of this note?\n\n` +
+        `This removes the frozen ${label} archive only — the live note's ` +
+        `current content is untouched. The deletion cannot be undone.`,
+    );
+    if (!ok) return;
+    try {
+      await notesApi.deleteRelease(
+        vaultId,
+        notePath,
+        viewingArchive.versionMajor,
+        viewingArchive.versionMinor,
+      );
+      // Tell the properties surfaces to re-fetch their archive lists.
+      window.dispatchEvent(
+        new CustomEvent('nc:note-archive-deleted', {
+          detail: {
+            path: notePath,
+            versionMajor: viewingArchive.versionMajor,
+            versionMinor: viewingArchive.versionMinor,
+          },
+        }),
+      );
+      // Back to live. The view-state dispatcher above will also
+      // fire (viewingArchive → null) so the active-row highlight
+      // clears on the panel.
+      setViewingArchive(null);
+      setViewMode('rendered');
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not delete archived release.',
+      );
+    }
+  }
+
   if (!vaultId || !notePath) {
     return (
       <div className="nc-page">
@@ -688,17 +765,27 @@ export function EditorPage() {
               .{viewingArchive.versionMinor} · saved{' '}
               {new Date(viewingArchive.savedAt).toLocaleString()}
             </span>
-            <button
-              type="button"
-              className="nc-btn nc-archive-banner-back"
-              onClick={() => {
-                setViewingArchive(null);
-                setViewMode('rendered');
-              }}
-              title="Return to the live editor"
-            >
-              ← Back to live
-            </button>
+            <div className="nc-archive-banner-actions">
+              <button
+                type="button"
+                className="nc-btn nc-archive-banner-back"
+                onClick={() => {
+                  setViewingArchive(null);
+                  setViewMode('rendered');
+                }}
+                title="Return to the live editor"
+              >
+                ← Back to live
+              </button>
+              <button
+                type="button"
+                className="nc-btn nc-btn-danger nc-archive-banner-delete"
+                onClick={() => void deleteCurrentArchive()}
+                title={`Permanently delete the archived v${viewingArchive.versionMajor}.${viewingArchive.versionMinor} — the live note is not affected`}
+              >
+                🗑 Delete release v{viewingArchive.versionMajor}.{viewingArchive.versionMinor}
+              </button>
+            </div>
           </div>
           <NoteEditor
             /*

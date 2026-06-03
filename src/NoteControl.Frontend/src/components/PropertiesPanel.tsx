@@ -246,6 +246,19 @@ export function PropertiesPanel({
   // released. Replaces the old 10-snapshot history ring.
   const [archivedReleases, setArchivedReleases] = useState<ReleasedVersionSummary[]>([]);
 
+  // Which archived release (if any) the editor is currently showing
+  // in archive-viewer mode. EditorPage dispatches
+  // nc:note-archive-view-changed with { path, versionMajor,
+  // versionMinor } or null; we mirror it here so the matching entry
+  // in the Previous releases list can render with a filled active
+  // background. Null whenever no archive is being viewed (the user
+  // is in rendered or source mode, or has navigated away).
+  const [activeArchive, setActiveArchive] = useState<{
+    path: string;
+    versionMajor: number;
+    versionMinor: number;
+  } | null>(null);
+
   useEffect(() => {
     setNote(null);
     setFolder(null);
@@ -522,6 +535,52 @@ export function PropertiesPanel({
     );
   }
 
+  // Mirror EditorPage's archive-viewer state into local React state so
+  // the matching entry in "Previous releases" can render with an
+  // active background. The path check filters events for other notes
+  // (multi-tab safety). null detail means "no archive being viewed"
+  // and clears the highlight.
+  useEffect(() => {
+    function onArchiveView(e: Event) {
+      const ce = e as CustomEvent<{
+        path: string;
+        versionMajor: number;
+        versionMinor: number;
+      } | null>;
+      const d = ce.detail;
+      if (d === null) {
+        setActiveArchive(null);
+        return;
+      }
+      if (!selection || selection.kind !== 'note' || d.path !== selection.path) {
+        return;
+      }
+      setActiveArchive(d);
+    }
+    window.addEventListener('nc:note-archive-view-changed', onArchiveView);
+    return () => {
+      window.removeEventListener('nc:note-archive-view-changed', onArchiveView);
+    };
+  }, [selection]);
+
+  // When EditorPage deletes an archive, refresh our list so the
+  // deleted entry disappears. We don't need to splice the entry out
+  // by hand — bumping refreshTick reruns the load effect's
+  // listReleases call, which is the canonical source of truth and
+  // also picks up any concurrent server-side changes.
+  useEffect(() => {
+    function onArchiveDeleted(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (!selection || selection.kind !== 'note') return;
+      if (!ce.detail || ce.detail.path !== selection.path) return;
+      setRefreshTick((t) => t + 1);
+    }
+    window.addEventListener('nc:note-archive-deleted', onArchiveDeleted);
+    return () => {
+      window.removeEventListener('nc:note-archive-deleted', onArchiveDeleted);
+    };
+  }, [selection]);
+
   /**
    * Toggle the editor page between the rendered TipTap surface and
    * a read-only markdown source viewer. Two things happen:
@@ -743,28 +802,42 @@ export function PropertiesPanel({
                 <dt>Previous releases</dt>
                 <dd>
                   <ul className="nc-archived-releases">
-                    {archivedReleases.map((r) => (
-                      <li
-                        key={`${r.versionMajor}.${r.versionMinor}`}
-                        className="nc-archived-release"
-                      >
-                        <button
-                          type="button"
-                          className="nc-archived-release-btn"
-                          onClick={() =>
-                            openArchivedRelease(r.versionMajor, r.versionMinor)
+                    {archivedReleases.map((r) => {
+                      const isActive =
+                        activeArchive !== null &&
+                        activeArchive.versionMajor === r.versionMajor &&
+                        activeArchive.versionMinor === r.versionMinor;
+                      return (
+                        <li
+                          key={`${r.versionMajor}.${r.versionMinor}`}
+                          className={
+                            'nc-archived-release' +
+                            (isActive ? ' nc-archived-release-active' : '')
                           }
-                          title={`Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`}
                         >
-                          <span className="nc-archived-release-version">
-                            v{r.versionMajor}.{r.versionMinor}
-                          </span>
-                          <span className="nc-archived-release-time">
-                            {formatNoteTimestamp(r.savedAt)}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                          <button
+                            type="button"
+                            className="nc-archived-release-btn"
+                            onClick={() =>
+                              openArchivedRelease(r.versionMajor, r.versionMinor)
+                            }
+                            aria-current={isActive ? 'true' : undefined}
+                            title={
+                              isActive
+                                ? `Currently viewing archived v${r.versionMajor}.${r.versionMinor}`
+                                : `Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`
+                            }
+                          >
+                            <span className="nc-archived-release-version">
+                              v{r.versionMajor}.{r.versionMinor}
+                            </span>
+                            <span className="nc-archived-release-time">
+                              {formatNoteTimestamp(r.savedAt)}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </dd>
               </>

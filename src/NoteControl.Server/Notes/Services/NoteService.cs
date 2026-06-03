@@ -56,6 +56,19 @@ public interface INoteService
         Guid vaultId, string notePath, int versionMajor, int versionMinor,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Delete one archived released version of a note. Removes the
+    /// frozen <c>v{major}.{minor}.md</c> file from the note's
+    /// <c>.notesapp/releases/&lt;encoded&gt;/</c> folder. Throws a 404
+    /// NoteException if no archive exists at the requested (major,
+    /// minor) pair. If the release folder is empty after the delete,
+    /// the folder itself is removed as a tidy-up; failure to remove
+    /// the (empty) folder is non-fatal. The live note is not touched.
+    /// </summary>
+    Task DeleteArchivedReleaseAsync(
+        Guid vaultId, string notePath, int versionMajor, int versionMinor,
+        CancellationToken ct = default);
+
     // ---------------------------------------------------------------
     // Legacy stubs — retained for the Ship A → Ship B transition window
     // so an older frontend doesn't crash when the server is upgraded
@@ -879,6 +892,61 @@ public sealed class NoteService : INoteService
             Body: body,
             Frontmatter: fm.ToDto(),
             SavedAt: savedAt);
+    }
+
+    public async Task DeleteArchivedReleaseAsync(
+        Guid vaultId,
+        string notePath,
+        int versionMajor,
+        int versionMinor,
+        CancellationToken ct = default)
+    {
+        if (versionMajor < 0 || versionMinor < 0)
+        {
+            throw new NoteException("Version components cannot be negative.");
+        }
+
+        var vaultRoot = await ResolveVaultRootAsync(vaultId, ct);
+        string canonical;
+        try
+        {
+            canonical = _notePaths.CanonicalizeNote(notePath);
+        }
+        catch (InvalidNotePathException ex)
+        {
+            throw new NoteException(ex.Message);
+        }
+
+        var archivePath = ArchiveFilePath(vaultRoot, canonical, versionMajor, versionMinor);
+        if (!File.Exists(archivePath))
+        {
+            throw new NoteException(
+                $"No archived release at v{versionMajor}.{versionMinor} for this note.",
+                statusCode: 404);
+        }
+
+        File.Delete(archivePath);
+
+        // If the releases folder is now empty, sweep it. Keeps the
+        // .notesapp tree tidy when a user deletes the last archive
+        // for a note. Best-effort — an empty folder lingering is
+        // harmless and a transient lock from another process
+        // (e.g. an OS indexer) shouldn't fail the user-visible
+        // operation.
+        var folder = ReleaseFolderFor(vaultRoot, canonical);
+        try
+        {
+            if (Directory.Exists(folder)
+                && !Directory.EnumerateFileSystemEntries(folder).Any())
+            {
+                Directory.Delete(folder);
+            }
+        }
+        catch
+        {
+            // Acceptable inconsistency — empty folder lingering
+            // under .notesapp/releases/.
+        }
     }
 
     // ---------------------------------------------------------------

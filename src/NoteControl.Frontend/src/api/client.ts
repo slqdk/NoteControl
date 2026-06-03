@@ -343,6 +343,28 @@ export const notesApi = {
         `&versionMinor=${versionMinor}`,
     ),
 
+  /**
+   * DELETE /api/vaults/{id}/note/releases?path=...&versionMajor=...
+   * Permanently removes one archived released version. The live note
+   * is untouched. Returns 204 on success, 404 if the (major, minor)
+   * pair has no archive. No undo — the archive is a frozen file and
+   * once removed it's gone. Callers should confirm with the user
+   * before invoking.
+   */
+  deleteRelease: (
+    vaultId: string,
+    notePath: string,
+    versionMajor: number,
+    versionMinor: number,
+  ) =>
+    request<void>(
+      `/api/vaults/${vaultId}/note/releases` +
+        `?path=${encodeURIComponent(notePath)}` +
+        `&versionMajor=${versionMajor}` +
+        `&versionMinor=${versionMinor}`,
+      { method: 'DELETE' },
+    ),
+
   /** GET /api/vaults/{id}/folder?path=... — list one folder. */
   listFolder: (vaultId: string, folderPath = '') =>
     request<FolderListingDto>(

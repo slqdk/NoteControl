@@ -40,10 +40,14 @@ public static class NoteEndpoints
         // per past Released-state entry (frozen at the moment of release
         // and immutable thereafter). Content returns one archived
         // version's full body + frontmatter for the read-only viewer.
-        // Editor role on both — matches the rest of the note surface.
+        // Delete removes one frozen archive (irreversible — the live
+        // note is untouched). Editor role on all three — matches the
+        // rest of the note surface.
         app.MapGet("/api/vaults/{vaultId:guid}/note/releases", ListNoteReleasesAsync)
             .RequireVault(VaultService.RoleEditor);
         app.MapGet("/api/vaults/{vaultId:guid}/note/releases/content", GetNoteArchivedReleaseAsync)
+            .RequireVault(VaultService.RoleEditor);
+        app.MapDelete("/api/vaults/{vaultId:guid}/note/releases", DeleteNoteArchivedReleaseAsync)
             .RequireVault(VaultService.RoleEditor);
 
         // Legacy stubs — retained for the Ship A -> Ship B transition
@@ -310,6 +314,36 @@ public static class NoteEndpoints
             var release = await notes.GetArchivedReleaseAsync(
                 vaultId, path, versionMajor.Value, versionMinor.Value, ct);
             return Results.Ok(release);
+        }
+        catch (NoteException ex)
+        {
+            return Results.Problem(statusCode: ex.StatusCode, title: ex.Message);
+        }
+    }
+
+    private static async Task<IResult> DeleteNoteArchivedReleaseAsync(
+        Guid vaultId,
+        string path,
+        int? versionMajor,
+        int? versionMinor,
+        INoteService notes,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Results.Problem(statusCode: 400, title: "?path= is required.");
+        }
+        if (!versionMajor.HasValue || !versionMinor.HasValue)
+        {
+            return Results.Problem(
+                statusCode: 400,
+                title: "?versionMajor= and ?versionMinor= are required.");
+        }
+        try
+        {
+            await notes.DeleteArchivedReleaseAsync(
+                vaultId, path, versionMajor.Value, versionMinor.Value, ct);
+            return Results.NoContent();
         }
         catch (NoteException ex)
         {

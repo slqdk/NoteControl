@@ -1795,6 +1795,59 @@ body.nc-dragging * {
   text-overflow: ellipsis;
 }
 
+/* Active row — the archived release currently being viewed in the
+   editor surface. Filled accent background that stays put (no hover
+   transition), so the user can see at a glance which row is open.
+   Hover variant slightly darkens to confirm interactivity. */
+.nc-archived-release-active .nc-archived-release-btn,
+.nc-archived-release-active .nc-archived-release-btn:hover {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+  color: var(--nc-fg);
+}
+.nc-archived-release-active .nc-archived-release-time {
+  color: var(--nc-fg);
+}
+
+/* Archive viewer banner — sits above the editor surface in archive
+   mode, gives the user a clear indication of what they're looking at
+   and the two actions they can take on it: Back to live, or Delete
+   this release. Text on the left, action buttons grouped on the
+   right. The text truncates with an ellipsis if very long
+   (extremely-long file path + ISO timestamp); the action buttons
+   keep their intrinsic width. */
+.nc-archive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  background: var(--nc-accent-bg-soft);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius-sm);
+}
+.nc-archive-banner-text {
+  color: var(--nc-fg);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nc-archive-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+/* The Back / Delete buttons reuse .nc-btn (and .nc-btn-danger for
+   Delete) so they pick up the global button styling. The two rules
+   below are just for any banner-specific tweaks we may need later;
+   currently no overrides, kept as anchors for future styling. */
+.nc-archive-banner-back { /* see .nc-btn */ }
+.nc-archive-banner-delete { /* see .nc-btn + .nc-btn-danger */ }
+
 /* Editable tag area — chips wrap and the input follows them inline. */
 .nc-prop-tags {
   align-items: flex-start;

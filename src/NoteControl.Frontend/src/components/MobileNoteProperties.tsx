@@ -119,6 +119,16 @@ export function MobileNoteProperties({
   // recall info that drove the recall button on the version editor.
   const [archivedReleases, setArchivedReleases] = useState<ReleasedVersionSummary[]>([]);
 
+  // Mirrors EditorPage's archive-viewer state so we can render the
+  // matching "Previous releases" entry as active. Same flow as the
+  // desktop PropertiesPanel — listen on nc:note-archive-view-changed
+  // and refresh on nc:note-archive-deleted.
+  const [activeArchive, setActiveArchive] = useState<{
+    path: string;
+    versionMajor: number;
+    versionMinor: number;
+  } | null>(null);
+
   // Resync the local note when the route changes to a different
   // note (parent passes a fresh initialNote). Without this the
   // panel would keep showing the previous note's metadata.
@@ -317,6 +327,42 @@ export function MobileNoteProperties({
     );
   }
 
+  // Mirror EditorPage's archive-viewer state. Same listener pattern
+  // as the desktop panel. null detail clears the highlight.
+  useEffect(() => {
+    function onArchiveView(e: Event) {
+      const ce = e as CustomEvent<{
+        path: string;
+        versionMajor: number;
+        versionMinor: number;
+      } | null>;
+      const d = ce.detail;
+      if (d === null) {
+        setActiveArchive(null);
+        return;
+      }
+      if (d.path !== notePath) return;
+      setActiveArchive(d);
+    }
+    window.addEventListener('nc:note-archive-view-changed', onArchiveView);
+    return () => {
+      window.removeEventListener('nc:note-archive-view-changed', onArchiveView);
+    };
+  }, [notePath]);
+
+  // Refresh archive list after EditorPage deletes one.
+  useEffect(() => {
+    function onArchiveDeleted(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (!ce.detail || ce.detail.path !== notePath) return;
+      setRefreshTick((t) => t + 1);
+    }
+    window.addEventListener('nc:note-archive-deleted', onArchiveDeleted);
+    return () => {
+      window.removeEventListener('nc:note-archive-deleted', onArchiveDeleted);
+    };
+  }, [notePath]);
+
   // Filename without .md for the rename input — matches what
   // PropertiesPanel does on desktop.
   const nameForRename = notePath.slice(notePath.lastIndexOf('/') + 1);
@@ -453,28 +499,42 @@ export function MobileNoteProperties({
                     <dt>Previous releases</dt>
                     <dd>
                       <ul className="nc-archived-releases">
-                        {archivedReleases.map((r) => (
-                          <li
-                            key={`${r.versionMajor}.${r.versionMinor}`}
-                            className="nc-archived-release"
-                          >
-                            <button
-                              type="button"
-                              className="nc-archived-release-btn"
-                              onClick={() =>
-                                openArchivedRelease(r.versionMajor, r.versionMinor)
+                        {archivedReleases.map((r) => {
+                          const isActive =
+                            activeArchive !== null &&
+                            activeArchive.versionMajor === r.versionMajor &&
+                            activeArchive.versionMinor === r.versionMinor;
+                          return (
+                            <li
+                              key={`${r.versionMajor}.${r.versionMinor}`}
+                              className={
+                                'nc-archived-release' +
+                                (isActive ? ' nc-archived-release-active' : '')
                               }
-                              title={`Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`}
                             >
-                              <span className="nc-archived-release-version">
-                                v{r.versionMajor}.{r.versionMinor}
-                              </span>
-                              <span className="nc-archived-release-time">
-                                {formatNoteTimestamp(r.savedAt)}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
+                              <button
+                                type="button"
+                                className="nc-archived-release-btn"
+                                onClick={() =>
+                                  openArchivedRelease(r.versionMajor, r.versionMinor)
+                                }
+                                aria-current={isActive ? 'true' : undefined}
+                                title={
+                                  isActive
+                                    ? `Currently viewing archived v${r.versionMajor}.${r.versionMinor}`
+                                    : `Open the archived v${r.versionMajor}.${r.versionMinor} in a read-only viewer`
+                                }
+                              >
+                                <span className="nc-archived-release-version">
+                                  v{r.versionMajor}.{r.versionMinor}
+                                </span>
+                                <span className="nc-archived-release-time">
+                                  {formatNoteTimestamp(r.savedAt)}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </dd>
                   </>
