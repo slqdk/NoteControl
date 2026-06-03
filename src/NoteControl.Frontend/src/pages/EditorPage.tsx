@@ -483,6 +483,26 @@ export function EditorPage() {
           // "Back to live" target.
         }
       }
+      // Refetch the live note so EditorPage's `note` state reflects
+      // the post-flush on-disk body. The live editor maintains its
+      // own lastSavedMarkdownRef / etagRef internally and never
+      // pushes those back to `note`, so without this, `note.body`
+      // is whatever the last load-effect GET returned — typically
+      // stale by every autosave the user has done since opening the
+      // surface. When the user clicks "Back to live" later, the
+      // live editor will remount with `initialNote={note}`; if
+      // `note.body` is stale, the editor shows the old content
+      // until the user navigates away and back. Refetching here
+      // keeps that remount canonical. Best-effort — a failure
+      // leaves the pre-bug behaviour in place, no worse than
+      // before.
+      try {
+        const fresh = await notesApi.get(vaultId!, ce.detail.path);
+        if (cancelled) return;
+        if (fresh !== null) setNote(fresh);
+      } catch {
+        // Best-effort.
+      }
       try {
         const archive = await notesApi.getReleaseContent(
           vaultId!,
