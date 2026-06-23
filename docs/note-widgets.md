@@ -189,6 +189,51 @@ instantly.
 - **Payload:** `ConvertBlockDto`.
 - **Default height in-note:** 340 px.
 
+### vfd — Drive control modes (VFD)
+
+Note-native widget. Compares the common variable-frequency-drive
+control modes at a chosen operating point — an output frequency
+and a mechanical load — across a motor-type selector. For each
+mode it shows how far actual speed sags below synchronous
+(droop), how much torque the mode can deliver there, and whether
+it can hold the load, via a torque-vs-frequency capability chart,
+a card per mode, and a steady-state attribute matrix.
+
+- **Modes (simplest → smartest):** V/f (scalar) · V/f + slip
+  compensation · sensorless vector · closed-loop vector · DTC.
+  DTC is shown as a reference column (ABB-class — not one of the
+  bench drives), drawn dashed and dimmed. Vendor aliases are
+  surfaced on each card (U/f, V/Hz, SVC, SLVC, VVC+, Flux,
+  Closed-Loop Velocity).
+- **Motor type:** induction / synchronous (PM) / reluctance.
+  Induction has slip; the synchronous types do not, so the
+  rated-slip input disables and speed equals the commanded
+  frequency. Open-loop V/f is flagged marginal for synchronous
+  (PM) and not viable for reluctance (no rotor field to follow);
+  a non-viable mode drops out of the chart and reads
+  "✗ not viable" on its card.
+- **Inputs:** output frequency Hz (0..120), base/nameplate
+  frequency Hz (25..100), base speed rpm at base frequency
+  (300..6000), load % of rated torque (0..150), rated slip %
+  (0..10, induction only), motor type.
+- **Model (deliberately simplified for intuition, not
+  calibrated):**
+  ```
+  n_sync = baseSpeedRpm · f / f_base            [rpm]
+  droop  ≈ ratedSlip · load · baseSpeedRpm, corrected per mode
+           (0 for the synchronous types)
+  n      = n_sync − droop
+  T_max  = perMode(motorType, f/f_base) · fw
+  fw     = 1 (f ≤ f_base);  f_base / f  above base (field weakening)
+  ```
+  Each card prints the worked numbers (`n = synchronous − droop`)
+  so a reader sees where every figure on screen comes from. All
+  constants live in the frontend (`VfdBlock.tsx`); the server
+  treats the payload as opaque, so tuning the model or adding a
+  mode is a frontend-only change with no DTO bump.
+- **Payload:** `VfdBlockDto`.
+- **Default height in-note:** 480 px.
+
 ## Forward-compat
 
 Unknown `kind` values are **preserved verbatim** in the

@@ -234,8 +234,12 @@ A thin strip at the top of the left rail with two button-pills:
      meantime.
 
 The `+` menu items show their resolved **target folder** as a
-small muted hint ("in vault root", "into Projects/Q4"). The
-target follows the existing tree-selection rule used elsewhere
+small muted hint. To keep the menu narrow the hint shows only
+the deepest folder name ("in AF1000", not the full
+"MOTION/HARDWARE/AF1000") — capped with an ellipsis if that name
+is itself long, with the full path on hover (`title`); "vault
+root" shows as-is. The target follows the existing tree-selection
+rule used elsewhere
 in the rail: folder selection → that folder; note selection →
 its parent folder; nothing selected → vault root.
 
@@ -351,8 +355,8 @@ Shows the selected note or folder's metadata. For notes:
 - **Buttons**: Move (toggles move-mode), Delete (with
   confirmation), and **＋ Add Note Widget** (a dropdown of widget
   kinds — RSS, Task, Links, Motion A–D, Motor compare, Unit
-  converter — that attach to the open note; see
-  [note-widgets.md](note-widgets.md)). Rename happens by editing
+  converter, Drive control modes — that attach to the open
+  note; see [note-widgets.md](note-widgets.md)). Rename happens by editing
   the name inline.
 
 For folders: name, full path, contents count, created/updated
@@ -409,6 +413,12 @@ kind's behaviour and payload):
   induction-motor teaching widget with live slip/rpm math.
 - **Unit converter** — note-native; live multi-unit conversion
   across Force, Torque, Mass, Inertia, Length, Rotational speed.
+- **Drive control modes (VFD)** — note-native; compares the
+  common VFD control modes (V/f, sensorless and closed-loop
+  vector, DTC) at an output-frequency + load operating point
+  across induction / synchronous / reluctance motors, with a
+  torque-vs-frequency capability chart, per-mode cards and an
+  attribute matrix.
 
 Each hosted widget renders inside a relative host that auto-fits
 to the widget's natural height and exposes a full-width bottom
