@@ -75,6 +75,21 @@ export interface RailHeaderAddMenuProps {
   onAddDashboard: (() => void) | null;
 }
 
+/**
+ * The add-menu hint shows only the deepest folder name — the folder the
+ * new item actually lands in — so a long path like
+ * "MOTION/HARDWARE/AF1000" doesn't stretch the menu sideways. The full
+ * path is exposed via `title` on hover. A single very long folder name
+ * is hard-truncated with an ellipsis so it can't blow the width out
+ * either. "vault root" and short names pass through unchanged.
+ */
+const TARGET_MAX = 22;
+function shortTarget(label: string): string {
+  const segs = label.split('/');
+  const last = segs[segs.length - 1] || label;
+  return last.length > TARGET_MAX ? `${last.slice(0, TARGET_MAX - 1)}…` : last;
+}
+
 export function RailHeaderAddMenu({
   vaultId,
   targetFolder,
@@ -194,7 +209,7 @@ export function RailHeaderAddMenu({
           >
             <span className="nc-rail-add-menu-icon" aria-hidden="true">📄</span>
             <span className="nc-rail-add-menu-label">Add Note</span>
-            <span className="nc-rail-add-menu-target">in {targetLabel}</span>
+            <span className="nc-rail-add-menu-target" title={targetLabel}>in {shortTarget(targetLabel)}</span>
           </button>
           <button
             type="button"
@@ -205,7 +220,7 @@ export function RailHeaderAddMenu({
           >
             <span className="nc-rail-add-menu-icon" aria-hidden="true">📁</span>
             <span className="nc-rail-add-menu-label">Add Folder</span>
-            <span className="nc-rail-add-menu-target">in {targetLabel}</span>
+            <span className="nc-rail-add-menu-target" title={targetLabel}>in {shortTarget(targetLabel)}</span>
           </button>
           <button
             type="button"
@@ -216,7 +231,7 @@ export function RailHeaderAddMenu({
           >
             <span className="nc-rail-add-menu-icon" aria-hidden="true">📥</span>
             <span className="nc-rail-add-menu-label">Import .md or .zip…</span>
-            <span className="nc-rail-add-menu-target">into {targetLabel}</span>
+            <span className="nc-rail-add-menu-target" title={targetLabel}>into {shortTarget(targetLabel)}</span>
           </button>
           <button
             type="button"
