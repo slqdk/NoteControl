@@ -239,12 +239,13 @@ public sealed record MotorBlockDto(
 /// <summary>
 /// Configuration for the VFD (variable-frequency drive) control-mode
 /// comparison widget. An interactive teaching surface: pick an
-/// operating point — a speed setpoint and a mechanical load — and see
-/// how the common drive control modes behave there, side by side. For
-/// each mode the widget shows how far actual speed sags below setpoint
-/// (droop), how much torque the mode can deliver at that speed, and
-/// whether it can hold the load at all (the differences bite hardest at
-/// low speed and at standstill).
+/// operating point — an output frequency and a mechanical load — and
+/// see how the common drive control modes behave there, side by side.
+/// For each mode the widget shows how far actual speed sags below the
+/// synchronous speed (droop), how much torque the mode can deliver at
+/// that speed, and whether it can hold the load at all (the differences
+/// bite hardest at low speed and at standstill, and above base
+/// frequency the field-weakening region drops every mode's ceiling).
 ///
 /// The modes modelled are the universal ladder, simplest → smartest:
 ///   - V/f (scalar, open loop)            — U/f (Danfoss), V/Hz
@@ -287,11 +288,19 @@ public sealed record VfdBlockDto(
     double Height = 480,
 
     /// <summary>
-    /// Speed setpoint as a percent of base (rated) speed, 0..100 — the
-    /// commanded speed the drive is told to hold. Each mode's droop is
-    /// subtracted from it to get the actual speed.
+    /// Output frequency in Hz the drive is commanded to — the operating
+    /// point on the speed axis. At or below <see cref="BaseHz"/> the
+    /// drive holds V/f; above it the motor is in field weakening
+    /// (constant power), where each mode's torque ceiling falls roughly
+    /// as BaseHz / OutputHz.
     /// </summary>
-    double SpeedPct = 50,
+    double OutputHz = 50,
+
+    /// <summary>
+    /// Base (nameplate) frequency in Hz — where the constant-torque
+    /// region ends and field weakening begins. Default 50.
+    /// </summary>
+    double BaseHz = 50,
 
     /// <summary>
     /// Mechanical load as a percent of rated torque, 0..150. Drives both

@@ -3,23 +3,25 @@ import type { VfdBlockDto } from '../api/types';
 /**
  * VFD control-mode comparison widget.
  *
- * Pick an operating point with the sliders — a speed setpoint (% of
- * base speed) and a mechanical load (% of rated torque) — and the
- * widget shows, side by side, how the common drive control modes
- * behave at that point:
- *   - how far the actual speed sags below the setpoint (droop),
+ * Pick an operating point with the sliders — an output frequency and a
+ * mechanical load (% of rated torque) — and the widget shows, side by
+ * side, how the common drive control modes behave at that point:
+ *   - how far the actual speed sags below the synchronous speed (droop),
  *   - how much torque the mode can deliver at that speed, and
  *   - whether it can hold the requested load at all.
  *
- * The two regions that separate the modes are LOW SPEED and HEAVY
- * LOAD, so those are the knobs. The differences are most dramatic at
- * standstill (0 % speed), where only the encoder-fed and DTC modes
- * hold real torque.
+ * The regions that separate the modes are LOW SPEED, HEAVY LOAD, and —
+ * once the output frequency climbs past the motor's base (nameplate)
+ * frequency — FIELD WEAKENING. Below base the drive holds V/f; above it
+ * the drive has run out of volts, flux falls as ~1/f, and every mode's
+ * torque ceiling drops with it (≈ baseHz / outputHz). That ceiling drop
+ * is a voltage/flux limit, not a control-algorithm one, so it hits all
+ * the modes roughly equally.
  *
  * Unlike the motor-compare widget this one does not animate — there is
  * no rotation to show; the "live" part is that every figure and bar
  * recomputes as the sliders move. Each card prints its worked numbers
- * (n = setpoint − droop) so a reader of the note can see where every
+ * (n = synchronous − droop) so a reader of the note can see where every
  * value comes from, the same teaching habit as the motor widget.
  *
  * Physics is deliberately simplified for intuition, not metrology. The
@@ -69,14 +71,14 @@ const MODES: VfdMode[] = [
 ];
 
 /**
- * Speed shortfall (rpm) below the commanded setpoint at this load.
+ * Speed shortfall (rpm) below the synchronous speed at this load.
  *
  * Anchored on the absolute slip an induction motor shows at a given
  * torque: ≈ ratedSlip · load · baseSpeed rpm. That slip is roughly
- * constant in *rpm* regardless of how fast you command — so as a
- * *fraction* of a low setpoint it grows, which is precisely why
- * open-loop V/f speed-holding gets worse the slower you run. The
- * smarter modes correct most or all of it:
+ * constant in *rpm* regardless of frequency — so as a *fraction* of a
+ * low synchronous speed it grows, which is precisely why open-loop V/f
+ * speed-holding gets worse the slower you run. The smarter modes
+ * correct most or all of it:
  *   vf  — the full uncompensated slip
  *   vfc — ~80 % corrected (20 % residual)
  *   svc — small fixed residual ≈0.5 % of base (model accuracy limit)
@@ -105,10 +107,11 @@ function droopRpm(key: VfdMode['key'], loadPct: number, ratedSlipPct: number, ba
 }
 
 /**
- * Available torque (% of rated) this mode can produce at this speed.
+ * Available torque (% of rated) this mode can produce, BEFORE field
+ * weakening, as a function of the speed relative to base (rel, 0..1).
  *
  * The teaching point lives in the low-speed / standstill column:
- *   vf  — ~0 at standstill, ramping to ~100 % by ~12 % speed (no boost)
+ *   vf  — ~0 at standstill, ramping to ~100 % by ~12 % of base (no boost)
  *   vfc — a manual-boost floor (~50 % near 0; this is *starting* torque,
  *         not a figure to hold thermally), ~110 % above ~8 %
  *   svc — sensorless model gives ~150 % from ~2 % speed but is uncertain
@@ -116,9 +119,10 @@ function droopRpm(key: VfdMode['key'], loadPct: number, ratedSlipPct: number, ba
  *   clv — flat ~150 % including a true 0-speed hold (encoder)
  *   dtc — flat ~200 % including near-0 (direct flux/torque switching)
  * Intentionally simplified; not a torque curve lifted from a datasheet.
+ * The field-weakening multiplier is applied by the caller on top of this.
  */
-function tmaxPct(key: VfdMode['key'], speedPct: number): number {
-  const sp = clamp(speedPct, 0, 100) / 100;
+function tmaxPct(key: VfdMode['key'], rel: number): number {
+  const sp = clamp(rel, 0, 1);
   switch (key) {
     case 'vf':
       return Math.min(100, 100 * Math.min(1, sp / 0.12));
@@ -136,6 +140,17 @@ function tmaxPct(key: VfdMode['key'], speedPct: number): number {
       return 0;
     }
   }
+}
+
+/**
+ * Field-weakening torque multiplier. 1 at or below base frequency; above
+ * base, torque is capped at constant power, so it falls as
+ * baseHz / outputHz. (Real pull-out torque actually falls as ~1/f², so
+ * this straight constant-power line is optimistic past ~1.5–2× base —
+ * noted in the footer.)
+ */
+function fwFactor(outputHz: number, baseHz: number): number {
+  return outputHz <= baseHz ? 1 : baseHz / outputHz;
 }
 
 function encoderLabel(e: Encoder): string {
@@ -194,12 +209,19 @@ function Control({
 export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
   // Clamp every input for the maths so a hand-edited payload can't push
   // the model out of range; the sliders themselves also clamp on write.
+  const baseHz = Math.max(1, block.baseHz);
+  const outHz = clamp(block.outputHz, 0, 120);
   const base = Math.max(1, block.baseSpeedRpm);
-  const speedPct = clamp(block.speedPct, 0, 100);
   const loadPct = clamp(block.loadPct, 0, 150);
   const ratedSlipPct = clamp(block.ratedSlipPct, 0, 10);
 
-  const setpointRpm = (speedPct / 100) * base;
+  // Synchronous (no-load) speed scales linearly with output frequency:
+  // n_sync = baseSpeedRpm · f / f_base. Above base it keeps climbing.
+  const synchronousRpm = base * (outHz / baseHz);
+  const rel = outHz / baseHz; // fraction of base (can exceed 1)
+  const relShape = clamp(rel, 0, 1); // low-speed shaping input for tmaxPct
+  const fw = fwFactor(outHz, baseHz); // torque-ceiling multiplier
+  const inFieldWeakening = rel > 1.0001;
 
   // Torque bars are drawn on a fixed 0..200 % scale so the DTC envelope
   // (up to ~200 %) and a 150 % overload load both fit and stay
@@ -229,22 +251,22 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
         {/* Operating point */}
         <div className="nc-vfd-controls">
           <Control
-            label="Speed setpoint"
-            value={speedPct}
+            label="Output freq"
+            value={outHz}
             min={0}
-            max={100}
+            max={120}
             step={1}
-            format={(v) => `${v.toFixed(0)}%`}
-            onInput={(v) => onChange({ speedPct: clamp(v, 0, 100) })}
+            format={(v) => `${Math.round(v)} Hz`}
+            onInput={(v) => onChange({ outputHz: clamp(v, 0, 120) })}
           />
           <Control
-            label="Load (torque)"
-            value={loadPct}
-            min={0}
-            max={150}
-            step={5}
-            format={(v) => `${v.toFixed(0)}%`}
-            onInput={(v) => onChange({ loadPct: clamp(v, 0, 150) })}
+            label="Base freq"
+            value={baseHz}
+            min={25}
+            max={100}
+            step={1}
+            format={(v) => `${Math.round(v)} Hz`}
+            onInput={(v) => onChange({ baseHz: clamp(v, 25, 100) })}
           />
           <Control
             label="Base speed"
@@ -254,6 +276,15 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
             step={50}
             format={(v) => `${Math.round(v)} rpm`}
             onInput={(v) => onChange({ baseSpeedRpm: clamp(v, 300, 6000) })}
+          />
+          <Control
+            label="Load (torque)"
+            value={loadPct}
+            min={0}
+            max={150}
+            step={5}
+            format={(v) => `${v.toFixed(0)}%`}
+            onInput={(v) => onChange({ loadPct: clamp(v, 0, 150) })}
           />
           <Control
             label="Rated slip (motor)"
@@ -267,19 +298,25 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
         </div>
 
         <div className="nc-vfd-summary">
-          Setpoint <strong>{Math.round(setpointRpm)} rpm</strong> ({speedPct.toFixed(0)}% of{' '}
-          {Math.round(base)} rpm base) · Load <strong>{loadPct.toFixed(0)}%</strong> of rated torque
+          Output <strong>{Math.round(outHz)} Hz</strong> ({rel.toFixed(2)}× base,{' '}
+          {Math.round(baseHz)} Hz) · Synchronous <strong>{Math.round(synchronousRpm)} rpm</strong> ·
+          Load <strong>{loadPct.toFixed(0)}%</strong>
+          {inFieldWeakening && (
+            <span className="nc-vfd-fw">field-weakening · torque ×{fw.toFixed(2)}</span>
+          )}
         </div>
 
         {/* One card per mode */}
         <div className="nc-vfd-cards">
           {MODES.map((m) => {
             const droop = droopRpm(m.key, loadPct, ratedSlipPct, base);
-            const actualRpm = Math.max(0, setpointRpm - droop);
-            const errPct = setpointRpm > 0 ? -(droop / setpointRpm) * 100 : null;
-            const tmax = tmaxPct(m.key, speedPct);
+            const actualRpm = Math.max(0, synchronousRpm - droop);
+            const errPct = synchronousRpm > 0 ? -(droop / synchronousRpm) * 100 : null;
+            const tmaxBase = tmaxPct(m.key, relShape);
+            const tmax = tmaxBase * fw;
             const ok = loadPct <= tmax;
-            const speedFill = setpointRpm > 0 ? clamp((actualRpm / setpointRpm) * 100, 0, 100) : 0;
+            const speedFill =
+              synchronousRpm > 0 ? clamp((actualRpm / synchronousRpm) * 100, 0, 100) : 0;
             const capFill = clamp((tmax / TORQUE_SCALE) * 100, 0, 100);
             const loadLeft = clamp((loadPct / TORQUE_SCALE) * 100, 0, 100);
 
@@ -312,7 +349,8 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
                     />
                   </div>
                   <div className="nc-vfd-worked">
-                    n = {Math.round(setpointRpm)} − {Math.round(droop)} = {Math.round(actualRpm)} rpm
+                    n = {Math.round(synchronousRpm)} − {Math.round(droop)} = {Math.round(actualRpm)}{' '}
+                    rpm
                   </div>
                 </div>
 
@@ -336,7 +374,16 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
                     />
                   </div>
                   <div className="nc-vfd-worked">
-                    avail ≤ {Math.round(tmax)}% · load {Math.round(loadPct)}%
+                    {inFieldWeakening ? (
+                      <>
+                        avail ≤ {Math.round(tmax)}% = {Math.round(tmaxBase)}%×{fw.toFixed(2)} FW ·
+                        load {Math.round(loadPct)}%
+                      </>
+                    ) : (
+                      <>
+                        avail ≤ {Math.round(tmax)}% · load {Math.round(loadPct)}%
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -360,8 +407,11 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
             Simplified for intuition, not calibrated — real torque curves and speed accuracy come
             from the drive + motor datasheet. Droop is the absolute induction-motor slip at this
             load (≈ rated slip × load × base speed), corrected by each mode. The V/f-boost figure is
-            starting torque, not a value to hold at standstill. DTC is shown for reference: it is an
-            ABB-class mode, not available on a G120C / PowerFlex 525 / AF1000 / VLT.
+            starting torque, not a value to hold at standstill. Above base frequency the drive runs
+            out of volts, so torque is capped at constant power (≈ base ÷ output Hz); real pull-out
+            torque falls faster (~1/f²), so past roughly 1.5–2× base the true ceiling drops below
+            what is shown. DTC is shown for reference: it is an ABB-class mode, not available on a
+            G120C / PowerFlex 525 / AF1000 / VLT.
           </div>
         </div>
       </div>

@@ -149,11 +149,12 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         y: 0,
         width: 760,
         height: 480,
-        // A 4-pole 50 Hz machine (1500 rpm base) at half speed and 60%
-        // load, 3% rated slip — a point where the open-loop V/f droop
-        // is already visible and the low-speed torque gap between the
-        // modes has started to bite.
-        speedPct: 50,
+        // A 4-pole 50 Hz machine (1500 rpm base) running at base
+        // frequency under 60% load, 3% rated slip — a clean starting
+        // point. Drag the output frequency above 50 Hz to walk into the
+        // field-weakening region.
+        outputHz: 50,
+        baseHz: 50,
         loadPct: 60,
         baseSpeedRpm: 1500,
         ratedSlipPct: 3,

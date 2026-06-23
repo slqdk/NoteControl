@@ -679,13 +679,14 @@ export interface MotorBlockDto {
  * VFD control-mode comparison widget config. Mirrors
  * NoteControl.Shared.NoteWidgets.VfdBlockDto.
  *
- * Pick an operating point — a speed setpoint (% of base speed) and a
- * mechanical load (% of rated torque) — and the widget shows, for each
- * common drive control mode, how far actual speed sags below setpoint,
- * how much torque the mode can deliver at that speed, and whether it
- * can hold the load (the gaps are widest at low speed and standstill).
- * The model and its constants live in VfdBlock.tsx; the server treats
- * this payload as opaque.
+ * Pick an operating point — an output frequency and a mechanical load
+ * (% of rated torque) — and the widget shows, for each common drive
+ * control mode, how far actual speed sags below the synchronous speed,
+ * how much torque the mode can deliver there, and whether it can hold
+ * the load. At/below base frequency the drive holds V/f; above it the
+ * motor is in field weakening and every mode's torque ceiling falls as
+ * ~baseHz/outputHz. The model and its constants live in VfdBlock.tsx;
+ * the server treats this payload as opaque.
  *
  * x/y ignored in the note stack; width/height drive layout.
  */
@@ -695,11 +696,13 @@ export interface VfdBlockDto {
   y: number;
   width: number;
   height: number;
-  /** Speed setpoint as percent of base (rated) speed, 0..100. */
-  speedPct: number;
+  /** Commanded output frequency in Hz (the speed-axis operating point). */
+  outputHz: number;
+  /** Base (nameplate) frequency in Hz — where field weakening begins. */
+  baseHz: number;
   /** Mechanical load as percent of rated torque, 0..150. */
   loadPct: number;
-  /** Base (rated/synchronous) speed in rpm — the rpm scale. */
+  /** Base (synchronous) speed in rpm at base frequency — the rpm scale. */
   baseSpeedRpm: number;
   /** Rated slip percent at full load (typ. 1..6) — sets V/f droop. */
   ratedSlipPct: number;
