@@ -548,3 +548,22 @@
 .nc-vfd-matrix tr.na {
   opacity: 0.6;
 }
+
+/* ----- Chart annotations: selected motor + DTC line label ---------------- */
+.nc-vfd-chart-motor-bg {
+  fill: var(--nc-bg-elev);
+  stroke: var(--nc-border);
+  stroke-width: 1;
+  opacity: 0.92;
+}
+.nc-vfd-chart-motor {
+  fill: var(--nc-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+/* Inline label on the DTC envelope — colour matches the DTC line (#f59e0b). */
+.nc-vfd-curve-label {
+  fill: #f59e0b;
+  font-size: 11px;
+  font-weight: 700;
+}

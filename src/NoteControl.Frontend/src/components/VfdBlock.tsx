@@ -57,7 +57,7 @@ type Viable = 'yes' | 'marginal' | 'no';
 const MOTOR_TYPES: MotorType[] = ['induction', 'pm', 'reluctance'];
 const MOTOR_LABEL: Record<MotorType, string> = {
   induction: 'Induction',
-  pm: 'PM',
+  pm: 'Synchronous',
   reluctance: 'Reluctance',
 };
 
@@ -138,7 +138,7 @@ const BEHAVIOR: Record<MotorType, Record<ModeKey, ModeBehavior>> = {
     vf: {
       viable: 'marginal',
       ceiling: (r) => Math.min(90, shapeVf(r)),
-      note: 'open-loop PM — can pull out of step under load',
+      note: 'open-loop — synchronous motor can pull out of step under load',
       acc: 'exact†',
       turndown: '~1:10',
       standstill: '✗',
@@ -168,7 +168,7 @@ const BEHAVIOR: Record<MotorType, Record<ModeKey, ModeBehavior>> = {
 
 const MATRIX_NOTE: Record<MotorType, string> = {
   induction: 'Induction motor. * V/f-boost torque is for starting, not a continuous standstill hold.',
-  pm: 'PM (synchronous). † Speed is exact only while in sync — open-loop V/f can pull out of step. ‡ Sensorless needs initial rotor-position ID at standstill.',
+  pm: 'Synchronous (PM). † Speed is exact only while in sync — open-loop V/f can pull out of step. ‡ Sensorless needs initial rotor-position ID at standstill.',
   reluctance: 'Synchronous reluctance. V/f modes are not viable — the rotor has no field, so torque needs vector control.',
 };
 
@@ -367,6 +367,21 @@ function CapabilityChart({
           base
         </text>
 
+        {/* selected motor type, noted on the chart itself */}
+        <g>
+          <rect
+            x={ml + 4}
+            y={mt + 4}
+            width={MOTOR_LABEL[motorType].length * 7 + 14}
+            height={17}
+            rx={4}
+            className="nc-vfd-chart-motor-bg"
+          />
+          <text x={ml + 11} y={mt + 16} className="nc-vfd-chart-motor">
+            {MOTOR_LABEL[motorType]}
+          </text>
+        </g>
+
         {/* envelopes — only for viable modes */}
         {MODES.filter((m) => BEHAVIOR[motorType][m.key].viable !== 'no').map((m) => (
           <polyline
@@ -377,6 +392,16 @@ function CapabilityChart({
             fill="none"
           />
         ))}
+
+        {/* identify the standout DTC envelope inline (the dashed amber line) */}
+        <text
+          x={xOf(fMax) - 4}
+          y={yOf(ceilingAt(motorType, 'dtc', fMax, b)) - 6}
+          className="nc-vfd-curve-label"
+          textAnchor="end"
+        >
+          DTC
+        </text>
 
         {/* operating point */}
         <line x1={xOf(outputHz)} y1={mt} x2={xOf(outputHz)} y2={mt + plotH} className="nc-vfd-op-guide" />
@@ -691,10 +716,11 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
           <div className="nc-vfd-foot-note">
             Simplified for intuition, not calibrated — real torque curves and speed accuracy come
             from the drive + motor datasheet. For an induction motor, droop is the absolute slip at
-            this load (≈ rated slip × load × base speed), corrected by each mode; PM and reluctance
-            are synchronous, so there is no slip and speed equals the commanded value while in sync.
-            Open-loop V/f is marginal for PM (can lose synchronism under load) and not viable for
-            reluctance (no rotor field — torque needs vector control). The V/f-boost figure is
+            this load (≈ rated slip × load × base speed), corrected by each mode; the Synchronous
+            (PM) and Reluctance types are slip-free, so speed equals the commanded value while in
+            sync. Open-loop V/f is marginal for the Synchronous (PM) type (can lose synchronism
+            under load) and not viable for Reluctance (no rotor field — torque needs vector
+            control). The V/f-boost figure is
             starting torque, not a value to hold at standstill. Above base frequency the drive runs
             out of volts, so torque is capped at constant power (≈ base ÷ output Hz); real pull-out
             torque falls faster (~1/f²), so past roughly 1.5–2× base the true ceiling drops below
