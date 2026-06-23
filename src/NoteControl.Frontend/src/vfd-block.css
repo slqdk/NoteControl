@@ -463,3 +463,88 @@
   font-size: 11px;
   color: var(--nc-fg-muted);
 }
+
+/* ----- Motor-type selector + per-type states ----------------------------- */
+
+/* Motor-type segmented control */
+.nc-vfd-typebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nc-vfd-typebar-label {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+  margin-right: 2px;
+}
+.nc-vfd-typebtn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  cursor: pointer;
+}
+.nc-vfd-typebtn:hover {
+  color: var(--nc-fg);
+  border-color: var(--nc-fg-muted);
+}
+.nc-vfd-typebtn.active {
+  color: #fff;
+  background: var(--nc-accent);
+  border-color: var(--nc-accent);
+}
+
+/* Disabled control (rated slip on synchronous motors) */
+.nc-vfd-control.is-disabled {
+  opacity: 0.5;
+}
+.nc-vfd-control input[type='range']:disabled {
+  cursor: not-allowed;
+}
+
+/* Not-viable mode card */
+.nc-vfd-card-na {
+  opacity: 0.72;
+}
+.nc-vfd-na-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+.nc-vfd-na-reason {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--nc-fg-muted);
+}
+
+/* Marginal-mode warning (e.g. open-loop PM) */
+.nc-vfd-warn {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b45309;
+}
+
+/* Legend n/a marker */
+.nc-vfd-leg-item.na {
+  opacity: 0.55;
+}
+.nc-vfd-leg-na {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Matrix: marginal tag + not-viable row */
+.nc-vfd-mode-warn {
+  margin-left: 4px;
+  color: #b45309;
+}
+.nc-vfd-matrix tr.na {
+  opacity: 0.6;
+}

@@ -685,8 +685,10 @@ export interface MotorBlockDto {
  * how much torque the mode can deliver there, and whether it can hold
  * the load. At/below base frequency the drive holds V/f; above it the
  * motor is in field weakening and every mode's torque ceiling falls as
- * ~baseHz/outputHz. The model and its constants live in VfdBlock.tsx;
- * the server treats this payload as opaque.
+ * ~baseHz/outputHz. A motor-type selector (induction / PM / reluctance)
+ * shifts the model: the synchronous types have no slip, and V/f is not
+ * viable for reluctance. The model and its constants live in
+ * VfdBlock.tsx; the server treats this payload as opaque.
  *
  * x/y ignored in the note stack; width/height drive layout.
  */
@@ -704,8 +706,10 @@ export interface VfdBlockDto {
   loadPct: number;
   /** Base (synchronous) speed in rpm at base frequency — the rpm scale. */
   baseSpeedRpm: number;
-  /** Rated slip percent at full load (typ. 1..6) — sets V/f droop. */
+  /** Rated slip percent at full load (typ. 1..6) — sets V/f droop. Ignored for synchronous types. */
   ratedSlipPct: number;
+  /** Motor type: induction (slip), pm or reluctance (synchronous, no slip). */
+  motorType: 'induction' | 'pm' | 'reluctance';
 }
 
 /**

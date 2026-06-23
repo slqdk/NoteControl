@@ -263,10 +263,13 @@ public sealed record MotorBlockDto(
 ///                                          the four drives above
 ///
 /// Physics is intentionally simplified for intuition, not metrology —
-/// the same philosophy as the motor-compare widget. The model and all
-/// its constants live entirely in the frontend (VfdBlock.tsx); the
-/// server treats this payload as opaque data, so tuning the model or
-/// adding a mode is a frontend-only change with no DTO bump.
+/// the same philosophy as the motor-compare widget. A motor-type
+/// selector (induction / PM / reluctance) shifts the model: the
+/// synchronous types (PM, reluctance) have no slip, and V/f is not
+/// viable for reluctance. The model and all its constants live entirely
+/// in the frontend (VfdBlock.tsx); the server treats this payload as
+/// opaque data, so tuning the model or adding a mode is a frontend-only
+/// change with no DTO bump.
 ///
 /// x/y/width/height mirror the other note widgets: x/y are ignored in
 /// the note stack, width/height drive the widget's own layout.
@@ -319,6 +322,16 @@ public sealed record VfdBlockDto(
     /// Rated slip percent at full load (typical induction motors sit at
     /// 1..6 %). Sets how far an open-loop V/f drive's actual speed sags
     /// under load; the smarter modes correct most or all of it.
-    /// Default 3.
+    /// Ignored for the synchronous motor types (no slip). Default 3.
     /// </summary>
-    double RatedSlipPct = 3);
+    double RatedSlipPct = 3,
+
+    /// <summary>
+    /// Motor type the comparison is for: "induction" (asynchronous, has
+    /// slip), "pm" (permanent-magnet synchronous, no slip), or
+    /// "reluctance" (synchronous reluctance, no slip and not drivable on
+    /// V/f). Changes which modes are viable and removes the slip droop
+    /// for the synchronous types. Unknown values fall back to
+    /// "induction". Default "induction".
+    /// </summary>
+    string MotorType = "induction");

@@ -3,14 +3,24 @@ import type { VfdBlockDto } from '../api/types';
 /**
  * VFD control-mode comparison widget.
  *
- * Pick an operating point with the sliders — an output frequency and a
- * mechanical load (% of rated torque) — and the widget shows how the
- * common drive control modes behave at that point, three ways:
- *   - a torque-vs-frequency capability chart, one envelope per mode,
- *     with the operating point dropped on it;
+ * Pick a motor type and an operating point with the sliders — an output
+ * frequency and a mechanical load (% of rated torque) — and the widget
+ * shows how the common drive control modes behave, three ways:
+ *   - a torque-vs-frequency capability chart, one envelope per viable
+ *     mode, with the operating point dropped on it;
  *   - a card per mode reading out actual speed (with droop), the
  *     available torque there, and a holds/stalls verdict; and
  *   - an attribute matrix summarising the steady-state trade-offs.
+ *
+ * Motor type changes the model:
+ *   - Induction (asynchronous): has slip, so actual speed sags below
+ *     synchronous under load. All five modes apply.
+ *   - PM (permanent-magnet synchronous): no slip — speed equals the
+ *     commanded frequency while locked. Open-loop V/f is marginal (can
+ *     pull out of step); the vector/DTC modes are the real options.
+ *   - Reluctance (synchronous reluctance): no slip, and no rotor field —
+ *     V/f cannot produce controlled torque, so it is not viable; the
+ *     motor needs a vector or DTC mode.
  *
  * The regions that separate the modes are LOW SPEED, HEAVY LOAD, and —
  * once the output frequency climbs past the motor's base (nameplate)
@@ -19,13 +29,6 @@ import type { VfdBlockDto } from '../api/types';
  * torque ceiling drops with it (≈ baseHz / outputHz). That ceiling drop
  * is a voltage/flux limit, not a control-algorithm one, so it bends all
  * the envelopes down together past base.
- *
- * Unlike the motor-compare widget this one does not animate — there is
- * no rotation to show; the "live" part is that the chart, the cards and
- * every figure recompute as the sliders move. Each card prints its
- * worked numbers (n = synchronous − droop) so a reader of the note can
- * see where every value comes from, the same teaching habit as the
- * motor widget.
  *
  * Physics is deliberately simplified for intuition, not metrology. The
  * model and all its constants live here in the frontend; the server
@@ -48,6 +51,15 @@ function clamp(n: number, lo: number, hi: number): number {
 }
 
 type Encoder = 'none' | 'yes' | 'optional';
+type MotorType = 'induction' | 'pm' | 'reluctance';
+type Viable = 'yes' | 'marginal' | 'no';
+
+const MOTOR_TYPES: MotorType[] = ['induction', 'pm', 'reluctance'];
+const MOTOR_LABEL: Record<MotorType, string> = {
+  induction: 'Induction',
+  pm: 'PM',
+  reluctance: 'Reluctance',
+};
 
 interface VfdMode {
   key: 'vf' | 'vfc' | 'svc' | 'clv' | 'dtc';
@@ -60,13 +72,6 @@ interface VfdMode {
   responseMs: number;
   /** Line/swatch colour, shared by the chart, the legend and the cards. */
   color: string;
-  // Attribute-matrix cells. Induction-motor baseline — when the
-  // motor-type selector lands these will vary by type (PM / reluctance
-  // have no slip, and V/f is not viable for reluctance).
-  acc: string; // speed accuracy
-  turndown: string; // usable speed range
-  standstill: string; // torque held at zero speed
-  multi: string; // multiple motors on one drive
   /** Shown for completeness; not available on the four bench drives. */
   reference?: boolean;
 }
@@ -75,85 +80,112 @@ interface VfdMode {
 // against the drives Søren listed (G120C, PowerFlex 525, Beckhoff
 // AF1000, Danfoss VLT) plus ABB for DTC.
 const MODES: VfdMode[] = [
-  {
-    key: 'vf',
-    name: 'V/f (scalar)',
-    where: 'U/f · V/Hz · V/f',
-    encoder: 'none',
-    responseMs: 100,
-    color: '#94a3b8',
-    acc: '±1–3%',
-    turndown: '~1:20',
-    standstill: '✗',
-    multi: '✓',
-  },
-  {
-    key: 'vfc',
-    name: 'V/f + slip comp',
-    where: 'V/Hz + comp · V/f w/ FCC boost',
-    encoder: 'none',
-    responseMs: 80,
-    color: '#64748b',
-    acc: '±0.5–1%',
-    turndown: '~1:40',
-    standstill: 'weak*',
-    multi: '✓',
-  },
-  {
-    key: 'svc',
-    name: 'Sensorless vector',
-    where: 'SVC · SLVC · VVC+ / Flux-OL',
-    encoder: 'none',
-    responseMs: 15,
-    color: '#3b82f6',
-    acc: '±0.5%',
-    turndown: '~1:100',
-    standstill: 'limited',
-    multi: '✗',
-  },
-  {
-    key: 'clv',
-    name: 'Closed-loop vector',
-    where: 'Closed-Loop Velocity · Flux + enc',
-    encoder: 'yes',
-    responseMs: 8,
-    color: '#8b5cf6',
-    acc: '±0.01%',
-    turndown: '1:1000+',
-    standstill: '✓ full',
-    multi: '✗',
-  },
-  {
-    key: 'dtc',
-    name: 'DTC',
-    where: 'ABB ACS — reference only',
-    encoder: 'optional',
-    responseMs: 1.5,
-    color: '#f59e0b',
-    acc: '±0.1%',
-    turndown: '~1:200',
-    standstill: '✓ high',
-    multi: '✗',
-    reference: true,
-  },
+  { key: 'vf', name: 'V/f (scalar)', where: 'U/f · V/Hz · V/f', encoder: 'none', responseMs: 100, color: '#94a3b8' },
+  { key: 'vfc', name: 'V/f + slip comp', where: 'V/Hz + comp · V/f w/ FCC boost', encoder: 'none', responseMs: 80, color: '#64748b' },
+  { key: 'svc', name: 'Sensorless vector', where: 'SVC · SLVC · VVC+ / Flux-OL', encoder: 'none', responseMs: 15, color: '#3b82f6' },
+  { key: 'clv', name: 'Closed-loop vector', where: 'Closed-Loop Velocity · Flux + enc', encoder: 'yes', responseMs: 8, color: '#8b5cf6' },
+  { key: 'dtc', name: 'DTC', where: 'ABB ACS — reference only', encoder: 'optional', responseMs: 1.5, color: '#f59e0b', reference: true },
 ];
+
+type ModeKey = VfdMode['key'];
+
+/**
+ * Low-speed torque-shape library (% of rated, BEFORE field weakening),
+ * as a function of speed relative to base (rel, 0..1). The behaviour
+ * table below composes these with per-motor-type caps. The teaching
+ * point is the low-speed / standstill column:
+ *   vf  — ~0 at standstill, ramping to ~100 % by ~12 % of base (no boost)
+ *   vfc — a manual-boost floor (~50 % near 0; *starting* torque, not a
+ *         value to hold thermally), ~110 % above ~8 %
+ *   svc — ~150 % from ~2 % speed, uncertain right at 0 → ~30 % there
+ * clv/dtc are flat constants set in the table, not here.
+ */
+function shapeVf(rel: number): number {
+  return Math.min(100, 100 * Math.min(1, clamp(rel, 0, 1) / 0.12));
+}
+function shapeVfc(rel: number): number {
+  return Math.min(110, 50 + 70 * Math.min(1, clamp(rel, 0, 1) / 0.08));
+}
+function shapeSvc(rel: number): number {
+  return clamp(150 * Math.min(1, (clamp(rel, 0, 1) + 0.004) / 0.02), 30, 150);
+}
+
+interface ModeBehavior {
+  viable: Viable;
+  /** Torque ceiling (% rated, pre field-weakening) at speed rel (0..1). */
+  ceiling: (rel: number) => number;
+  /** Marginal/not-viable explanation, shown on the card and the matrix. */
+  note?: string;
+  // Attribute-matrix cells.
+  acc: string; // speed accuracy
+  turndown: string; // usable speed range
+  standstill: string; // torque held at zero speed
+  multi: string; // multiple motors on one drive
+}
+
+// Per motor type × mode. Induction is the full ladder; PM is synchronous
+// (no slip) with marginal open-loop V/f; reluctance is synchronous and
+// not drivable on V/f at all.
+const BEHAVIOR: Record<MotorType, Record<ModeKey, ModeBehavior>> = {
+  induction: {
+    vf: { viable: 'yes', ceiling: shapeVf, acc: '±1–3%', turndown: '~1:20', standstill: '✗', multi: '✓' },
+    vfc: { viable: 'yes', ceiling: shapeVfc, acc: '±0.5–1%', turndown: '~1:40', standstill: 'weak*', multi: '✓' },
+    svc: { viable: 'yes', ceiling: shapeSvc, acc: '±0.5%', turndown: '~1:100', standstill: 'limited', multi: '✗' },
+    clv: { viable: 'yes', ceiling: () => 150, acc: '±0.01%', turndown: '1:1000+', standstill: '✓ full', multi: '✗' },
+    dtc: { viable: 'yes', ceiling: () => 200, acc: '±0.1%', turndown: '~1:200', standstill: '✓ high', multi: '✗' },
+  },
+  pm: {
+    vf: {
+      viable: 'marginal',
+      ceiling: (r) => Math.min(90, shapeVf(r)),
+      note: 'open-loop PM — can pull out of step under load',
+      acc: 'exact†',
+      turndown: '~1:10',
+      standstill: '✗',
+      multi: '✗',
+    },
+    vfc: {
+      viable: 'marginal',
+      ceiling: (r) => Math.min(90, shapeVf(r)),
+      note: 'no slip to compensate — behaves as V/f; can pull out of step',
+      acc: 'exact†',
+      turndown: '~1:10',
+      standstill: '✗',
+      multi: '✗',
+    },
+    svc: { viable: 'yes', ceiling: shapeSvc, acc: 'exact', turndown: '~1:100', standstill: 'limited‡', multi: '✗' },
+    clv: { viable: 'yes', ceiling: () => 150, acc: 'exact', turndown: '1:1000+', standstill: '✓ full', multi: '✗' },
+    dtc: { viable: 'yes', ceiling: () => 200, acc: 'exact', turndown: '~1:200', standstill: '✓ high', multi: '✗' },
+  },
+  reluctance: {
+    vf: { viable: 'no', ceiling: () => 0, note: 'needs vector control — no rotor field to follow on V/f', acc: '—', turndown: '—', standstill: '—', multi: '—' },
+    vfc: { viable: 'no', ceiling: () => 0, note: 'needs vector control — no rotor field to follow on V/f', acc: '—', turndown: '—', standstill: '—', multi: '—' },
+    svc: { viable: 'yes', ceiling: shapeSvc, acc: 'exact', turndown: '~1:100', standstill: 'limited', multi: '✗' },
+    clv: { viable: 'yes', ceiling: () => 150, acc: 'exact', turndown: '1:1000+', standstill: '✓ full', multi: '✗' },
+    dtc: { viable: 'yes', ceiling: () => 200, acc: 'exact', turndown: '~1:200', standstill: '✓ high', multi: '✗' },
+  },
+};
+
+const MATRIX_NOTE: Record<MotorType, string> = {
+  induction: 'Induction motor. * V/f-boost torque is for starting, not a continuous standstill hold.',
+  pm: 'PM (synchronous). † Speed is exact only while in sync — open-loop V/f can pull out of step. ‡ Sensorless needs initial rotor-position ID at standstill.',
+  reluctance: 'Synchronous reluctance. V/f modes are not viable — the rotor has no field, so torque needs vector control.',
+};
 
 /**
  * Speed shortfall (rpm) below the synchronous speed at this load.
- *
- * Anchored on the absolute slip an induction motor shows at a given
- * torque: ≈ ratedSlip · load · baseSpeed rpm. That slip is roughly
- * constant in *rpm* regardless of frequency — so as a *fraction* of a
- * low synchronous speed it grows, which is precisely why open-loop V/f
- * speed-holding gets worse the slower you run. The smarter modes
- * correct most or all of it:
- *   vf  — the full uncompensated slip
- *   vfc — ~80 % corrected (20 % residual)
- *   svc — small fixed residual ≈0.5 % of base (model accuracy limit)
- *   clv — ≈0.01 % of base; the encoder closes the loop, effectively nil
- *   dtc — ≈0.1 % of base
+ * Induction only: anchored on the absolute slip an induction motor shows
+ * at a given torque (≈ ratedSlip · load · baseSpeed rpm), corrected per
+ * mode. PM and reluctance are synchronous, so there is no slip → 0.
  */
-function droopRpm(key: VfdMode['key'], loadPct: number, ratedSlipPct: number, baseRpm: number): number {
+function droopRpm(
+  key: ModeKey,
+  motorType: MotorType,
+  loadPct: number,
+  ratedSlipPct: number,
+  baseRpm: number,
+): number {
+  if (motorType !== 'induction') return 0;
   const fullSlip = (ratedSlipPct / 100) * (clamp(loadPct, 0, 150) / 100) * baseRpm;
   switch (key) {
     case 'vf':
@@ -175,42 +207,6 @@ function droopRpm(key: VfdMode['key'], loadPct: number, ratedSlipPct: number, ba
 }
 
 /**
- * Available torque (% of rated) this mode can produce, BEFORE field
- * weakening, as a function of the speed relative to base (rel, 0..1).
- *
- * The teaching point lives in the low-speed / standstill column:
- *   vf  — ~0 at standstill, ramping to ~100 % by ~12 % of base (no boost)
- *   vfc — a manual-boost floor (~50 % near 0; this is *starting* torque,
- *         not a figure to hold thermally), ~110 % above ~8 %
- *   svc — sensorless model gives ~150 % from ~2 % speed but is uncertain
- *         right at 0 (no position feedback) → ~30 % there
- *   clv — flat ~150 % including a true 0-speed hold (encoder)
- *   dtc — flat ~200 % including near-0 (direct flux/torque switching)
- * Intentionally simplified; not a torque curve lifted from a datasheet.
- * The field-weakening multiplier is applied by the caller on top of this.
- */
-function tmaxPct(key: VfdMode['key'], rel: number): number {
-  const sp = clamp(rel, 0, 1);
-  switch (key) {
-    case 'vf':
-      return Math.min(100, 100 * Math.min(1, sp / 0.12));
-    case 'vfc':
-      return Math.min(110, 50 + 70 * Math.min(1, sp / 0.08));
-    case 'svc':
-      return clamp(150 * Math.min(1, (sp + 0.004) / 0.02), 30, 150);
-    case 'clv':
-      return 150;
-    case 'dtc':
-      return 200;
-    default: {
-      const _never: never = key;
-      void _never;
-      return 0;
-    }
-  }
-}
-
-/**
  * Field-weakening torque multiplier. 1 at or below base frequency; above
  * base, torque is capped at constant power, so it falls as
  * baseHz / outputHz. (Real pull-out torque actually falls as ~1/f², so
@@ -221,10 +217,10 @@ function fwFactor(outputHz: number, baseHz: number): number {
   return outputHz <= baseHz ? 1 : baseHz / outputHz;
 }
 
-/** Torque ceiling (% of rated) for a mode at an output frequency. */
-function tmaxAt(key: VfdMode['key'], outputHz: number, baseHz: number): number {
+/** Torque ceiling (% rated) for a mode + motor type at an output frequency. */
+function ceilingAt(motorType: MotorType, key: ModeKey, outputHz: number, baseHz: number): number {
   const b = Math.max(1, baseHz);
-  return tmaxPct(key, clamp(outputHz / b, 0, 1)) * fwFactor(outputHz, b);
+  return BEHAVIOR[motorType][key].ceiling(clamp(outputHz / b, 0, 1)) * fwFactor(outputHz, b);
 }
 
 function encoderLabel(e: Encoder): string {
@@ -253,6 +249,8 @@ function Control({
   step,
   format,
   onInput,
+  disabled,
+  display,
 }: {
   label: string;
   value: number;
@@ -261,12 +259,15 @@ function Control({
   step: number;
   format: (v: number) => string;
   onInput: (v: number) => void;
+  disabled?: boolean;
+  /** Overrides the shown value (e.g. "n/a" when disabled). */
+  display?: string;
 }) {
   return (
-    <label className="nc-vfd-control">
+    <label className={`nc-vfd-control${disabled ? ' is-disabled' : ''}`}>
       <span className="nc-vfd-control-label">
         {label}
-        <strong>{format(value)}</strong>
+        <strong>{display ?? format(value)}</strong>
       </span>
       <input
         type="range"
@@ -274,6 +275,7 @@ function Control({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onInput(Number(e.target.value))}
       />
     </label>
@@ -281,19 +283,21 @@ function Control({
 }
 
 /**
- * Torque-vs-frequency capability chart. One envelope per mode across the
- * whole frequency axis (so the low-speed ramp, the base-frequency corner
- * and the field-weakening tail are all visible at once), plus the
- * operating point dropped on as a dot with a vertical guide. Whether the
- * dot sits below a mode's envelope is the graphical version of that
- * mode's holds/stalls verdict on the card below.
+ * Torque-vs-frequency capability chart. One envelope per viable mode
+ * across the whole frequency axis (so the low-speed ramp, the base-freq
+ * corner and the field-weakening tail are all visible at once), plus the
+ * operating point dropped on as a dot with a vertical guide. Modes that
+ * are not viable for the selected motor type are omitted and greyed in
+ * the legend.
  */
 function CapabilityChart({
+  motorType,
   baseHz,
   fMax,
   outputHz,
   loadPct,
 }: {
+  motorType: MotorType;
   baseHz: number;
   fMax: number;
   outputHz: number;
@@ -318,8 +322,8 @@ function CapabilityChart({
   const STEP = 2;
   const samples: number[] = [];
   for (let f = 0; f <= fMax + 0.001; f += STEP) samples.push(f);
-  const envelope = (key: VfdMode['key']) =>
-    samples.map((f) => `${xOf(f).toFixed(1)},${yOf(tmaxAt(key, f, b)).toFixed(1)}`).join(' ');
+  const envelope = (key: ModeKey) =>
+    samples.map((f) => `${xOf(f).toFixed(1)},${yOf(ceilingAt(motorType, key, f, b)).toFixed(1)}`).join(' ');
 
   const yTicks = [0, 50, 100, 150, 200];
   const xTicks = Array.from(new Set([0, Math.round(b), Math.round(fMax / 2), fMax])).sort(
@@ -334,7 +338,6 @@ function CapabilityChart({
         role="img"
         aria-label="Available torque versus output frequency for each control mode"
       >
-        {/* y gridlines + labels */}
         {yTicks.map((t) => (
           <g key={`y${t}`}>
             <line x1={ml} y1={yOf(t)} x2={W - mr} y2={yOf(t)} className="nc-vfd-grid" />
@@ -343,13 +346,11 @@ function CapabilityChart({
             </text>
           </g>
         ))}
-        {/* x ticks */}
         {xTicks.map((f) => (
           <text key={`x${f}`} x={xOf(f)} y={mt + plotH + 16} className="nc-vfd-axis-label" textAnchor="middle">
             {f}
           </text>
         ))}
-        {/* axis titles */}
         <text x={ml + plotW / 2} y={H - 4} className="nc-vfd-axis-title" textAnchor="middle">
           Output frequency (Hz)
         </text>
@@ -361,14 +362,13 @@ function CapabilityChart({
           Torque (% rated)
         </text>
 
-        {/* base-frequency marker */}
         <line x1={xOf(b)} y1={mt} x2={xOf(b)} y2={mt + plotH} className="nc-vfd-base-line" />
         <text x={xOf(b) + 4} y={mt + 11} className="nc-vfd-base-label">
           base
         </text>
 
-        {/* envelopes */}
-        {MODES.map((m) => (
+        {/* envelopes — only for viable modes */}
+        {MODES.filter((m) => BEHAVIOR[motorType][m.key].viable !== 'no').map((m) => (
           <polyline
             key={m.key}
             points={envelope(m.key)}
@@ -386,21 +386,25 @@ function CapabilityChart({
         </text>
       </svg>
 
-      {/* legend ties colours to the cards below */}
+      {/* legend ties colours to the cards below; n/a modes greyed */}
       <div className="nc-vfd-chart-legend">
-        {MODES.map((m) => (
-          <span key={m.key} className="nc-vfd-leg-item">
-            <span className="nc-vfd-leg-swatch" style={{ background: m.color }} />
-            {m.name}
-          </span>
-        ))}
+        {MODES.map((m) => {
+          const na = BEHAVIOR[motorType][m.key].viable === 'no';
+          return (
+            <span key={m.key} className={`nc-vfd-leg-item${na ? ' na' : ''}`}>
+              <span className="nc-vfd-leg-swatch" style={{ background: m.color }} />
+              {m.name}
+              {na && <span className="nc-vfd-leg-na">n/a</span>}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-/** Steady-state trade-off table. Static (independent of the operating point). */
-function AttributeMatrix() {
+/** Steady-state trade-off table, for the selected motor type. */
+function AttributeMatrix({ motorType }: { motorType: MotorType }) {
   return (
     <div className="nc-vfd-matrix-wrap">
       <table className="nc-vfd-matrix">
@@ -415,28 +419,37 @@ function AttributeMatrix() {
           </tr>
         </thead>
         <tbody>
-          {MODES.map((m) => (
-            <tr key={m.key} className={m.reference ? 'ref' : undefined}>
-              <th scope="row">
-                <span className="nc-vfd-leg-swatch" style={{ background: m.color }} /> {m.name}
-              </th>
-              <td>{m.acc}</td>
-              <td>{m.turndown}</td>
-              <td>{m.standstill}</td>
-              <td>{fmtMs(m.responseMs)}</td>
-              <td>{m.multi}</td>
-            </tr>
-          ))}
+          {MODES.map((m) => {
+            const beh = BEHAVIOR[motorType][m.key];
+            const na = beh.viable === 'no';
+            return (
+              <tr key={m.key} className={`${m.reference ? 'ref' : ''}${na ? ' na' : ''}`.trim() || undefined}>
+                <th scope="row">
+                  <span className="nc-vfd-leg-swatch" style={{ background: m.color }} /> {m.name}
+                  {beh.viable === 'marginal' && <span className="nc-vfd-mode-warn">⚠</span>}
+                </th>
+                <td>{beh.acc}</td>
+                <td>{beh.turndown}</td>
+                <td>{na ? '✗' : beh.standstill}</td>
+                <td>{na ? '—' : fmtMs(m.responseMs)}</td>
+                <td>{beh.multi}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-      <div className="nc-vfd-matrix-note">
-        Induction motor. * V/f-boost torque is for starting, not a continuous standstill hold.
-      </div>
+      <div className="nc-vfd-matrix-note">{MATRIX_NOTE[motorType]}</div>
     </div>
   );
 }
 
 export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
+  // Defensive: a legacy payload (pre motor-type) has no motorType — fall
+  // back to induction. Also guards a hand-edited garbage value.
+  const motorType: MotorType =
+    block.motorType === 'pm' || block.motorType === 'reluctance' ? block.motorType : 'induction';
+  const synchronous = motorType !== 'induction';
+
   // Clamp every input for the maths so a hand-edited payload can't push
   // the model out of range; the sliders themselves also clamp on write.
   const baseHz = Math.max(1, block.baseHz);
@@ -477,6 +490,22 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
       </div>
 
       <div className="nc-vfd-block-body">
+        {/* Motor type */}
+        <div className="nc-vfd-typebar">
+          <span className="nc-vfd-typebar-label">Motor</span>
+          {MOTOR_TYPES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`nc-vfd-typebtn${motorType === t ? ' active' : ''}`}
+              aria-pressed={motorType === t}
+              onClick={() => onChange({ motorType: t })}
+            >
+              {MOTOR_LABEL[t]}
+            </button>
+          ))}
+        </div>
+
         {/* Operating point */}
         <div className="nc-vfd-controls">
           <Control
@@ -523,28 +552,32 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
             step={0.5}
             format={(v) => `${v.toFixed(1)}%`}
             onInput={(v) => onChange({ ratedSlipPct: clamp(v, 0, 10) })}
+            disabled={synchronous}
+            display={synchronous ? 'n/a' : undefined}
           />
         </div>
 
         <div className="nc-vfd-summary">
-          Output <strong>{Math.round(outHz)} Hz</strong> ({rel.toFixed(2)}× base,{' '}
-          {Math.round(baseHz)} Hz) · Synchronous <strong>{Math.round(synchronousRpm)} rpm</strong> ·
-          Load <strong>{loadPct.toFixed(0)}%</strong>
+          <strong>{MOTOR_LABEL[motorType]}</strong> · Output <strong>{Math.round(outHz)} Hz</strong>{' '}
+          ({rel.toFixed(2)}× base, {Math.round(baseHz)} Hz) · Synchronous{' '}
+          <strong>{Math.round(synchronousRpm)} rpm</strong> · Load <strong>{loadPct.toFixed(0)}%</strong>
           {inFieldWeakening && (
             <span className="nc-vfd-fw">field-weakening · torque ×{fw.toFixed(2)}</span>
           )}
         </div>
 
         {/* Capability envelopes + operating point */}
-        <CapabilityChart baseHz={baseHz} fMax={120} outputHz={outHz} loadPct={loadPct} />
+        <CapabilityChart motorType={motorType} baseHz={baseHz} fMax={120} outputHz={outHz} loadPct={loadPct} />
 
         {/* One card per mode */}
         <div className="nc-vfd-cards">
           {MODES.map((m) => {
-            const droop = droopRpm(m.key, loadPct, ratedSlipPct, base);
+            const beh = BEHAVIOR[motorType][m.key];
+            const notViable = beh.viable === 'no';
+            const droop = droopRpm(m.key, motorType, loadPct, ratedSlipPct, base);
             const actualRpm = Math.max(0, synchronousRpm - droop);
             const errPct = synchronousRpm > 0 ? -(droop / synchronousRpm) * 100 : null;
-            const tmaxBase = tmaxPct(m.key, clamp(rel, 0, 1));
+            const tmaxBase = beh.ceiling(clamp(rel, 0, 1));
             const tmax = tmaxBase * fw;
             const ok = loadPct <= tmax;
             const speedFill =
@@ -553,7 +586,10 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
             const loadLeft = clamp((loadPct / TORQUE_SCALE) * 100, 0, 100);
 
             return (
-              <div key={m.key} className={`nc-vfd-card${m.reference ? ' nc-vfd-card-ref' : ''}`}>
+              <div
+                key={m.key}
+                className={`nc-vfd-card${m.reference ? ' nc-vfd-card-ref' : ''}${notViable ? ' nc-vfd-card-na' : ''}`}
+              >
                 <div className="nc-vfd-card-head">
                   <span className="nc-vfd-card-name">
                     <span className="nc-vfd-leg-swatch" style={{ background: m.color }} />
@@ -566,68 +602,81 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
                 </div>
                 <div className="nc-vfd-card-where">{m.where}</div>
 
-                {/* Speed holding */}
-                <div className="nc-vfd-metric">
-                  <div className="nc-vfd-metric-top">
-                    <span className="nc-vfd-metric-name">Speed</span>
-                    <span className="nc-vfd-metric-val">
-                      {Math.round(actualRpm)} rpm
-                      {errPct !== null && <> · {errText(errPct)}</>}
-                    </span>
+                {notViable ? (
+                  <div className="nc-vfd-na-block">
+                    <span className="nc-vfd-verdict bad">✗ not viable</span>
+                    <div className="nc-vfd-na-reason">{beh.note}</div>
                   </div>
-                  <div className="nc-vfd-bar">
-                    <div
-                      className="nc-vfd-bar-fill nc-vfd-bar-fill-speed"
-                      style={{ width: `${speedFill}%` }}
-                    />
-                  </div>
-                  <div className="nc-vfd-worked">
-                    n = {Math.round(synchronousRpm)} − {Math.round(droop)} = {Math.round(actualRpm)}{' '}
-                    rpm
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    {/* Speed holding */}
+                    <div className="nc-vfd-metric">
+                      <div className="nc-vfd-metric-top">
+                        <span className="nc-vfd-metric-name">Speed</span>
+                        <span className="nc-vfd-metric-val">
+                          {Math.round(actualRpm)} rpm
+                          {errPct !== null && <> · {errText(errPct)}</>}
+                        </span>
+                      </div>
+                      <div className="nc-vfd-bar">
+                        <div
+                          className="nc-vfd-bar-fill nc-vfd-bar-fill-speed"
+                          style={{ width: `${speedFill}%` }}
+                        />
+                      </div>
+                      <div className="nc-vfd-worked">
+                        n = {Math.round(synchronousRpm)} − {Math.round(droop)} ={' '}
+                        {Math.round(actualRpm)} rpm
+                      </div>
+                    </div>
 
-                {/* Torque capability + verdict */}
-                <div className="nc-vfd-metric">
-                  <div className="nc-vfd-metric-top">
-                    <span className="nc-vfd-metric-name">Torque here</span>
-                    <span className={`nc-vfd-verdict ${ok ? 'ok' : 'bad'}`}>
-                      {ok ? '✓ holds' : '✗ stalls'}
-                    </span>
-                  </div>
-                  <div className="nc-vfd-bar">
-                    <div
-                      className={`nc-vfd-bar-fill ${ok ? 'ok' : 'bad'}`}
-                      style={{ width: `${capFill}%` }}
-                    />
-                    <div
-                      className="nc-vfd-bar-load"
-                      style={{ left: `${loadLeft}%` }}
-                      title={`load ${Math.round(loadPct)}%`}
-                    />
-                  </div>
-                  <div className="nc-vfd-worked">
-                    {inFieldWeakening ? (
-                      <>
-                        avail ≤ {Math.round(tmax)}% = {Math.round(tmaxBase)}%×{fw.toFixed(2)} FW ·
-                        load {Math.round(loadPct)}%
-                      </>
-                    ) : (
-                      <>
-                        avail ≤ {Math.round(tmax)}% · load {Math.round(loadPct)}%
-                      </>
+                    {/* Torque capability + verdict */}
+                    <div className="nc-vfd-metric">
+                      <div className="nc-vfd-metric-top">
+                        <span className="nc-vfd-metric-name">Torque here</span>
+                        <span className={`nc-vfd-verdict ${ok ? 'ok' : 'bad'}`}>
+                          {ok ? '✓ holds' : '✗ stalls'}
+                        </span>
+                      </div>
+                      <div className="nc-vfd-bar">
+                        <div
+                          className={`nc-vfd-bar-fill ${ok ? 'ok' : 'bad'}`}
+                          style={{ width: `${capFill}%` }}
+                        />
+                        <div
+                          className="nc-vfd-bar-load"
+                          style={{ left: `${loadLeft}%` }}
+                          title={`load ${Math.round(loadPct)}%`}
+                        />
+                      </div>
+                      <div className="nc-vfd-worked">
+                        {inFieldWeakening ? (
+                          <>
+                            avail ≤ {Math.round(tmax)}% = {Math.round(tmaxBase)}%×{fw.toFixed(2)} FW ·
+                            load {Math.round(loadPct)}%
+                          </>
+                        ) : (
+                          <>
+                            avail ≤ {Math.round(tmax)}% · load {Math.round(loadPct)}%
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {beh.viable === 'marginal' && beh.note && (
+                      <div className="nc-vfd-warn">⚠ {beh.note}</div>
                     )}
-                  </div>
-                </div>
 
-                <div className="nc-vfd-resp">torque step ≈ {fmtMs(m.responseMs)}</div>
+                    <div className="nc-vfd-resp">torque step ≈ {fmtMs(m.responseMs)}</div>
+                  </>
+                )}
               </div>
             );
           })}
         </div>
 
         {/* Steady-state trade-offs at a glance */}
-        <AttributeMatrix />
+        <AttributeMatrix motorType={motorType} />
 
         {/* Key + honest caveats */}
         <div className="nc-vfd-foot">
@@ -636,13 +685,16 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
               <span className="nc-vfd-dot ok" /> holds the load here
             </span>
             <span className="nc-vfd-foot-item">
-              <span className="nc-vfd-dot bad" /> stalls / current-limits here
+              <span className="nc-vfd-dot bad" /> stalls / not viable here
             </span>
           </div>
           <div className="nc-vfd-foot-note">
             Simplified for intuition, not calibrated — real torque curves and speed accuracy come
-            from the drive + motor datasheet. Droop is the absolute induction-motor slip at this
-            load (≈ rated slip × load × base speed), corrected by each mode. The V/f-boost figure is
+            from the drive + motor datasheet. For an induction motor, droop is the absolute slip at
+            this load (≈ rated slip × load × base speed), corrected by each mode; PM and reluctance
+            are synchronous, so there is no slip and speed equals the commanded value while in sync.
+            Open-loop V/f is marginal for PM (can lose synchronism under load) and not viable for
+            reluctance (no rotor field — torque needs vector control). The V/f-boost figure is
             starting torque, not a value to hold at standstill. Above base frequency the drive runs
             out of volts, so torque is capped at constant power (≈ base ÷ output Hz); real pull-out
             torque falls faster (~1/f²), so past roughly 1.5–2× base the true ceiling drops below

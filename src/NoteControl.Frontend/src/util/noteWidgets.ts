@@ -158,6 +158,7 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         loadPct: 60,
         baseSpeedRpm: 1500,
         ratedSlipPct: 3,
+        motorType: 'induction',
       };
       return { id, kind: 'vfd', vfd };
     }
