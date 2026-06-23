@@ -1,0 +1,334 @@
+/* ============================================================================
+ * vfd-block.css — VFD control-mode comparison widget (VfdBlock.tsx).
+ * A note-native widget (no dashboard counterpart) that follows the same
+ * frame vocabulary as motor-block.css / motion-block.css so the widgets
+ * read as siblings when stacked above a note.
+ *
+ * Separate file (loaded from main.tsx after styles.css) for the same
+ * reason the other block stylesheets are: additive feature, one-delete
+ * revert, explicit cascade order.
+ *
+ * Colour roles:
+ *   ok    — green (the mode holds the requested load at this point)
+ *   bad   — red   (it stalls / current-limits here)
+ *   speed — accent (the speed-holding bar)
+ * ========================================================================== */
+
+.nc-vfd-block {
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 320px;
+}
+
+/* ----- Header ------------------------------------------------------------ */
+.nc-vfd-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  user-select: none;
+}
+.nc-vfd-block-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+.nc-vfd-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+.nc-vfd-block-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nc-vfd-block-iconbtn:hover {
+  background: var(--nc-bg);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+/* ----- Body -------------------------------------------------------------- */
+.nc-vfd-block-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow: auto;
+}
+
+/* ----- Controls ---------------------------------------------------------- */
+.nc-vfd-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 18px;
+}
+.nc-vfd-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-vfd-control-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-vfd-control-label strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+.nc-vfd-control input[type='range'] {
+  width: 100%;
+  accent-color: var(--nc-accent);
+  cursor: pointer;
+}
+
+/* ----- Operating-point summary ------------------------------------------- */
+.nc-vfd-summary {
+  font-size: 12.5px;
+  color: var(--nc-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.nc-vfd-summary strong {
+  font-weight: 600;
+  color: var(--nc-fg);
+}
+
+/* ----- Mode cards -------------------------------------------------------- */
+.nc-vfd-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.nc-vfd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+/* The DTC reference card is dimmed and dashed so it's clearly "not on
+   your bench" without hiding the comparison. */
+.nc-vfd-card-ref {
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.nc-vfd-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.nc-vfd-card-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+}
+.nc-vfd-ref-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+}
+.nc-vfd-enc {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nc-vfd-enc-none {
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+}
+.nc-vfd-enc-yes {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+}
+.nc-vfd-enc-optional {
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+}
+
+.nc-vfd-card-where {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- A metric block (speed, or torque) inside a card ------------------- */
+.nc-vfd-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-vfd-metric-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nc-vfd-metric-name {
+  font-size: 11.5px;
+  color: var(--nc-fg-muted);
+}
+.nc-vfd-metric-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bars: a track with a fill; the torque track also carries a load tick. */
+.nc-vfd-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+  overflow: hidden;
+}
+.nc-vfd-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+}
+.nc-vfd-bar-fill-speed {
+  background: var(--nc-accent);
+}
+.nc-vfd-bar-fill.ok {
+  background: #22c55e;
+}
+.nc-vfd-bar-fill.bad {
+  background: #ef4444;
+}
+/* Load threshold marker on the torque track. Sits above the fill, so
+   the overflow:hidden on the track clips it — fine, the load is always
+   within the 0..200 % scale. */
+.nc-vfd-bar-load {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--nc-fg);
+  opacity: 0.7;
+}
+
+.nc-vfd-verdict {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.nc-vfd-verdict.ok {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+}
+.nc-vfd-verdict.bad {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.nc-vfd-worked {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.nc-vfd-resp {
+  margin-top: auto;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- Footer: key + caveats --------------------------------------------- */
+.nc-vfd-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+.nc-vfd-foot-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-vfd-foot-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nc-vfd-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+.nc-vfd-dot.ok {
+  background: #22c55e;
+}
+.nc-vfd-dot.bad {
+  background: #ef4444;
+}
+.nc-vfd-foot-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--nc-fg-muted);
+}
+
+/* On a narrow note column the cards collapse to a single column via the
+   auto-fit grid above; nothing extra needed here. */

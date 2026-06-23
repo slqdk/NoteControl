@@ -8,6 +8,7 @@ import type {
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
+  VfdBlockDto,
 } from '../api/types';
 import { RssBlock } from './RssBlock';
 import { TaskArea } from './TaskArea';
@@ -15,6 +16,7 @@ import { LinksBlock } from './LinksBlock';
 import { MotionBlock } from './MotionBlock';
 import { MotorBlock } from './MotorBlock';
 import { ConvertBlock } from './ConvertBlock';
+import { VfdBlock } from './VfdBlock';
 
 /**
  * Renders the ordered list of widgets attached to a single note, in
@@ -74,6 +76,7 @@ const DEFAULT_HEIGHT: Record<string, number> = {
   motion: 460,
   motor: 420,
   convert: 340,
+  vfd: 480,
 };
 
 /** Clamp host height to sane bounds so a drag can't collapse a widget
@@ -91,7 +94,7 @@ function clamp(n: number, lo: number, hi: number): number {
 
 /** The currently-stored payload for a widget, regardless of kind. */
 function payloadOf(w: NoteWidgetDto): { height?: number } | null {
-  return w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? w.convert ?? null;
+  return w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? w.convert ?? w.vfd ?? null;
 }
 
 /** The default/reset height for a widget, accounting for Motion-D. */
@@ -219,6 +222,14 @@ function NoteWidgetItem({
     },
     [onChange, w.id, w.convert],
   );
+  const onChangeVfd = useCallback(
+    (patch: Partial<VfdBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      if (w.vfd) onChange(w.id, { vfd: { ...w.vfd, ...rest } });
+    },
+    [onChange, w.id, w.vfd],
+  );
 
   // Host resize handle → set the payload height (clamped + rounded).
   const setHeight = useCallback(
@@ -230,6 +241,7 @@ function NoteWidgetItem({
       else if (w.motion) onChange(w.id, { motion: { ...w.motion, height: next } });
       else if (w.motor) onChange(w.id, { motor: { ...w.motor, height: next } });
       else if (w.convert) onChange(w.id, { convert: { ...w.convert, height: next } });
+      else if (w.vfd) onChange(w.id, { vfd: { ...w.vfd, height: next } });
     },
     [onChange, w],
   );
@@ -286,6 +298,14 @@ function NoteWidgetItem({
       <ConvertBlock
         block={{ ...w.convert, x: 0, y: 0, width, height }}
         onChange={onChangeConvert}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'vfd' && w.vfd) {
+    body = (
+      <VfdBlock
+        block={{ ...w.vfd, x: 0, y: 0, width, height }}
+        onChange={onChangeVfd}
         onDelete={() => onDelete(w.id)}
       />
     );

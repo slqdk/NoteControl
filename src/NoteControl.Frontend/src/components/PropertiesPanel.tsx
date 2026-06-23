@@ -1406,6 +1406,9 @@ function AddNoteWidgetMenu({ notePath }: { notePath: string }) {
           <button type="button" role="menuitem" onClick={() => add('convert')}>
             🔢 Unit converter
           </button>
+          <button type="button" role="menuitem" onClick={() => add('vfd')}>
+            🎛️ Drive control modes (VFD)
+          </button>
           <div className="nc-add-widget-sep" />
           <div className="nc-add-widget-label">Motion calculator</div>
           <button type="button" role="menuitem" onClick={() => add('motion', 'A')}>

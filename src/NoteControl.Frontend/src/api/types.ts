@@ -614,6 +614,8 @@ export interface NoteWidgetDto {
   motor?: MotorBlockDto | null;
   /** Unit converter payload — present iff kind === 'convert'. */
   convert?: ConvertBlockDto | null;
+  /** VFD control-mode comparison payload — present iff kind === 'vfd'. */
+  vfd?: VfdBlockDto | null;
 }
 
 /**
@@ -671,6 +673,36 @@ export interface MotorBlockDto {
   ratedSlipPct: number;
   /** Whether the animation is running. */
   running: boolean;
+}
+
+/**
+ * VFD control-mode comparison widget config. Mirrors
+ * NoteControl.Shared.NoteWidgets.VfdBlockDto.
+ *
+ * Pick an operating point — a speed setpoint (% of base speed) and a
+ * mechanical load (% of rated torque) — and the widget shows, for each
+ * common drive control mode, how far actual speed sags below setpoint,
+ * how much torque the mode can deliver at that speed, and whether it
+ * can hold the load (the gaps are widest at low speed and standstill).
+ * The model and its constants live in VfdBlock.tsx; the server treats
+ * this payload as opaque.
+ *
+ * x/y ignored in the note stack; width/height drive layout.
+ */
+export interface VfdBlockDto {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Speed setpoint as percent of base (rated) speed, 0..100. */
+  speedPct: number;
+  /** Mechanical load as percent of rated torque, 0..150. */
+  loadPct: number;
+  /** Base (rated/synchronous) speed in rpm — the rpm scale. */
+  baseSpeedRpm: number;
+  /** Rated slip percent at full load (typ. 1..6) — sets V/f droop. */
+  ratedSlipPct: number;
 }
 
 /**

@@ -6,6 +6,7 @@ import type {
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
+  VfdBlockDto,
 } from '../api/types';
 import { newId } from './id';
 import { MOTION_DEFAULTS } from '../components/MotionBlock';
@@ -24,7 +25,7 @@ import { MOTION_DEFAULTS } from '../components/MotionBlock';
  */
 export const NOTE_WIDGET_ADD_EVENT = 'nc:add-note-widget';
 
-export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor' | 'convert';
+export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor' | 'convert' | 'vfd';
 
 export interface NoteWidgetAddDetail {
   /**
@@ -140,6 +141,24 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         values: {},
       };
       return { id, kind: 'convert', convert };
+    }
+    case 'vfd': {
+      const vfd: VfdBlockDto = {
+        id: newId(),
+        x: 0,
+        y: 0,
+        width: 760,
+        height: 480,
+        // A 4-pole 50 Hz machine (1500 rpm base) at half speed and 60%
+        // load, 3% rated slip — a point where the open-loop V/f droop
+        // is already visible and the low-speed torque gap between the
+        // modes has started to bite.
+        speedPct: 50,
+        loadPct: 60,
+        baseSpeedRpm: 1500,
+        ratedSlipPct: 3,
+      };
+      return { id, kind: 'vfd', vfd };
     }
     default: {
       // Exhaustiveness guard — if a new kind is added to the union

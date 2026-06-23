@@ -121,7 +121,13 @@ public sealed record NoteWidgetDto(
     /// Unit-converter payload. Non-null iff <see cref="Kind"/> is
     /// "convert". Note-native widget.
     /// </summary>
-    ConvertBlockDto? Convert = null);
+    ConvertBlockDto? Convert = null,
+
+    /// <summary>
+    /// VFD control-mode comparison payload. Non-null iff
+    /// <see cref="Kind"/> is "vfd". Note-native widget.
+    /// </summary>
+    VfdBlockDto? Vfd = null);
 
 /// <summary>
 /// Configuration for the live unit-converter widget. A category is
@@ -229,3 +235,81 @@ public sealed record MotorBlockDto(
 
     /// <summary>Whether the animation is currently running.</summary>
     bool Running = true);
+
+/// <summary>
+/// Configuration for the VFD (variable-frequency drive) control-mode
+/// comparison widget. An interactive teaching surface: pick an
+/// operating point — a speed setpoint and a mechanical load — and see
+/// how the common drive control modes behave there, side by side. For
+/// each mode the widget shows how far actual speed sags below setpoint
+/// (droop), how much torque the mode can deliver at that speed, and
+/// whether it can hold the load at all (the differences bite hardest at
+/// low speed and at standstill).
+///
+/// The modes modelled are the universal ladder, simplest → smartest:
+///   - V/f (scalar, open loop)            — U/f (Danfoss), V/Hz
+///                                          (PowerFlex), V/f (G120C,
+///                                          Beckhoff AF1000)
+///   - V/f with slip compensation + boost
+///   - Sensorless vector                  — SVC (PowerFlex), SLVC
+///                                          (G120C), VVC+ / Flux-OL
+///                                          (Danfoss), AF1000
+///   - Closed-loop vector (encoder)       — Closed-Loop Velocity
+///                                          (PowerFlex + encoder card),
+///                                          Flux w/ encoder (Danfoss)
+///   - DTC                                — ABB-style; shown for
+///                                          reference, not available on
+///                                          the four drives above
+///
+/// Physics is intentionally simplified for intuition, not metrology —
+/// the same philosophy as the motor-compare widget. The model and all
+/// its constants live entirely in the frontend (VfdBlock.tsx); the
+/// server treats this payload as opaque data, so tuning the model or
+/// adding a mode is a frontend-only change with no DTO bump.
+///
+/// x/y/width/height mirror the other note widgets: x/y are ignored in
+/// the note stack, width/height drive the widget's own layout.
+/// </summary>
+public sealed record VfdBlockDto(
+    /// <summary>Stable id (client-generated). Opaque to the server.</summary>
+    string Id,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double X = 0,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double Y = 0,
+
+    /// <summary>Widget width in px (host overrides via measurement in-note).</summary>
+    double Width = 760,
+
+    /// <summary>Widget height in px.</summary>
+    double Height = 480,
+
+    /// <summary>
+    /// Speed setpoint as a percent of base (rated) speed, 0..100 — the
+    /// commanded speed the drive is told to hold. Each mode's droop is
+    /// subtracted from it to get the actual speed.
+    /// </summary>
+    double SpeedPct = 50,
+
+    /// <summary>
+    /// Mechanical load as a percent of rated torque, 0..150. Drives both
+    /// the open-loop V/f speed droop and the "can this mode deliver it
+    /// here?" verdict against each mode's torque capability.
+    /// </summary>
+    double LoadPct = 60,
+
+    /// <summary>
+    /// Base (rated/synchronous) speed in rpm — the rpm scale for the
+    /// setpoint and the droop. Default 1500 (a 4-pole, 50 Hz machine).
+    /// </summary>
+    double BaseSpeedRpm = 1500,
+
+    /// <summary>
+    /// Rated slip percent at full load (typical induction motors sit at
+    /// 1..6 %). Sets how far an open-loop V/f drive's actual speed sags
+    /// under load; the smarter modes correct most or all of it.
+    /// Default 3.
+    /// </summary>
+    double RatedSlipPct = 3);
