@@ -344,3 +344,122 @@
 
 /* On a narrow note column the cards collapse to a single column via the
    auto-fit grid above; nothing extra needed here. */
+
+/* ----- Capability chart -------------------------------------------------- */
+.nc-vfd-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nc-vfd-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.nc-vfd-grid {
+  stroke: var(--nc-border);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+.nc-vfd-axis-label {
+  fill: var(--nc-fg-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-vfd-axis-title {
+  fill: var(--nc-fg-muted);
+  font-size: 10px;
+}
+.nc-vfd-base-line {
+  stroke: var(--nc-fg-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+.nc-vfd-base-label {
+  fill: var(--nc-fg-muted);
+  font-size: 10px;
+}
+.nc-vfd-curve {
+  stroke-width: 2;
+  fill: none;
+}
+.nc-vfd-curve.ref {
+  stroke-dasharray: 5 4;
+}
+.nc-vfd-op-guide {
+  stroke: var(--nc-fg);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.5;
+}
+.nc-vfd-op-dot {
+  fill: var(--nc-fg);
+  stroke: var(--nc-bg-elev);
+  stroke-width: 2;
+}
+.nc-vfd-op-label {
+  fill: var(--nc-fg);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.nc-vfd-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+.nc-vfd-leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.nc-vfd-leg-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+/* ----- Attribute matrix -------------------------------------------------- */
+.nc-vfd-matrix-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-vfd-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-vfd-matrix th,
+.nc-vfd-matrix td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--nc-border);
+}
+.nc-vfd-matrix thead th {
+  color: var(--nc-fg-muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+.nc-vfd-matrix tbody th {
+  font-weight: 600;
+  color: var(--nc-fg);
+  white-space: nowrap;
+}
+.nc-vfd-matrix tbody td {
+  color: var(--nc-fg);
+}
+.nc-vfd-matrix tr.ref {
+  opacity: 0.82;
+}
+.nc-vfd-matrix-note {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}

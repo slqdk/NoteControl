@@ -4,25 +4,28 @@ import type { VfdBlockDto } from '../api/types';
  * VFD control-mode comparison widget.
  *
  * Pick an operating point with the sliders — an output frequency and a
- * mechanical load (% of rated torque) — and the widget shows, side by
- * side, how the common drive control modes behave at that point:
- *   - how far the actual speed sags below the synchronous speed (droop),
- *   - how much torque the mode can deliver at that speed, and
- *   - whether it can hold the requested load at all.
+ * mechanical load (% of rated torque) — and the widget shows how the
+ * common drive control modes behave at that point, three ways:
+ *   - a torque-vs-frequency capability chart, one envelope per mode,
+ *     with the operating point dropped on it;
+ *   - a card per mode reading out actual speed (with droop), the
+ *     available torque there, and a holds/stalls verdict; and
+ *   - an attribute matrix summarising the steady-state trade-offs.
  *
  * The regions that separate the modes are LOW SPEED, HEAVY LOAD, and —
  * once the output frequency climbs past the motor's base (nameplate)
  * frequency — FIELD WEAKENING. Below base the drive holds V/f; above it
  * the drive has run out of volts, flux falls as ~1/f, and every mode's
  * torque ceiling drops with it (≈ baseHz / outputHz). That ceiling drop
- * is a voltage/flux limit, not a control-algorithm one, so it hits all
- * the modes roughly equally.
+ * is a voltage/flux limit, not a control-algorithm one, so it bends all
+ * the envelopes down together past base.
  *
  * Unlike the motor-compare widget this one does not animate — there is
- * no rotation to show; the "live" part is that every figure and bar
- * recomputes as the sliders move. Each card prints its worked numbers
- * (n = synchronous − droop) so a reader of the note can see where every
- * value comes from, the same teaching habit as the motor widget.
+ * no rotation to show; the "live" part is that the chart, the cards and
+ * every figure recompute as the sliders move. Each card prints its
+ * worked numbers (n = synchronous − droop) so a reader of the note can
+ * see where every value comes from, the same teaching habit as the
+ * motor widget.
  *
  * Physics is deliberately simplified for intuition, not metrology. The
  * model and all its constants live here in the frontend; the server
@@ -55,6 +58,15 @@ interface VfdMode {
   encoder: Encoder;
   /** Typical torque-loop step response, ms. Illustrative ballpark. */
   responseMs: number;
+  /** Line/swatch colour, shared by the chart, the legend and the cards. */
+  color: string;
+  // Attribute-matrix cells. Induction-motor baseline — when the
+  // motor-type selector lands these will vary by type (PM / reluctance
+  // have no slip, and V/f is not viable for reluctance).
+  acc: string; // speed accuracy
+  turndown: string; // usable speed range
+  standstill: string; // torque held at zero speed
+  multi: string; // multiple motors on one drive
   /** Shown for completeness; not available on the four bench drives. */
   reference?: boolean;
 }
@@ -63,11 +75,67 @@ interface VfdMode {
 // against the drives Søren listed (G120C, PowerFlex 525, Beckhoff
 // AF1000, Danfoss VLT) plus ABB for DTC.
 const MODES: VfdMode[] = [
-  { key: 'vf', name: 'V/f (scalar)', where: 'U/f · V/Hz · V/f', encoder: 'none', responseMs: 100 },
-  { key: 'vfc', name: 'V/f + slip comp', where: 'V/Hz + comp · V/f w/ FCC boost', encoder: 'none', responseMs: 80 },
-  { key: 'svc', name: 'Sensorless vector', where: 'SVC · SLVC · VVC+ / Flux-OL', encoder: 'none', responseMs: 15 },
-  { key: 'clv', name: 'Closed-loop vector', where: 'Closed-Loop Velocity · Flux + enc', encoder: 'yes', responseMs: 8 },
-  { key: 'dtc', name: 'DTC', where: 'ABB ACS — reference only', encoder: 'optional', responseMs: 1.5, reference: true },
+  {
+    key: 'vf',
+    name: 'V/f (scalar)',
+    where: 'U/f · V/Hz · V/f',
+    encoder: 'none',
+    responseMs: 100,
+    color: '#94a3b8',
+    acc: '±1–3%',
+    turndown: '~1:20',
+    standstill: '✗',
+    multi: '✓',
+  },
+  {
+    key: 'vfc',
+    name: 'V/f + slip comp',
+    where: 'V/Hz + comp · V/f w/ FCC boost',
+    encoder: 'none',
+    responseMs: 80,
+    color: '#64748b',
+    acc: '±0.5–1%',
+    turndown: '~1:40',
+    standstill: 'weak*',
+    multi: '✓',
+  },
+  {
+    key: 'svc',
+    name: 'Sensorless vector',
+    where: 'SVC · SLVC · VVC+ / Flux-OL',
+    encoder: 'none',
+    responseMs: 15,
+    color: '#3b82f6',
+    acc: '±0.5%',
+    turndown: '~1:100',
+    standstill: 'limited',
+    multi: '✗',
+  },
+  {
+    key: 'clv',
+    name: 'Closed-loop vector',
+    where: 'Closed-Loop Velocity · Flux + enc',
+    encoder: 'yes',
+    responseMs: 8,
+    color: '#8b5cf6',
+    acc: '±0.01%',
+    turndown: '1:1000+',
+    standstill: '✓ full',
+    multi: '✗',
+  },
+  {
+    key: 'dtc',
+    name: 'DTC',
+    where: 'ABB ACS — reference only',
+    encoder: 'optional',
+    responseMs: 1.5,
+    color: '#f59e0b',
+    acc: '±0.1%',
+    turndown: '~1:200',
+    standstill: '✓ high',
+    multi: '✗',
+    reference: true,
+  },
 ];
 
 /**
@@ -153,6 +221,12 @@ function fwFactor(outputHz: number, baseHz: number): number {
   return outputHz <= baseHz ? 1 : baseHz / outputHz;
 }
 
+/** Torque ceiling (% of rated) for a mode at an output frequency. */
+function tmaxAt(key: VfdMode['key'], outputHz: number, baseHz: number): number {
+  const b = Math.max(1, baseHz);
+  return tmaxPct(key, clamp(outputHz / b, 0, 1)) * fwFactor(outputHz, b);
+}
+
 function encoderLabel(e: Encoder): string {
   if (e === 'yes') return 'needs encoder';
   if (e === 'optional') return 'encoder optional';
@@ -206,6 +280,162 @@ function Control({
   );
 }
 
+/**
+ * Torque-vs-frequency capability chart. One envelope per mode across the
+ * whole frequency axis (so the low-speed ramp, the base-frequency corner
+ * and the field-weakening tail are all visible at once), plus the
+ * operating point dropped on as a dot with a vertical guide. Whether the
+ * dot sits below a mode's envelope is the graphical version of that
+ * mode's holds/stalls verdict on the card below.
+ */
+function CapabilityChart({
+  baseHz,
+  fMax,
+  outputHz,
+  loadPct,
+}: {
+  baseHz: number;
+  fMax: number;
+  outputHz: number;
+  loadPct: number;
+}) {
+  // Fixed viewBox; the SVG scales to the note column via CSS.
+  const W = 720;
+  const H = 300;
+  const ml = 46;
+  const mr = 14;
+  const mt = 10;
+  const mb = 38;
+  const plotW = W - ml - mr;
+  const plotH = H - mt - mb;
+  const TMAX = 200;
+  const b = Math.max(1, baseHz);
+
+  const xOf = (f: number) => ml + (clamp(f, 0, fMax) / fMax) * plotW;
+  const yOf = (t: number) => mt + plotH - (clamp(t, 0, TMAX) / TMAX) * plotH;
+
+  // Sample each envelope across the frequency axis.
+  const STEP = 2;
+  const samples: number[] = [];
+  for (let f = 0; f <= fMax + 0.001; f += STEP) samples.push(f);
+  const envelope = (key: VfdMode['key']) =>
+    samples.map((f) => `${xOf(f).toFixed(1)},${yOf(tmaxAt(key, f, b)).toFixed(1)}`).join(' ');
+
+  const yTicks = [0, 50, 100, 150, 200];
+  const xTicks = Array.from(new Set([0, Math.round(b), Math.round(fMax / 2), fMax])).sort(
+    (a, c) => a - c,
+  );
+
+  return (
+    <div className="nc-vfd-chart">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="nc-vfd-chart-svg"
+        role="img"
+        aria-label="Available torque versus output frequency for each control mode"
+      >
+        {/* y gridlines + labels */}
+        {yTicks.map((t) => (
+          <g key={`y${t}`}>
+            <line x1={ml} y1={yOf(t)} x2={W - mr} y2={yOf(t)} className="nc-vfd-grid" />
+            <text x={ml - 6} y={yOf(t) + 3} className="nc-vfd-axis-label" textAnchor="end">
+              {t}
+            </text>
+          </g>
+        ))}
+        {/* x ticks */}
+        {xTicks.map((f) => (
+          <text key={`x${f}`} x={xOf(f)} y={mt + plotH + 16} className="nc-vfd-axis-label" textAnchor="middle">
+            {f}
+          </text>
+        ))}
+        {/* axis titles */}
+        <text x={ml + plotW / 2} y={H - 4} className="nc-vfd-axis-title" textAnchor="middle">
+          Output frequency (Hz)
+        </text>
+        <text
+          transform={`translate(12 ${mt + plotH / 2}) rotate(-90)`}
+          className="nc-vfd-axis-title"
+          textAnchor="middle"
+        >
+          Torque (% rated)
+        </text>
+
+        {/* base-frequency marker */}
+        <line x1={xOf(b)} y1={mt} x2={xOf(b)} y2={mt + plotH} className="nc-vfd-base-line" />
+        <text x={xOf(b) + 4} y={mt + 11} className="nc-vfd-base-label">
+          base
+        </text>
+
+        {/* envelopes */}
+        {MODES.map((m) => (
+          <polyline
+            key={m.key}
+            points={envelope(m.key)}
+            className={`nc-vfd-curve${m.reference ? ' ref' : ''}`}
+            style={{ stroke: m.color }}
+            fill="none"
+          />
+        ))}
+
+        {/* operating point */}
+        <line x1={xOf(outputHz)} y1={mt} x2={xOf(outputHz)} y2={mt + plotH} className="nc-vfd-op-guide" />
+        <circle cx={xOf(outputHz)} cy={yOf(loadPct)} r={4.5} className="nc-vfd-op-dot" />
+        <text x={xOf(outputHz)} y={yOf(loadPct) - 8} className="nc-vfd-op-label" textAnchor="middle">
+          load {Math.round(loadPct)}%
+        </text>
+      </svg>
+
+      {/* legend ties colours to the cards below */}
+      <div className="nc-vfd-chart-legend">
+        {MODES.map((m) => (
+          <span key={m.key} className="nc-vfd-leg-item">
+            <span className="nc-vfd-leg-swatch" style={{ background: m.color }} />
+            {m.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Steady-state trade-off table. Static (independent of the operating point). */
+function AttributeMatrix() {
+  return (
+    <div className="nc-vfd-matrix-wrap">
+      <table className="nc-vfd-matrix">
+        <thead>
+          <tr>
+            <th scope="col">Mode</th>
+            <th scope="col">Speed acc</th>
+            <th scope="col">Turndown</th>
+            <th scope="col">Torque @ 0</th>
+            <th scope="col">Response</th>
+            <th scope="col">Multi-motor</th>
+          </tr>
+        </thead>
+        <tbody>
+          {MODES.map((m) => (
+            <tr key={m.key} className={m.reference ? 'ref' : undefined}>
+              <th scope="row">
+                <span className="nc-vfd-leg-swatch" style={{ background: m.color }} /> {m.name}
+              </th>
+              <td>{m.acc}</td>
+              <td>{m.turndown}</td>
+              <td>{m.standstill}</td>
+              <td>{fmtMs(m.responseMs)}</td>
+              <td>{m.multi}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="nc-vfd-matrix-note">
+        Induction motor. * V/f-boost torque is for starting, not a continuous standstill hold.
+      </div>
+    </div>
+  );
+}
+
 export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
   // Clamp every input for the maths so a hand-edited payload can't push
   // the model out of range; the sliders themselves also clamp on write.
@@ -219,7 +449,6 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
   // n_sync = baseSpeedRpm · f / f_base. Above base it keeps climbing.
   const synchronousRpm = base * (outHz / baseHz);
   const rel = outHz / baseHz; // fraction of base (can exceed 1)
-  const relShape = clamp(rel, 0, 1); // low-speed shaping input for tmaxPct
   const fw = fwFactor(outHz, baseHz); // torque-ceiling multiplier
   const inFieldWeakening = rel > 1.0001;
 
@@ -306,13 +535,16 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
           )}
         </div>
 
+        {/* Capability envelopes + operating point */}
+        <CapabilityChart baseHz={baseHz} fMax={120} outputHz={outHz} loadPct={loadPct} />
+
         {/* One card per mode */}
         <div className="nc-vfd-cards">
           {MODES.map((m) => {
             const droop = droopRpm(m.key, loadPct, ratedSlipPct, base);
             const actualRpm = Math.max(0, synchronousRpm - droop);
             const errPct = synchronousRpm > 0 ? -(droop / synchronousRpm) * 100 : null;
-            const tmaxBase = tmaxPct(m.key, relShape);
+            const tmaxBase = tmaxPct(m.key, clamp(rel, 0, 1));
             const tmax = tmaxBase * fw;
             const ok = loadPct <= tmax;
             const speedFill =
@@ -324,6 +556,7 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
               <div key={m.key} className={`nc-vfd-card${m.reference ? ' nc-vfd-card-ref' : ''}`}>
                 <div className="nc-vfd-card-head">
                   <span className="nc-vfd-card-name">
+                    <span className="nc-vfd-leg-swatch" style={{ background: m.color }} />
                     {m.name}
                     {m.reference && <span className="nc-vfd-ref-tag">ref</span>}
                   </span>
@@ -392,6 +625,9 @@ export function VfdBlock({ block, onChange, onDelete }: VfdBlockProps) {
             );
           })}
         </div>
+
+        {/* Steady-state trade-offs at a glance */}
+        <AttributeMatrix />
 
         {/* Key + honest caveats */}
         <div className="nc-vfd-foot">
