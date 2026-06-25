@@ -347,6 +347,34 @@ export function ToggleRailButtons({
                     Chevron only
                   </button>
                 </div>
+
+                <div className="nc-settings-section">
+                  <div className="nc-variant-heading">Collapsing a folder</div>
+                  <button
+                    type="button"
+                    className={`nc-variant-option ${
+                      treeBehaviour.collapseChildren ? 'nc-variant-option-active' : ''
+                    }`}
+                    onClick={() => treeBehaviour.setCollapseChildren(true)}
+                    role="menuitemradio"
+                    aria-checked={treeBehaviour.collapseChildren}
+                    title="Collapsing a folder also collapses everything inside it. Re-opening shows it collapsed."
+                  >
+                    Collapse subtree
+                  </button>
+                  <button
+                    type="button"
+                    className={`nc-variant-option ${
+                      !treeBehaviour.collapseChildren ? 'nc-variant-option-active' : ''
+                    }`}
+                    onClick={() => treeBehaviour.setCollapseChildren(false)}
+                    role="menuitemradio"
+                    aria-checked={!treeBehaviour.collapseChildren}
+                    title="Collapsing a folder keeps its sub-folders' expanded state, so they reappear when you re-open it."
+                  >
+                    Keep open
+                  </button>
+                </div>
               </div>
 
               {/* ============================================================

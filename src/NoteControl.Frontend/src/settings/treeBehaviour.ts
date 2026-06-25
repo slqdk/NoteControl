@@ -1,12 +1,19 @@
 /**
  * Global tree-behaviour settings (step 36).
  *
- * One preference for now:
+ * Two preferences:
  *   - rowClickExpands: when true (default), clicking ANYWHERE on a
  *     folder row both selects+navigates AND toggles expand. When
  *     false, only the chevron toggles expand; the rest of the row
  *     just selects+navigates. The double-click-toggle behaviour is
  *     unaffected — it always toggles, in either mode.
+ *   - collapseChildren: when true (default), collapsing a folder also
+ *     collapses its entire subtree — every descendant drops out of the
+ *     expanded set, so re-opening the folder shows it collapsed rather
+ *     than re-exploding to its prior state. When false, a collapse only
+ *     hides the folder; its sub-folders keep their expanded state and
+ *     reappear on re-open. Independent of rowClickExpands: this governs
+ *     the RESULT of a collapse, rowClickExpands governs the TRIGGER.
  *
  * Why this exists: the previous behaviour (expand only via chevron)
  * felt fiddly — the chevron is a tiny target and people keep
@@ -38,6 +45,20 @@ export interface TreeBehaviourSettings {
    * row body just selects+navigates.
    */
   rowClickExpands: boolean;
+
+  /**
+   * If true (default): collapsing a folder also collapses its entire
+   * subtree — every descendant is removed from the expanded set, so
+   * re-opening the folder shows its children collapsed rather than
+   * restoring the previously-expanded state. If false: collapsing a
+   * folder only hides it; descendants keep their expanded state and
+   * reappear when the folder is re-opened.
+   *
+   * Independent of rowClickExpands — that governs what TRIGGERS a
+   * collapse (row click vs chevron vs double-click); this governs the
+   * RESULT. They compose: a collapse from any trigger honours this.
+   */
+  collapseChildren: boolean;
 }
 
 const DEFAULTS: TreeBehaviourSettings = {
@@ -45,6 +66,11 @@ const DEFAULTS: TreeBehaviourSettings = {
   // dramatically reduces the "why didn't that do anything" feeling
   // when you mis-click the chevron by 2 pixels.
   rowClickExpands: true,
+  // Default ON — collapsing a parent tidies the whole subtree away, so
+  // a folder you re-open starts collapsed instead of re-exploding to
+  // wherever you'd left it. Matches the "collapse everything under
+  // here" instinct most people have when they close a folder.
+  collapseChildren: true,
 };
 
 // ---------------------------------------------------- persistence
@@ -61,6 +87,13 @@ export function loadTreeBehaviour(): TreeBehaviourSettings {
         typeof parsed.rowClickExpands === 'boolean'
           ? parsed.rowClickExpands
           : DEFAULTS.rowClickExpands,
+      // Absent key (saved blobs that predate this setting) falls back
+      // to the default — so existing users get collapse-subtree ON
+      // without any migration step.
+      collapseChildren:
+        typeof parsed.collapseChildren === 'boolean'
+          ? parsed.collapseChildren
+          : DEFAULTS.collapseChildren,
     };
   } catch {
     return DEFAULTS;
@@ -103,9 +136,11 @@ if (typeof window !== 'undefined') {
 export function useTreeBehaviour(): {
   settings: TreeBehaviourSettings;
   setRowClickExpands: (v: boolean) => void;
-  // Convenience: mirror the value at the top level so consumers can
+  setCollapseChildren: (v: boolean) => void;
+  // Convenience: mirror the values at the top level so consumers can
   // destructure a single boolean rather than reach through .settings.
   rowClickExpands: boolean;
+  collapseChildren: boolean;
 } {
   const [settings, setSettings] = useState<TreeBehaviourSettings>(() =>
     loadTreeBehaviour(),
@@ -125,7 +160,10 @@ export function useTreeBehaviour(): {
   return {
     settings,
     rowClickExpands: settings.rowClickExpands,
+    collapseChildren: settings.collapseChildren,
     setRowClickExpands: (v) =>
       saveTreeBehaviour({ ...loadTreeBehaviour(), rowClickExpands: v }),
+    setCollapseChildren: (v) =>
+      saveTreeBehaviour({ ...loadTreeBehaviour(), collapseChildren: v }),
   };
 }

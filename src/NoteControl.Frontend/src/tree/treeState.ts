@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { notesApi } from '../api/client';
 import type { FolderListingDto } from '../api/types';
+import { loadTreeBehaviour } from '../settings/treeBehaviour';
 
 /**
  * Persistent UI state for one vault's tree + rails.
@@ -269,8 +270,39 @@ export function useTreeData(vaultId: string): TreeData {
       setExpanded((prev) => {
         const next = new Set(prev);
         if (next.has(folderPath)) {
+          // Collapse.
           next.delete(folderPath);
+          // Recursive collapse: when collapseChildren is on, a collapse
+          // also strips the WHOLE subtree out of the expanded set, so
+          // re-opening this folder shows its children collapsed instead
+          // of re-exploding to wherever the user had left them.
+          //
+          // We read the setting via loadTreeBehaviour() (a plain
+          // localStorage read) rather than the hook, so useTreeData
+          // keeps its single-arg signature and doesn't re-render on a
+          // setting change it otherwise ignores. Toggles are rare, so
+          // the per-call read is free.
+          //
+          // Descendants are matched by path prefix: every expanded
+          // entry under "<folderPath>/" is below this folder. The
+          // folder itself lacks the trailing slash so it isn't matched
+          // here (already deleted above); a sibling that merely shares
+          // a name prefix ("Motion" vs "MotionX") is excluded by the
+          // slash. Root ("") has no path prefix and is always-expanded
+          // implicitly, so it's skipped — collapsing root isn't a thing.
+          //
+          // Only USER-initiated collapse reaches this branch: every
+          // programmatic toggle() in VaultLayout is guarded by
+          // !expanded.has(...), so those always expand, never collapse.
+          if (folderPath !== '' && loadTreeBehaviour().collapseChildren) {
+            const prefix = `${folderPath}/`;
+            // Snapshot before mutating to keep iteration unambiguous.
+            for (const path of [...next]) {
+              if (path.startsWith(prefix)) next.delete(path);
+            }
+          }
         } else {
+          // Expand.
           next.add(folderPath);
           // Lazy load on first expand.
           if (!childrenByPath.has(folderPath) && !loadingByPath.has(folderPath)) {
