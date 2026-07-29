@@ -311,15 +311,22 @@ const NS_OBJECTID = 'http://www.3s-software.com/plcopenxml/objectid';
 const NS_PROJECTSTRUCTURE =
   'http://www.3s-software.com/plcopenxml/projectstructure';
 
-/** Elementary IEC types emitted as atomic elements (<BOOL/> etc).
- *  Everything else becomes <derived name="raw"/>. */
+/** Elementary IEC types emitted as atomic UPPERCASE elements
+ *  (<BOOL/> etc). This is exactly the tc6_0200 schema's list —
+ *  note the deliberate absences: STRING/WSTRING are the special
+ *  lowercase <string/>/<wstring/> elements (they carry a length
+ *  attribute), and LTIME/CHAR/WCHAR do not exist in the schema at
+ *  all (they fall through to <derived/>). Emitting e.g. <STRING/>
+ *  or <LTIME/> makes TwinCAT reject the entire file as "Invalid
+ *  PLCopenXML" — found the hard way via XSD validation of a
+ *  failing export. */
 const ELEMENTARY_TYPES = new Set([
   'BOOL', 'BYTE', 'WORD', 'DWORD', 'LWORD',
   'SINT', 'INT', 'DINT', 'LINT',
   'USINT', 'UINT', 'UDINT', 'ULINT',
   'REAL', 'LREAL',
-  'TIME', 'LTIME', 'DATE', 'TOD', 'TIME_OF_DAY',
-  'DT', 'DATE_AND_TIME', 'STRING', 'WSTRING', 'CHAR', 'WCHAR',
+  'TIME', 'DATE', 'TOD', 'TIME_OF_DAY',
+  'DT', 'DATE_AND_TIME',
 ]);
 
 function esc(text: string): string {
@@ -458,15 +465,68 @@ function parseSections(decl: string): ParsedSection[] {
 }
 
 function typeEl(rawType: string, indent: string): string {
-  const upper = rawType.toUpperCase();
+  return `${indent}<type>${typeInner(rawType)}</type>`;
+}
+
+/**
+ * Map a raw ST type string to its tc6_0200 element. Handles, in
+ * order: elementary uppercase types, STRING/WSTRING (with optional
+ * (n) length), ARRAY[l..u,…] OF base (recursively), POINTER TO
+ * base (recursively). Everything else — struct types, FB types,
+ * namespaced types, REFERENCE TO, subranges — becomes
+ * <derived name="raw"/>, which the schema allows as a plain
+ * string. The plain-text interface remains the authoritative
+ * declaration either way.
+ */
+function typeInner(rawType: string): string {
+  const raw = rawType.trim();
+  const upper = raw.toUpperCase();
+
   if (ELEMENTARY_TYPES.has(upper)) {
-    // TOD / DT canonical forms.
     const canonical =
       upper === 'TIME_OF_DAY' ? 'TOD' :
       upper === 'DATE_AND_TIME' ? 'DT' : upper;
-    return `${indent}<type><${canonical} /></type>`;
+    return `<${canonical} />`;
   }
-  return `${indent}<type><derived name="${escAttr(rawType)}" /></type>`;
+
+  // STRING / WSTRING — lowercase elements, optional length in
+  // parentheses or brackets: STRING(80) / STRING[80].
+  const str = /^(W?STRING)\s*(?:[([]\s*([^\])]+?)\s*[)\]])?$/i.exec(raw);
+  if (str) {
+    const el = str[1].toLowerCase() === 'wstring' ? 'wstring' : 'string';
+    return str[2]
+      ? `<${el} length="${escAttr(str[2])}" />`
+      : `<${el} />`;
+  }
+
+  // ARRAY[1..20] OF LREAL / ARRAY[1..2, 0..X.Y] OF Foo — bounds
+  // may be symbolic (the schema's lower/upper are strings; real
+  // TwinCAT exports use e.g. upper="XTS_Configuration.MoverCount").
+  const arr = /^ARRAY\s*\[([^\]]+)\]\s*OF\s+(.+)$/i.exec(raw);
+  if (arr) {
+    const dims = arr[1].split(',').map((d) => {
+      const parts = d.split('..');
+      if (parts.length !== 2) return null;
+      return { lower: parts[0].trim(), upper: parts[1].trim() };
+    });
+    if (dims.every((d) => d !== null)) {
+      const dimEls = dims
+        .map(
+          (d) =>
+            `<dimension lower="${escAttr(d!.lower)}" upper="${escAttr(d!.upper)}" />`,
+        )
+        .join('');
+      return `<array>${dimEls}<baseType>${typeInner(arr[2])}</baseType></array>`;
+    }
+  }
+
+  // POINTER TO base.
+  const ptr = /^POINTER\s+TO\s+(.+)$/i.exec(raw);
+  if (ptr) {
+    return `<pointer><baseType>${typeInner(ptr[1])}</baseType></pointer>`;
+  }
+
+  return `<derived name="${escAttr(raw)}" />`;
 }
 
 function varEl(v: ParsedVar, indent: string): string {
@@ -525,14 +585,7 @@ function interfaceEl(
 /** Bare type element without the <type> wrapper (returnType holds
  *  the type element directly). */
 function typeElInner(rawType: string, indent: string): string {
-  const upper = rawType.toUpperCase();
-  if (ELEMENTARY_TYPES.has(upper)) {
-    const canonical =
-      upper === 'TIME_OF_DAY' ? 'TOD' :
-      upper === 'DATE_AND_TIME' ? 'DT' : upper;
-    return `${indent}<${canonical} />`;
-  }
-  return `${indent}<derived name="${escAttr(rawType)}" />`;
+  return `${indent}${typeInner(rawType)}`;
 }
 
 /** `METHOD Name : TYPE` / `PROPERTY Name : TYPE` → TYPE, else null. */
