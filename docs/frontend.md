@@ -116,11 +116,19 @@ Configurable from the same panel:
   overrides.
 
 ### Tree behaviour
-One preference today:
+Two preferences:
 - **Row click expands**: when true (default), clicking anywhere
   on a folder row both selects+navigates AND toggles expansion.
   When false, only the chevron toggles expansion. Double-click
   always toggles in either mode.
+- **Collapse subtree**: when true (default), collapsing a folder
+  also collapses everything under it — its whole subtree drops
+  out of the expanded set, so re-opening the folder shows it
+  collapsed rather than restoring the previously-expanded state.
+  When false, collapsing only hides the folder; its sub-folders
+  keep their expanded state and reappear on re-open. Independent
+  of the trigger: a collapse via row click, chevron, or double-
+  click all honour this.
 
 Server-side configuration (logging, networking, HTTPS, SMTP,
 backups, authentication knobs, etc.) is in the **tray**, not
@@ -783,7 +791,7 @@ Per-browser preferences and ephemeral state:
 |---|---|
 | `nc:appearance` | App frame width + gradient preset |
 | `nc:note-defaults` | Default note width / font / font size |
-| `nc:tree-behaviour` | rowClickExpands flag |
+| `nc:tree-behaviour` | rowClickExpands + collapseChildren flags |
 | `nc:last-vault-id` | Last vault opened (for redirect from `/vaults`) |
 | `nc:tree-expanded:<vaultId>` | Set of expanded folder paths per vault |
 | `nc:search-vaults-excluded` | JSON array of vault IDs un-ticked in the search scope row. Stores exclusions (not inclusions) so new vaults appear ticked by default. |
