@@ -339,17 +339,29 @@ function xhtmlEl(text: string, indent: string): string {
   return `${indent}<xhtml xmlns="http://www.w3.org/1999/xhtml">${esc(text)}</xhtml>`;
 }
 
+/** The bare <data> element carrying the plain-text declaration —
+ *  used directly inside the pou-level addData (which also holds
+ *  the ObjectId data element). */
+function interfaceAsPlainTextData(decl: string, indent: string): string {
+  const i = indent;
+  return [
+    `${i}<data name="${NS_INTERFACE_PLAINTEXT}" handleUnknown="implementation">`,
+    `${i}  <InterfaceAsPlainText>`,
+    xhtmlEl(decl, `${i}    `),
+    `${i}  </InterfaceAsPlainText>`,
+    `${i}</data>`,
+  ].join('\r\n');
+}
+
+/** The same data element wrapped in its own <addData> — the form
+ *  nested inside each var section. */
 function interfaceAsPlainTextAddData(decl: string, indent: string): string {
   const i = indent;
   return [
     `${i}<addData>`,
-    `${i}  <data name="${NS_INTERFACE_PLAINTEXT}" handleUnknown="implementation">`,
-    `${i}    <InterfaceAsPlainText>`,
-    xhtmlEl(decl, `${i}      `),
-    `${i}    </InterfaceAsPlainText>`,
-    `${i}  </data>`,
+    interfaceAsPlainTextData(decl, `${i}  `),
     `${i}</addData>`,
-  ].join('\n');
+  ].join('\r\n');
 }
 
 function stBody(impl: string, indent: string): string {
@@ -360,7 +372,7 @@ function stBody(impl: string, indent: string): string {
     xhtmlEl(impl, `${i}    `),
     `${i}  </ST>`,
     `${i}</body>`,
-  ].join('\n');
+  ].join('\r\n');
 }
 
 // --- Structured interface (best-effort) -------------------------
@@ -467,7 +479,7 @@ function varEl(v: ParsedVar, indent: string): string {
     );
   }
   lines.push(`${i}</variable>`);
-  return lines.join('\n');
+  return lines.join('\r\n');
 }
 
 /** Structured var sections + optional returnType (for methods /
@@ -484,15 +496,30 @@ function interfaceEl(
     lines.push(typeElInner(returnTypeRaw, `${i}    `));
     lines.push(`${i}  </returnType>`);
   }
+  // TwinCAT's importer reads the plain-text declaration from an
+  // addData nested INSIDE each var section (and from the pou-level
+  // addData after </body>) — NOT from a direct child of
+  // <interface>. Verified against a real TwinCAT 3.5.21 export
+  // (FB_XTS_Init4C.xml), which repeats the identical full
+  // declaration once per section plus once at pou level. We
+  // mirror that exactly. When the line-based parse yields no
+  // sections at all (e.g. a bare "PROPERTY Count : DINT" member
+  // declaration), fall back to an interface-level copy so our own
+  // importer's subtree search still finds the text.
+  let emittedSections = 0;
   for (const s of parseSections(decl)) {
     if (s.vars.length === 0) continue;
+    emittedSections++;
     lines.push(`${i}  <${s.tag}>`);
     for (const v of s.vars) lines.push(varEl(v, `${i}    `));
+    lines.push(interfaceAsPlainTextAddData(decl, `${i}    `));
     lines.push(`${i}  </${s.tag}>`);
   }
-  lines.push(interfaceAsPlainTextAddData(decl, `${i}  `));
+  if (emittedSections === 0) {
+    lines.push(interfaceAsPlainTextAddData(decl, `${i}  `));
+  }
   lines.push(`${i}</interface>`);
-  return lines.join('\n');
+  return lines.join('\r\n');
 }
 
 /** Bare type element without the <type> wrapper (returnType holds
@@ -534,7 +561,7 @@ function methodData(m: ExportMember, objectId: string, indent: string): string {
     stBody(m.implementation, `${i}    `),
     `${i}  </Method>`,
     `${i}</data>`,
-  ].join('\n');
+  ].join('\r\n');
 }
 
 function actionData(m: ExportMember, objectId: string, indent: string): string {
@@ -545,7 +572,7 @@ function actionData(m: ExportMember, objectId: string, indent: string): string {
     stBody(m.implementation, `${i}    `),
     `${i}  </Action>`,
     `${i}</data>`,
-  ].join('\n');
+  ].join('\r\n');
 }
 
 function propertyData(
@@ -584,13 +611,13 @@ function propertyData(
   }
   lines.push(`${i}  </Property>`);
   lines.push(`${i}</data>`);
-  return lines.join('\n');
+  return lines.join('\r\n');
 }
 
 // --- Whole document ---------------------------------------------
 
 function buildPlcopenXml(pous: ExportPou[], projectName: string): string {
-  const now = new Date().toISOString();
+  const now = localTimestamp();
   const lines: string[] = [];
   lines.push('<?xml version="1.0" encoding="utf-8"?>');
   lines.push('<project xmlns="http://www.plcopen.org/xml/tc6_0200">');
@@ -601,10 +628,21 @@ function buildPlcopenXml(pous: ExportPou[], projectName: string): string {
     `  <contentHeader name="${escAttr(projectName || 'NoteControl export')}" modificationDateTime="${now}">`,
   );
   lines.push('    <coordinateInfo>');
-  lines.push('      <fbd><scaling x="1" y="1" /></fbd>');
-  lines.push('      <ld><scaling x="1" y="1" /></ld>');
-  lines.push('      <sfc><scaling x="1" y="1" /></sfc>');
+  lines.push('      <fbd>');
+  lines.push('        <scaling x="1" y="1" />');
+  lines.push('      </fbd>');
+  lines.push('      <ld>');
+  lines.push('        <scaling x="1" y="1" />');
+  lines.push('      </ld>');
+  lines.push('      <sfc>');
+  lines.push('        <scaling x="1" y="1" />');
+  lines.push('      </sfc>');
   lines.push('    </coordinateInfo>');
+  lines.push('    <addData>');
+  lines.push('      <data name="http://www.3s-software.com/plcopenxml/projectinformation" handleUnknown="implementation">');
+  lines.push('        <ProjectInformation />');
+  lines.push('      </data>');
+  lines.push('    </addData>');
   lines.push('  </contentHeader>');
   lines.push('  <types>');
   lines.push('    <dataTypes />');
@@ -676,9 +714,13 @@ function buildPlcopenXml(pous: ExportPou[], projectName: string): string {
       }
     }
 
-    lines.push(
-      `          <data name="${NS_OBJECTID}" handleUnknown="discard"><ObjectId>${pouId}</ObjectId></data>`,
-    );
+    // Pou-level plain-text copy — the location TwinCAT's importer
+    // primarily reads (real exports carry it here in addition to
+    // the per-section copies).
+    lines.push(interfaceAsPlainTextData(pou.declaration, '          '));
+    lines.push(`          <data name="${NS_OBJECTID}" handleUnknown="discard">`);
+    lines.push(`            <ObjectId>${pouId}</ObjectId>`);
+    lines.push('          </data>');
     lines.push('        </addData>');
     lines.push('      </pou>');
 
@@ -716,8 +758,17 @@ function buildPlcopenXml(pous: ExportPou[], projectName: string): string {
   lines.push('    </data>');
   lines.push('  </addData>');
   lines.push('</project>');
-  lines.push('');
-  return lines.join('\n');
+  return lines.join('\r\n');
+}
+
+/** Local wall-clock timestamp in TwinCAT's export format:
+ *  "2026-07-27T16:08:27.6428889" — no timezone suffix, 7-digit
+ *  fraction. */
+function localTimestamp(): string {
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const frac = String(d.getMilliseconds()).padStart(3, '0') + '0000';
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${frac}`;
 }
 
 // ---------------------------------------------------------------
@@ -727,7 +778,8 @@ function buildPlcopenXml(pous: ExportPou[], projectName: string): string {
 /** Trigger a browser download of the XML via a temporary blob URL.
  *  Kept here so callers only need one import. */
 export function downloadPlcopenXml(xml: string, fileName: string): void {
-  const blob = new Blob([xml], { type: 'application/xml' });
+  // UTF-8 BOM + CRLF markup matches TwinCAT's own export files.
+  const blob = new Blob(['\uFEFF', xml], { type: 'application/xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
