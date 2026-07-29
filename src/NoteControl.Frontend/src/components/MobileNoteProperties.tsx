@@ -580,6 +580,23 @@ export function MobileNoteProperties({
                 >
                   📥 Export as .md
                 </a>
+                {/* PLCopen XML export — client-side scan of the live
+                    editor doc via the panel→editor window-event
+                    channel; mirrors the desktop panel button. */}
+                <button
+                  type="button"
+                  className="nc-btn"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent('nc:note-export-plcopen', {
+                        detail: { path: notePath },
+                      }),
+                    )
+                  }
+                  title="Export the note's POU structures as a TwinCAT 3 PLCopenXML file."
+                >
+                  ⚙ Export PLCopenXML
+                </button>
               </div>
             </>
           )}

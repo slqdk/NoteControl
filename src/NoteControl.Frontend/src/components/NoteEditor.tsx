@@ -37,6 +37,7 @@ import {
 } from '../editor/MathPasteExtension';
 import { MathExtension } from '../editor/MathExtension';
 import { refreshTemplates } from '../editor/templateCache';
+import { scanDocForPous, downloadPlcopenXml } from '../editor/plcopenExport';
 import { ApiError, assetsApi, notesApi } from '../api/client';
 import { useNoteDefaults, resolveNoteAppearance } from '../settings/noteDefaults';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -1101,6 +1102,47 @@ export function NoteEditor({
     return () => {
       window.removeEventListener('nc:note-tiptap-undo', onUndoRequest);
       window.removeEventListener('nc:note-tiptap-redo', onRedoRequest);
+    };
+  }, [editor, initialNote.path]);
+
+  // PLCopen XML export. The Properties panel (desktop + mobile)
+  // dispatches nc:note-export-plcopen with { path }; only the
+  // editor for that note reacts. The scan runs against the LIVE
+  // editor document (not the last-saved markdown), so unsaved
+  // edits are included — that's the intuitive behaviour ("export
+  // what I see"). Same panel→editor window-event channel as
+  // undo/redo above; keeps the panel decoupled from the editor.
+  useEffect(() => {
+    if (!editor) return;
+    function onExportPlcopen(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (ce.detail?.path !== initialNote.path) return;
+      const baseName = initialNote.path
+        .split('/').pop()!
+        .replace(/\.md$/i, '');
+      const result = scanDocForPous(editor!.state.doc, baseName);
+      if (result.pous.length === 0) {
+        showToast(
+          'No PLCopen structures found — need an st code block titled "Declaration" (plus "Implementation").',
+          5000,
+        );
+        return;
+      }
+      downloadPlcopenXml(result.xml, result.fileName);
+      const names = result.pous.map((p) => p.name).join(', ');
+      showToast(
+        result.warnings.length === 0
+          ? `Exported ${names} as PLCopenXML`
+          : `Exported ${names} as PLCopenXML (${result.warnings.length} block(s) skipped — see console)`,
+        5000,
+      );
+      for (const w of result.warnings) {
+        console.warn('[plcopen-export]', w);
+      }
+    }
+    window.addEventListener('nc:note-export-plcopen', onExportPlcopen);
+    return () => {
+      window.removeEventListener('nc:note-export-plcopen', onExportPlcopen);
     };
   }, [editor, initialNote.path]);
 

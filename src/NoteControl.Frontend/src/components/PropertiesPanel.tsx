@@ -985,6 +985,30 @@ export function PropertiesPanel({
                   📥 Export as .md
                 </a>
                 {/*
+                  PLCopen XML export. Client-side: the note's LIVE
+                  editor document is scanned for POU structures
+                  (Declaration/Implementation st blocks + member
+                  blocks), so this goes through the panel→editor
+                  window-event channel (same as undo/redo) rather
+                  than a server exportUrl. Visible to viewers too —
+                  export is a read operation. If the note holds no
+                  POU structures the editor answers with a toast.
+                */}
+                <button
+                  type="button"
+                  className="nc-btn"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent('nc:note-export-plcopen', {
+                        detail: { path: selection.path },
+                      }),
+                    )
+                  }
+                  title="Export the note's POU structures (Declaration/Implementation code blocks and their methods, actions, and properties) as a TwinCAT 3 PLCopenXML file."
+                >
+                  ⚙ Export PLCopenXML
+                </button>
+                {/*
                   Add Note Widget. Notes-only. Dispatches a window
                   CustomEvent the EditorPage listens for and appends the
                   chosen widget to this note's widget list (rendered in
