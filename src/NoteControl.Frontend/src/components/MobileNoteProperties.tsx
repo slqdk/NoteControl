@@ -219,7 +219,7 @@ export function MobileNoteProperties({
       // write bumps the server etag).
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: notePath, etag: updated.etag },
+          detail: { path: notePath, etag: updated.etag, body: updated.body },
         }),
       );
       setRefreshTick((t) => t + 1);
@@ -250,7 +250,7 @@ export function MobileNoteProperties({
       // Frontmatter rewrite bumped the server etag too — pass it on.
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: notePath, etag: updated.etag },
+          detail: { path: notePath, etag: updated.etag, body: updated.body },
         }),
       );
       setRefreshTick((t) => t + 1);
@@ -283,7 +283,7 @@ export function MobileNoteProperties({
       // Frontmatter rewrite bumped the server etag — pass it on.
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: notePath, etag: updated.etag },
+          detail: { path: notePath, etag: updated.etag, body: updated.body },
         }),
       );
     } catch (e) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, assignmentsApi } from '../api/client';
 import type {
@@ -6,6 +6,8 @@ import type {
   AssignmentsConfigDto,
 } from '../api/types';
 import { useDebouncedSave } from './useDebouncedSave';
+import { mergeById, saveSidecar, type SidecarSyncState } from '../util/sidecarSync';
+import { showToast } from '../utils/toast';
 
 /**
  * Per-vault assignments data layer. Owns the AssignmentsConfigDto
@@ -70,6 +72,8 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
   const [config, setConfig] = useState<AssignmentsConfigDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // ETag + last-known server copy for conflict-safe saves.
+  const syncRef = useRef<SidecarSyncState<AssignmentsConfigDto>>({ etag: null, base: null });
 
   // ----- initial load
   useEffect(() => {
@@ -79,8 +83,12 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
     setConfig(null);
     (async () => {
       try {
-        const dto = await assignmentsApi.getConfig(vaultId);
-        if (!cancelled) setConfig(dto);
+        const { data, etag } = await assignmentsApi.getConfigVersioned(vaultId);
+        if (cancelled) return;
+        // Fresh sync state per load: a save still in flight for the
+        // previous vault keeps its own object (captured in doSave).
+        syncRef.current = { etag, base: data };
+        setConfig(data);
       } catch (e) {
         if (!cancelled) {
           setLoadError(
@@ -100,9 +108,35 @@ export function useAssignments(vaultId: string | undefined): UseAssignmentsResul
   const doSave = useCallback(
     (cfg: AssignmentsConfigDto) => {
       if (!vaultId) return;
+      // Capture this vault's sync state + id: a flush after a vault
+      // switch must still write to the vault the edit belongs to.
+      const state = syncRef.current;
+      const vid = vaultId;
       void (async () => {
         try {
-          await assignmentsApi.saveConfig(vaultId, cfg);
+          // If another tab/device saved since we loaded, the server
+          // answers 412; saveSidecar re-reads, merges our change into
+          // theirs per item, and retries (util/sidecarSync.ts).
+          const { saved, merged } = await saveSidecar<AssignmentsConfigDto>({
+            local: cfg,
+            state,
+            put: (d, etag) => assignmentsApi.saveConfigVersioned(vid, d, etag),
+            load: () => assignmentsApi.getConfigVersioned(vid),
+            merge: (base, local, server) => ({
+              ...server,
+              assignments: mergeById(base.assignments, local.assignments, server.assignments),
+            }),
+          });
+          if (merged && syncRef.current === state) {
+            // Show what's now on the server, keeping any edits made
+            // while this save was in flight.
+            setConfig((cur) =>
+              cur
+                ? { ...saved, assignments: mergeById(cfg.assignments, cur.assignments, saved.assignments) }
+                : cur,
+            );
+            showToast('These assignments were also changed in another tab or device — both changes were kept.', 5000);
+          }
           setSaveError(null);
         } catch (e) {
           setSaveError(

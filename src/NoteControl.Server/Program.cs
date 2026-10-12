@@ -296,7 +296,10 @@ try
         NoteControl.Server.Startpage.Services.StartpageConfigService>();
     builder.Services.AddSingleton<NoteControl.Server.Startpage.Services.IFeedFetcher,
         NoteControl.Server.Startpage.Services.FeedFetcher>();
-    builder.Services.AddHttpClient("feedfetcher");
+    // SSRF guard: every connection (redirect hops included) is checked
+    // against the resolved address — see OutboundAddressGuard.
+    builder.Services.AddHttpClient("feedfetcher")
+        .ConfigurePrimaryHttpMessageHandler(NoteControl.Server.Startpage.Services.OutboundAddressGuard.CreateHandler);
 
     // LinkPreviewFetcher: same lifetime + reasoning as FeedFetcher
     // (singleton with in-memory cache + dedicated HttpClient pool).
@@ -304,7 +307,10 @@ try
     // much less often than feed content.
     builder.Services.AddSingleton<NoteControl.Server.Startpage.Services.ILinkPreviewFetcher,
         NoteControl.Server.Startpage.Services.LinkPreviewFetcher>();
-    builder.Services.AddHttpClient("linkpreviewfetcher");
+    // SSRF guard: every connection (redirect hops included) is checked
+    // against the resolved address — see OutboundAddressGuard.
+    builder.Services.AddHttpClient("linkpreviewfetcher")
+        .ConfigurePrimaryHttpMessageHandler(NoteControl.Server.Startpage.Services.OutboundAddressGuard.CreateHandler);
 
     // Assignments service. Per-vault JSON file at
     // {vault}/.notesapp/assignments.json. Scoped because it depends
@@ -329,6 +335,9 @@ try
     builder.Services.AddSingleton<IIndexConnectionPool, IndexConnectionPool>();
     builder.Services.AddSingleton<IIndexBuildState, IndexBuildState>();
     builder.Services.AddScoped<IIndexService, IndexService>();
+    // Background rebuilds (register / sample data / restore) run in
+    // their own DI scope — never on the request's DbContext.
+    builder.Services.AddSingleton<IBackgroundIndexRebuilder, BackgroundIndexRebuilder>();
     builder.Services.AddScoped<INoteIndexer, NoteIndexer>();
 
     // Admin/config services (step 16).
@@ -368,7 +377,7 @@ try
     builder.Services.AddSingleton<NoteControl.Server.Backups.Services.IBackupService,
         NoteControl.Server.Backups.Services.BackupService>();
     // RestoreService: scoped because it depends on the scoped
-    // ServerDbContext and IIndexService.
+    // ServerDbContext.
     builder.Services.AddScoped<NoteControl.Server.Backups.Services.IRestoreService,
         NoteControl.Server.Backups.Services.RestoreService>();
     // BackupScheduler: hosted service. Wakes up every minute,
@@ -538,6 +547,29 @@ try
     // -------------------------------------------------------------------
     // Middleware pipeline.
     // -------------------------------------------------------------------
+
+    // Forwarded headers FIRST, so everything after it (login throttle,
+    // audit log, session IP, local-token loopback gate) sees the real
+    // client address instead of Caddy's 127.0.0.1. Without it, behind
+    // Caddy all users shared one per-IP login bucket — five bad logins
+    // a minute from any bot locked everyone out.
+    //
+    // Only X-Forwarded-For, and only from loopback: the defaults trust
+    // 127.0.0.0/8 and ::1 (Caddy on the same machine) and nothing else,
+    // with ForwardLimit = 1 (the address Caddy itself appended). A LAN
+    // or internet client connecting to Kestrel directly can't spoof its
+    // address by sending the header. X-Forwarded-Proto is deliberately
+    // left out: it would flip Request.IsHttps and with it HSTS output —
+    // a separate decision.
+    var forwarded = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor,
+    };
+    // ASP.NET's defaults: KnownNetworks = 127.0.0.0/8, KnownProxies = ::1.
+    // Add IPv4-mapped ::ffff:127.0.0.1 for dual-stack sockets.
+    forwarded.KnownProxies.Add(System.Net.IPAddress.Parse("::ffff:127.0.0.1"));
+    app.UseForwardedHeaders(forwarded);
+
     if (app.Environment.IsDevelopment())
     {
         app.UseSwagger();

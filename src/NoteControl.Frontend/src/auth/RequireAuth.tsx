@@ -16,7 +16,13 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation();
 
   if (state.status === 'loading') {
-    return <div style={{ padding: 24, color: '#64748b' }}>Loading…</div>;
+    return (
+      <div style={{ padding: 24, color: '#64748b' }}>
+        {state.retrying
+          ? 'Can\u2019t reach the NoteControl server — retrying…'
+          : 'Loading…'}
+      </div>
+    );
   }
 
   if (state.status === 'anonymous') {

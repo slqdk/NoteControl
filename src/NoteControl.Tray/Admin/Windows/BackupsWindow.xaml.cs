@@ -67,8 +67,10 @@ public partial class BackupsWindow : Window
         else
         {
             var when = s.LastRunAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            // A successful run can still carry a warning (files that
+            // couldn't be copied) in LastRunError.
             var outcome = s.LastRunSuccess == true
-                ? "✓ succeeded"
+                ? (s.LastRunError is null ? "✓ succeeded" : "⚠ succeeded with warnings: " + s.LastRunError)
                 : "✗ failed: " + (s.LastRunError ?? "(no error message)");
             var dur = s.LastRunDurationMs is null ? "" : $" ({s.LastRunDurationMs} ms)";
             LastRunText.Text = $"{when} — {outcome}{dur}";
@@ -114,6 +116,12 @@ public partial class BackupsWindow : Window
             if (result.Success)
             {
                 SetBusy(false, $"✓ Backup {result.BackupId} created in {result.DurationMs} ms ({FormatBytes(result.BytesCopied)}).");
+                if (result.Error is not null)
+                {
+                    MessageBox.Show(this,
+                        "Backup created, but with warnings:\n\n" + result.Error,
+                        "NoteControl", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
             }
             else
             {
@@ -124,11 +132,18 @@ public partial class BackupsWindow : Window
             }
             await ReloadAsync();
         }
-        catch (AdminClientException ex)
+        catch (Exception ex)
         {
+            // Includes HttpRequestException / TaskCanceledException
+            // (server restarted, network dropped) — an async-void
+            // handler must not let those escape. The server keeps
+            // running the backup even if this call fails.
             SetBusy(false, "");
-            MessageBox.Show(this, "Run-now failed: " + ex.Message,
+            MessageBox.Show(this,
+                "Run-now request failed: " + ex.Message + "\n\n" +
+                "The backup may still be running or have completed on the server — press Reload to check.",
                 "NoteControl", MessageBoxButton.OK, MessageBoxImage.Error);
+            try { await ReloadAsync(); } catch { /* status stays as it was */ }
         }
     }
 

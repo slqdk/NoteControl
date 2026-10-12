@@ -175,6 +175,9 @@ public sealed class AssignmentsConfigService : IAssignmentsConfigService
         }
     }
 
+    public Task<string> GetConfigFilePathAsync(Guid vaultId, CancellationToken ct = default)
+        => ResolveConfigPathAsync(vaultId, ct);
+
     private async Task<string> ResolveConfigPathAsync(Guid vaultId, CancellationToken ct)
     {
         var vault = await _db.Vaults

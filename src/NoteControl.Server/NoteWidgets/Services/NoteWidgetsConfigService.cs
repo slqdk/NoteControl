@@ -175,6 +175,9 @@ public sealed class NoteWidgetsConfigService : INoteWidgetsConfigService
     private static NoteWidgetsConfigDto Empty() =>
         new(CurrentSchemaVersion, new Dictionary<string, IReadOnlyList<NoteWidgetDto>>());
 
+    public Task<string> GetConfigFilePathAsync(Guid vaultId, CancellationToken ct = default)
+        => ResolveConfigPathAsync(vaultId, ct);
+
     private async Task<string> ResolveConfigPathAsync(Guid vaultId, CancellationToken ct)
     {
         var vault = await _db.Vaults

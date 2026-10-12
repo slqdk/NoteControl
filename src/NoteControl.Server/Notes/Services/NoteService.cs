@@ -223,7 +223,7 @@ public sealed class NoteService : INoteService
             Directory.CreateDirectory(parent);
         }
 
-        await File.WriteAllTextAsync(absolute, fullText, NoBomUtf8, ct);
+        await WriteNoteFileAtomicAsync(absolute, fullText);
 
         var lastModified = new FileInfo(absolute).LastWriteTimeUtc;
         // Fire and forget into the indexer. NoteIndexer swallows errors so
@@ -397,7 +397,7 @@ public sealed class NoteService : INoteService
         }
 
         var newText = FrontmatterCodec.Combine(fm, bodyToWrite);
-        await File.WriteAllTextAsync(absolute, newText, NoBomUtf8, ct);
+        await WriteNoteFileAtomicAsync(absolute, newText);
 
         // The server-side snapshot ring (.notesapp/history/) is gone. The
         // archived release versions list (written on entering Released
@@ -569,7 +569,7 @@ public sealed class NoteService : INoteService
         if (rewroteBody)
         {
             var newText = FrontmatterCodec.Combine(fm, body);
-            await File.WriteAllTextAsync(newAbsolute, newText, NoBomUtf8, ct);
+            await WriteNoteFileAtomicAsync(newAbsolute, newText);
             // Refresh raw so the ETag and FileInfo below see the rewrite.
             raw = newText;
         }
@@ -1042,7 +1042,39 @@ public sealed class NoteService : INoteService
     private async Task SafeWriteArchiveAsync(string path, string content, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, content, NoBomUtf8, ct);
+        await WriteNoteFileAtomicAsync(path, content);
+    }
+
+    /// <summary>
+    /// Write a note (or archive entry) so readers only ever see the old
+    /// or the new content, never a truncated file.
+    ///
+    /// Why: the previous in-place File.WriteAllTextAsync(path, …, ct)
+    /// ran with the request-aborted token. A browser reload or tab close
+    /// during an autosave aborted the PUT mid-write and left the note
+    /// truncated (reproduced: 0 bytes / partial file). We now write a
+    /// hidden temp file next to the target and swap it in with
+    /// File.Move(overwrite: true) — a rename on the same volume, which
+    /// NTFS performs as a single replace. The write deliberately ignores
+    /// the request's cancellation token: once we've decided to save, a
+    /// client disconnect must not leave a half-written file behind.
+    /// The temp name starts with "." and doesn't end in ".md", so
+    /// folder listings and the indexer never see it.
+    /// </summary>
+    private static async Task WriteNoteFileAtomicAsync(string path, string text)
+    {
+        var dir = Path.GetDirectoryName(path)!;
+        var tmp = Path.Combine(dir, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.nc-tmp");
+        try
+        {
+            await File.WriteAllTextAsync(tmp, text, NoBomUtf8, CancellationToken.None);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* best effort */ }
+            throw;
+        }
     }
 
     /// <summary>

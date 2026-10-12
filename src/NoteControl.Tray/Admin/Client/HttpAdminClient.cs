@@ -15,6 +15,13 @@ namespace NoteControl.Tray.Admin.Client;
 public sealed class HttpAdminClient : IAdminClient, IDisposable
 {
     private readonly HttpClient _http;
+    // Same handler (cookies, session) but no client-wide timeout. Used
+    // only for backup-run and restore, which take as long as the data
+    // takes to copy: HttpClient.Timeout (20 s on _http) can't be
+    // extended per call by a longer CancellationToken, so those calls
+    // used to give up after 20 s whatever the token said.
+    private readonly HttpClient _longHttp;
+    private readonly HttpClientHandler _handler;
     private readonly CookieContainer _cookies;
     private string? _csrfToken;
     private UserDto? _currentUser;
@@ -25,19 +32,25 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
     public HttpAdminClient(string baseUrl)
     {
         _cookies = new CookieContainer();
-        var handler = new HttpClientHandler
+        _handler = new HttpClientHandler
         {
             CookieContainer = _cookies,
             UseCookies = true,
             UseProxy = false,
             AllowAutoRedirect = false,
         };
-        _http = new HttpClient(handler)
+        _http = new HttpClient(_handler, disposeHandler: false)
         {
             BaseAddress = new Uri(baseUrl),
             Timeout = TimeSpan.FromSeconds(20),
         };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("NoteControl.Tray/1.0");
+        _longHttp = new HttpClient(_handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri(baseUrl),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+        _longHttp.DefaultRequestHeaders.UserAgent.ParseAdd("NoteControl.Tray/1.0");
     }
 
     public bool IsLoggedIn => _currentUser is not null;
@@ -413,14 +426,15 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
 
     public async Task<BackupRunResultDto> RunBackupAsync(CancellationToken ct = default)
     {
-        // The server long-polls — typical run is seconds, large
-        // vaults can be tens of seconds. We use a roomy timeout
-        // here on top of the per-client default (20s), so a slow
-        // backup doesn't fail spuriously.
+        // The server long-polls — typical run is seconds, a real
+        // DataRoot on a NAS target can take many minutes. Sent on the
+        // no-timeout client with a generous cap. If we do give up, the
+        // server still finishes the run (it ignores client disconnects)
+        // and the Backups window's status/list show the outcome.
         using var request = BuildRequest(HttpMethod.Post, "/api/admin/server/backup/run");
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(10));
-        using var response = await _http.SendAsync(request, cts.Token);
+        cts.CancelAfter(LongCallCap);
+        using var response = await _longHttp.SendAsync(request, cts.Token);
         await EnsureSuccessAsync(response, cts.Token);
         return await response.Content.ReadFromJsonAsync<BackupRunResultDto>(JsonOptions, cts.Token)
             ?? throw new AdminClientException("Server returned an empty backup run payload.");
@@ -447,12 +461,13 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
         // Same long-poll treatment as backup-run — restore copy
         // duration scales with vault size.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(10));
-        using var response = await SendJsonAsync(
+        cts.CancelAfter(LongCallCap);
+        using var request = BuildRequest(
             HttpMethod.Post,
-            $"/api/admin/server/backup/{Uri.EscapeDataString(backupId)}/restore-vault",
-            new RestoreVaultRequest(vaultId, vaultFolderInBackup),
-            cts.Token);
+            $"/api/admin/server/backup/{Uri.EscapeDataString(backupId)}/restore-vault");
+        request.Content = JsonContent.Create(
+            new RestoreVaultRequest(vaultId, vaultFolderInBackup), options: JsonOptions);
+        using var response = await _longHttp.SendAsync(request, cts.Token);
         await EnsureSuccessAsync(response, cts.Token);
         return await response.Content.ReadFromJsonAsync<RestoreResultDto>(JsonOptions, cts.Token)
             ?? throw new AdminClientException("Server returned an empty restore result.");
@@ -507,6 +522,9 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
     // -----------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------
+
+    /// <summary>Upper bound for backup-run / restore calls.</summary>
+    private static readonly TimeSpan LongCallCap = TimeSpan.FromHours(2);
 
     private async Task<HttpResponseMessage> SendJsonAsync<T>(
         HttpMethod method, string path, T payload, CancellationToken ct)
@@ -596,5 +614,10 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
         return new AdminClientException(message, status);
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _http.Dispose();
+        _longHttp.Dispose();
+        _handler.Dispose();
+    }
 }

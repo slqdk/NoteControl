@@ -700,6 +700,18 @@ public sealed class TemplateService : ITemplateService
                 catch { return seg; }
             }));
 
+        // No ".." segments at all (after decoding, so %2E%2E counts
+        // too). An interior "Projects/../../Other/x.png" used to
+        // survive the leading-dot trim above and walk out of the
+        // resolve folder; see the containment check below.
+        if (decodedSrc.Split('/', '\\').Any(seg => seg == ".."))
+        {
+            _log.LogWarning(
+                "Image src '{Src}' contains a '..' segment while {Op}; dropping.",
+                src, logContext);
+            return null;
+        }
+
         string sourceAbsolute;
         try
         {
@@ -716,8 +728,13 @@ public sealed class TemplateService : ITemplateService
         }
 
         // Anti-traversal: source path must remain under the
-        // configured resolve folder.
-        if (!sourceAbsolute.StartsWith(srcResolveFolder, StringComparison.OrdinalIgnoreCase))
+        // configured resolve folder. Compared WITH a trailing
+        // separator — a bare prefix test let ".../Vault1" match
+        // ".../Vault1-private/secret.png", i.e. a file in another
+        // vault the caller has no role on, which the copy then made
+        // readable through this vault's /asset endpoint.
+        var resolveRoot = Path.TrimEndingDirectorySeparator(srcResolveFolder) + Path.DirectorySeparatorChar;
+        if (!sourceAbsolute.StartsWith(resolveRoot, StringComparison.OrdinalIgnoreCase))
         {
             _log.LogWarning(
                 "Image src '{Src}' resolves outside resolve folder while {Op}; dropping.",

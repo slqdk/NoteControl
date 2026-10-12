@@ -19,6 +19,15 @@ namespace NoteControl.Server.Admin.Endpoints;
 ///   <item><c>POST   /api/admin/server/backup/{id}/restore-vault</c></item>
 /// </list>
 /// </para>
+/// <para>
+/// Run and restore are NOT cancelled when the caller disconnects:
+/// they ignore the request-aborted token. A client that gives up
+/// (tray timeout, closed window, flaky Wi-Fi) used to cancel the job
+/// half-way — deleting the partial backup or rolling back the
+/// restore — and lose the audit record with it. Now the job always
+/// runs to completion and is audited; the caller can see the outcome
+/// via <c>/status</c>, <c>/list</c> and the audit log.
+/// </para>
 /// </summary>
 public static class AdminBackupEndpoints
 {
@@ -48,9 +57,10 @@ public static class AdminBackupEndpoints
     private static async Task<IResult> RunNowAsync(
         HttpContext http,
         IBackupService backups,
-        IAuditLog audit,
-        CancellationToken ct)
+        IAuditLog audit)
     {
+        // Deliberately no request token — see the class remarks.
+        var ct = CancellationToken.None;
         var r = await backups.RunNowAsync(ct);
         var dto = new BackupRunResultDto(
             r.Success, r.BackupId, r.Error, r.DurationMs, r.BytesCopied);
@@ -123,9 +133,11 @@ public static class AdminBackupEndpoints
         [FromBody] RestoreVaultRequest request,
         HttpContext http,
         IRestoreService restore,
-        IAuditLog audit,
-        CancellationToken ct)
+        IAuditLog audit)
     {
+        // Deliberately no request token — a restore abandoned half-way
+        // is the worst outcome; see the class remarks.
+        var ct = CancellationToken.None;
         if (request is null)
             return Results.Problem(statusCode: 400, title: "Request body is required.");
 

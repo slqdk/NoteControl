@@ -9,6 +9,14 @@ namespace NoteControl.Server.Auth.Services;
 /// account (longer window) and decides whether a login attempt should be
 /// allowed through to the password check.
 ///
+/// Account lockout: the failure that reaches
+/// <c>LoginAttemptsPerAccountPerHour</c> within an hour locks the account
+/// for <c>AccountLockoutMinutes</c>. While locked, every attempt is refused
+/// (423) without a password check, so attempts don't extend the lock; when
+/// it expires the account starts again with a clean count. (Previously the
+/// option only fed the Retry-After hint and the real lock was whatever was
+/// left of a rolling hour.)
+///
 /// In-memory is intentional for v1: NoteControl is single-server. If we
 /// ever go multi-instance, this becomes a Redis-backed implementation
 /// behind the same interface.
@@ -55,6 +63,8 @@ public sealed class LoginThrottle : ILoginThrottle
 
     private readonly ConcurrentDictionary<string, Bucket> _byIp = new();
     private readonly ConcurrentDictionary<string, Bucket> _byAccount = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lockedUntil = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan AccountWindow = TimeSpan.FromHours(1);
 
     public LoginThrottle(IOptionsMonitor<AuthOptions> options, TimeProvider clock)
     {
@@ -81,16 +91,14 @@ public sealed class LoginThrottle : ILoginThrottle
             }
         }
 
-        // Account bucket: longer window with a configurable lockout duration.
-        var window = TimeSpan.FromHours(1);
-        var accountBucket = _byAccount.GetOrAdd(username, _ => new Bucket());
-        accountBucket.Trim(now - window);
-        if (accountBucket.Count >= opts.LoginAttemptsPerAccountPerHour)
+        // Account lock, set by RecordFailure.
+        if (_lockedUntil.TryGetValue(username, out var until))
         {
-            // While locked, every attempt extends the lockout window.
-            return new ThrottleDecision(
-                ThrottleOutcome.AccountLockedOut,
-                TimeSpan.FromMinutes(opts.AccountLockoutMinutes));
+            if (until > now)
+            {
+                return new ThrottleDecision(ThrottleOutcome.AccountLockedOut, until - now);
+            }
+            _lockedUntil.TryRemove(new KeyValuePair<string, DateTimeOffset>(username, until));
         }
 
         return new ThrottleDecision(ThrottleOutcome.Allowed, null);
@@ -103,7 +111,18 @@ public sealed class LoginThrottle : ILoginThrottle
         {
             _byIp.GetOrAdd(ipAddress, _ => new Bucket()).Add(now);
         }
-        _byAccount.GetOrAdd(username, _ => new Bucket()).Add(now);
+        var bucket = _byAccount.GetOrAdd(username, _ => new Bucket());
+        bucket.Add(now);
+        bucket.Trim(now - AccountWindow);
+
+        var opts = _options.CurrentValue;
+        if (bucket.Count >= opts.LoginAttemptsPerAccountPerHour)
+        {
+            _lockedUntil[username] = now + TimeSpan.FromMinutes(opts.AccountLockoutMinutes);
+            // The lock replaces the count: after it expires the user
+            // gets the full number of attempts again.
+            _byAccount.TryRemove(username, out _);
+        }
     }
 
     public void RecordSuccess(string? ipAddress, string username)
@@ -111,6 +130,7 @@ public sealed class LoginThrottle : ILoginThrottle
         // Successful login clears the account bucket so legitimate users
         // who fat-fingered a few times don't stay on a hair trigger.
         _byAccount.TryRemove(username, out _);
+        _lockedUntil.TryRemove(username, out _);
         // IP bucket is left alone — a shared NAT could be sending many
         // attempts and we don't want a single success to forgive a flood.
     }

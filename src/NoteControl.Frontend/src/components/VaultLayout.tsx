@@ -566,6 +566,35 @@ export function VaultLayout() {
     [vaultId, treeData, selection],
   );
 
+  /**
+   * After a folder was renamed from oldPath to newPath: if the editor
+   * shows a note inside it, move the editor to the note's new path;
+   * if the Properties selection is a note inside it, update that too.
+   */
+  const followFolderRename = useCallback(
+    (oldPath: string, newPath: string) => {
+      const under = (p: string) => p.startsWith(`${oldPath}/`);
+      if (selection?.kind === 'note' && under(selection.path)) {
+        setSelection({
+          kind: 'note',
+          path: `${newPath}${selection.path.slice(oldPath.length)}`,
+          name: selection.name,
+        });
+      }
+      if (location.pathname === `/vaults/${vaultId}/note`) {
+        const editorPath = searchParams.get('path') ?? '';
+        if (under(editorPath)) {
+          const nextPath = `${newPath}${editorPath.slice(oldPath.length)}`;
+          navigate(
+            `/vaults/${vaultId}/note?path=${encodeURIComponent(nextPath)}`,
+            { replace: true },
+          );
+        }
+      }
+    },
+    [vaultId, selection, navigate, location.pathname, searchParams],
+  );
+
   const onRenameFolder = useCallback(
     async (oldPath: string, newName: string) => {
       const parent = parentOf(oldPath);
@@ -587,11 +616,17 @@ export function VaultLayout() {
         ) {
           navigate(`/vaults/${vaultId}?path=${encodeURIComponent(newPath)}`);
         }
+
+        // An open note (or a selected one) INSIDE the renamed folder
+        // follows too. Without this the editor kept the old path and
+        // every save failed with "Note not found" (onMoveFolder below
+        // already did this; rename didn't).
+        followFolderRename(oldPath, newPath);
       } catch (e) {
         throw e instanceof ApiError ? new Error(e.message) : e;
       }
     },
-    [vaultId, treeData, selection, navigate, location.pathname, searchParams],
+    [vaultId, treeData, selection, navigate, location.pathname, searchParams, followFolderRename],
   );
 
   // ---------------------------------------------------- note ops
@@ -1573,6 +1608,7 @@ export function VaultLayout() {
                   ) {
                     navigate(`/vaults/${vaultId}?path=${encodeURIComponent(newPath)}`);
                   }
+                  followFolderRename(oldPath, newPath);
                 }
               }}
               /*

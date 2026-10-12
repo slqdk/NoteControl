@@ -23,7 +23,8 @@ namespace NoteControl.Server.Startpage.Services;
 ///   - Per-feed user agent overrides.
 ///
 /// What we DO support:
-///   - HTTP redirects (HttpClient handles automatically, default 50 hops).
+///   - HTTP redirects (up to 5 hops; every hop passes the SSRF guard,
+///     see <see cref="OutboundAddressGuard"/>).
 ///   - 5-minute in-memory cache keyed by URL — rapid repeat fetches
 ///     (e.g. user resizing a block) don't re-hit the upstream.
 ///   - 10-second per-fetch timeout — failed feeds fail fast rather
@@ -81,11 +82,11 @@ public sealed class FeedFetcher : IFeedFetcher
                 "Feed URL must be an absolute http:// or https:// URL.");
         }
 
-        // Block private IP ranges to prevent SSRF (server-side
-        // request forgery). The user is admin on this instance,
-        // so the risk is more "fat-fingered an internal URL by
-        // accident" than "malicious," but the check is cheap.
-        if (IsLikelyLoopbackOrPrivate(parsed))
+        // SSRF: early, clear error for an obviously local URL. The
+        // real guard runs at connect time on the resolved address
+        // (OutboundAddressGuard) — this endpoint is open to viewers,
+        // so DNS names and redirects to internal hosts must not pass.
+        if (OutboundAddressGuard.IsObviouslyLocal(parsed))
         {
             throw new StartpageException(
                 "Feed URL points to a loopback or private network address.");
@@ -162,6 +163,13 @@ public sealed class FeedFetcher : IFeedFetcher
             var charset = resp.Content.Headers.ContentType?.CharSet;
             var encoding = TryGetEncoding(charset) ?? Encoding.UTF8;
             body = encoding.GetString(ms.ToArray());
+        }
+        catch (HttpRequestException ex) when (OutboundAddressGuard.IsBlockedFailure(ex))
+        {
+            // Refused at connect time: the host name (or a redirect
+            // target) resolves to a non-public address.
+            throw new StartpageException(
+                "Feed URL points to a loopback or private network address.");
         }
         catch (HttpRequestException ex)
         {
@@ -385,37 +393,6 @@ public sealed class FeedFetcher : IFeedFetcher
         if (string.IsNullOrWhiteSpace(name)) return null;
         try { return Encoding.GetEncoding(name); }
         catch { return null; }
-    }
-
-    /// <summary>
-    /// Coarse SSRF guard. Blocks loopback (127.0.0.0/8, ::1),
-    /// link-local (169.254.0.0/16, fe80::/10), and the RFC1918
-    /// private ranges. Doesn't try to resolve DNS — the upstream
-    /// HTTP request will follow CNAMEs / A records that could
-    /// route to private space; an attacker controlling DNS could
-    /// bypass this. For NoteControl's threat model (single admin
-    /// user pasting their own URLs), this is good enough; a
-    /// stronger version would resolve and recheck post-DNS.
-    /// </summary>
-    private static bool IsLikelyLoopbackOrPrivate(Uri uri)
-    {
-        var host = uri.Host;
-        if (IPAddress.TryParse(host, out var ip))
-        {
-            if (IPAddress.IsLoopback(ip)) return true;
-            // 169.254.* / fe80::
-            var bytes = ip.GetAddressBytes();
-            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            {
-                if (bytes[0] == 10) return true;
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
-                if (bytes[0] == 192 && bytes[1] == 168) return true;
-                if (bytes[0] == 169 && bytes[1] == 254) return true;
-            }
-            return false;
-        }
-        // Hostname — block obviously-local names.
-        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record CacheEntry(FeedDto Feed, DateTime ExpiresAtUtc)

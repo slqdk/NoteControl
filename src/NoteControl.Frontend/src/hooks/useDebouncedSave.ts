@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 /**
  * Run a save callback every time `value` changes, but no sooner
@@ -25,10 +25,14 @@ import { useEffect, useRef } from 'react';
  *     as baseline, never save it) still holds for callers that pass
  *     a non-null value on every render — same contract as before, no
  *     change for them.
- *   - On unmount, any pending save is cancelled. If you need
- *     "flush on unmount," do that explicitly at the call site
- *     before unmount; the hook intentionally doesn't to keep
- *     the contract simple.
+ *   - A pending save is FLUSHED (fired immediately, not dropped)
+ *     on unmount, when the value goes back to null (the host moved
+ *     to another vault), and when the tab is hidden. It used to be
+ *     cancelled on unmount, so an edit made less than `delayMs`
+ *     before navigating away (add an assignment, then click a note)
+ *     was silently lost. The flush calls the `save` captured when
+ *     that edit was scheduled — i.e. the closure for the vault the
+ *     value belongs to, never the next vault's.
  *   - `save` is not in the dependency array. We capture the
  *     latest `save` via a ref so callers don't have to memoise
  *     it; otherwise every re-render with a fresh closure would
@@ -68,57 +72,76 @@ export function useDebouncedSave<T>(
   // render or on values that match what we've already sent.
   const lastSavedRef = useRef<string | null>(null);
 
+  // The edit waiting for the debounce, with the save closure that
+  // belongs to it (see the flush note in the header).
+  const pendingRef = useRef<{ value: T; serialized: string; save: (v: T) => void } | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const flush = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = null;
+    p.save(p.value);
+    lastSavedRef.current = p.serialized;
+  }, []);
+
   useEffect(() => {
-    // Not-loaded-yet state. Don't save — and ALSO clear the
-    // baseline. Without the clear, a host that re-uses the same
-    // hook instance for different underlying resources (e.g.
-    // VaultLayout's useDashboards instance stays mounted across
-    // vault switches; only the vaultId effect dependency changes,
-    // which triggers setConfig(null)) would carry the previous
-    // resource's serialised baseline into the next resource's
-    // load — making the new resource's first non-null value look
-    // like a user edit ("the value differs from what we last
-    // saved!") and firing a debounced PUT that 403s for viewers.
-    // Reset-on-null re-arms the first-non-null-becomes-baseline
-    // rule for each new resource the host points us at.
+    // Not-loaded-yet state (or the host switched resources, e.g.
+    // VaultLayout's useDashboards instance staying mounted across a
+    // vault switch → setConfig(null)). Flush anything pending for
+    // the PREVIOUS resource, then clear the baseline so the next
+    // resource's first non-null value becomes its baseline instead
+    // of looking like a user edit (which used to fire a PUT that
+    // 403d for viewers).
     if (value === null || value === undefined) {
+      flush();
       lastSavedRef.current = null;
       return;
     }
 
     const serialized = JSON.stringify(value);
 
-    // First non-null value (either the very first render or the
-    // first render after a null gap from a host-driven reset):
-    // capture as "already saved" and skip the network call. Covers:
-    //   - components that pass a non-null T on every render (the
-    //     original contract — first render is treated as baseline)
-    //   - components that pass `null` while loading and the real
-    //     T after the async GET resolves (so the loaded DTO becomes
-    //     the baseline, not the result of a wasted save round-trip)
-    //   - hosts that flip value back to null between two different
-    //     underlying resources (cross-vault navigation, etc.) — the
-    //     null reset arms the baseline for the next resource.
+    // First non-null value: capture as "already saved" and skip the
+    // network call (the GET's own response, or a component that
+    // passes a non-null T on every render).
     if (lastSavedRef.current === null) {
       lastSavedRef.current = serialized;
       return;
     }
-    // No change since last save — nothing to do.
+    // Back to what's already saved (e.g. an edit undone within the
+    // debounce window): drop the pending save.
     if (lastSavedRef.current === serialized) {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      pendingRef.current = null;
       return;
     }
 
-    const handle = window.setTimeout(() => {
-      saveRef.current(value);
-      lastSavedRef.current = serialized;
+    // Debounce: the last value to land before the user pauses fires.
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    pendingRef.current = { value, serialized, save: saveRef.current };
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      flush();
     }, delayMs);
+  }, [value, delayMs, flush]);
 
-    return () => {
-      // Each new value re-runs this effect; clearing the previous
-      // timer is what gives us the debounce behaviour. The last
-      // value to land before the user pauses is the one that
-      // fires.
-      window.clearTimeout(handle);
-    };
-  }, [value, delayMs]);
+  // Unmount: fire, don't drop.
+  useEffect(() => () => flush(), [flush]);
+
+  // Tab hidden (switching apps, closing the tab, phone screen off):
+  // fire now rather than hoping the debounce runs later.
+  useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState === 'hidden') flush();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [flush]);
 }

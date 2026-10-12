@@ -11,6 +11,8 @@ public static class AuthContextKeys
 {
     public const string User = "nc.user";
     public const string Session = "nc.session";
+    /// <summary>The CSRF token bound to the resolved session.</summary>
+    public const string CsrfToken = "nc.csrf";
 }
 
 public static class HttpContextAuthExtensions
@@ -34,6 +36,10 @@ public static class HttpContextAuthExtensions
     public static Session? GetSession(this HttpContext ctx)
         => ctx.Items.TryGetValue(AuthContextKeys.Session, out var v) ? v as Session : null;
 
+    /// <summary>The CSRF token of the resolved session, or null when anonymous.</summary>
+    public static string? GetSessionCsrfToken(this HttpContext ctx)
+        => ctx.Items.TryGetValue(AuthContextKeys.CsrfToken, out var v) ? v as string : null;
+
     /// <summary>
     /// True if the authenticated user has the admin role.
     /// </summary>
@@ -44,10 +50,12 @@ public static class HttpContextAuthExtensions
     }
 
     /// <summary>
-    /// Best-effort client IP, accounting for the reverse proxy. Caddy sets
-    /// X-Forwarded-For; Kestrel rewrites Connection.RemoteIpAddress when
-    /// ForwardedHeaders middleware is configured. We prefer the latter
-    /// because it's already validated against KnownProxies.
+    /// Client IP, accounting for the reverse proxy. Caddy sets
+    /// X-Forwarded-For; the ForwardedHeaders middleware (first in the
+    /// pipeline, Program.cs) rewrites Connection.RemoteIpAddress from it
+    /// only when the connection itself comes from loopback — i.e. from
+    /// Caddy on the same machine. A direct LAN/internet client can't
+    /// spoof its address with the header.
     /// </summary>
     public static string? GetClientIp(this HttpContext ctx)
         => ctx.Connection.RemoteIpAddress?.ToString();

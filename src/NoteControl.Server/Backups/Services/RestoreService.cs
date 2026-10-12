@@ -13,10 +13,13 @@ namespace NoteControl.Server.Backups.Services;
 ///   <item>Acquire the vault lock (writes are 503'd for the duration).</item>
 ///   <item>Move the live vault folder aside as
 ///     <c>{vaultName}.pre-restore-{timestamp}/</c>.</item>
-///   <item>Copy the backup vault folder (markdown only — we drop
-///     the indexed <c>.notesapp/index.db</c> so it rebuilds from
-///     the source-of-truth markdown).</item>
-///   <item>Trigger an index rebuild for the vault.</item>
+///   <item>Copy the backup vault folder — everything, including
+///     <c>.notesapp/</c> (templates, dashboards, assignments, note
+///     widgets, release archives, trash, folder markers). Only the
+///     search index (<c>.notesapp/index.db</c> + <c>-wal</c>/<c>-shm</c>)
+///     is left out; it is derived data and is rebuilt from the
+///     restored markdown.</item>
+///   <item>Trigger an index rebuild for the vault (own DI scope).</item>
 ///   <item>Release the lock. The pre-restore folder stays on disk
 ///     until the user decides to delete it.</item>
 /// </list>
@@ -25,6 +28,13 @@ namespace NoteControl.Server.Backups.Services;
 /// PRE-RESTORE FOLDER BACK to its original name so the live
 /// vault is restored to its prior state. Best-effort rollback —
 /// surfaces a clear error message if even rollback fails.
+/// </para>
+/// <para>
+/// The vault's pooled index connection is evicted before the move
+/// (Windows refuses to move a folder with an open index.db; on Linux
+/// the open handle would follow the moved-aside folder and the
+/// rebuild would write into <c>*.pre-restore-*</c>) and again after
+/// the copy, in case a read reopened it in between.
 /// </para>
 /// </summary>
 public interface IRestoreService
@@ -48,7 +58,8 @@ public sealed class RestoreService : IRestoreService
     private readonly IBackupService _backups;
     private readonly IVaultLockService _locks;
     private readonly ServerDbContext _db;
-    private readonly IIndexService _index;
+    private readonly IIndexConnectionPool _indexPool;
+    private readonly IBackgroundIndexRebuilder _rebuilder;
     private readonly ILogger<RestoreService> _log;
 
     public RestoreService(
@@ -56,14 +67,16 @@ public sealed class RestoreService : IRestoreService
         IBackupService backups,
         IVaultLockService locks,
         ServerDbContext db,
-        IIndexService index,
+        IIndexConnectionPool indexPool,
+        IBackgroundIndexRebuilder rebuilder,
         ILogger<RestoreService> log)
     {
         _storage = storage;
         _backups = backups;
         _locks = locks;
         _db = db;
-        _index = index;
+        _indexPool = indexPool;
+        _rebuilder = rebuilder;
         _log = log;
     }
 
@@ -101,6 +114,16 @@ public sealed class RestoreService : IRestoreService
                 throw new DirectoryNotFoundException(
                     $"Vault folder '{vaultFolderInBackup}' does not exist in backup '{backupId}'.");
             }
+            // Only whole vaults can be restored: a sub-folder of a
+            // vault would replace the entire live vault with just
+            // that folder's contents.
+            var wanted = safeRel.Replace('\\', '/').Trim('/');
+            if (!backup.VaultFolders.Any(f => string.Equals(f, wanted, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"'{vaultFolderInBackup}' is not a vault folder in backup '{backupId}'. " +
+                    "Pick one of the vaults listed for this backup.");
+            }
 
             // 2. Resolve the live vault folder.
             var vault = await _db.Vaults
@@ -121,7 +144,7 @@ public sealed class RestoreService : IRestoreService
             // 3. Acquire the lock. Throws VaultLockException if
             //    another restore is in flight; let it bubble.
             //    Variable named `lockHandle` rather than `_` so it
-            //    doesn't collide with the `_ = Task.Run(...)` discard
+            //    doesn't collide with the `_ = ...Queue(...)` discard
             //    further down — `using var _ = ...` introduces a
             //    real (non-discardable) variable named `_`.
             using var lockHandle = _locks.Acquire(vaultId, "Vault restore in progress");
@@ -133,43 +156,55 @@ public sealed class RestoreService : IRestoreService
             // 4. Move the live vault aside. Only do this if it
             //    exists — fresh-vault restore (e.g. after a
             //    deletion) is also a valid use case.
+            //    Release the pooled index connection first (see the
+            //    class remarks). preRestorePath is only set once the
+            //    move has actually happened, so a failed move never
+            //    reports a pre-restore folder that doesn't exist.
+            await _indexPool.EvictAsync(vaultId);
             if (Directory.Exists(liveVaultPath))
             {
                 var ts = DateTimeOffset.UtcNow.ToString(
                     "yyyy-MM-ddTHH-mm-ssZ", CultureInfo.InvariantCulture);
-                preRestorePath = liveVaultPath + ".pre-restore-" + ts;
-                Directory.Move(liveVaultPath, preRestorePath);
+                var aside = liveVaultPath + ".pre-restore-" + ts;
+                // Two restores within one second must not collide.
+                for (var n = 2; Directory.Exists(aside); n++)
+                    aside = liveVaultPath + ".pre-restore-" + ts + "-" + n;
+                Directory.Move(liveVaultPath, aside);
+                preRestorePath = aside;
                 _log.LogInformation("Moved live vault aside → {Path}", preRestorePath);
             }
 
-            // 5. Copy the backup vault into place. Markdown only —
-            //    skip .notesapp/ entirely so the index rebuilds
-            //    from the markdown source-of-truth.
+            // 5. Copy the backup vault into place — everything except
+            //    the search index, which is rebuilt from the restored
+            //    markdown below.
             try
             {
-                CopyVaultMarkdownOnly(sourceVaultPath, liveVaultPath, ct);
+                CopyVaultWithoutIndex(sourceVaultPath, liveVaultPath, ct);
             }
             catch (Exception copyEx)
             {
                 _log.LogError(copyEx, "Restore copy failed; rolling back.");
                 // Rollback: nuke whatever partial copy landed, move
                 // the pre-restore folder back to its original name.
-                TryRollback(liveVaultPath, preRestorePath, _log);
+                await _indexPool.EvictAsync(vaultId);
+                if (TryRollback(liveVaultPath, preRestorePath, _log))
+                {
+                    preRestorePath = null; // moved back — nothing left aside
+                    throw new InvalidOperationException(
+                        "Restore copy failed; original vault data has been rolled back.", copyEx);
+                }
                 throw new InvalidOperationException(
-                    "Restore copy failed; original vault data has been rolled back.", copyEx);
+                    "Restore copy failed AND the rollback failed. The original vault data is at " +
+                    (preRestorePath ?? "(nowhere — the vault folder did not exist)") + ".", copyEx);
             }
 
-            // 6. Trigger a fresh index build. Background-fire so
+            // 6. Trigger a fresh index build in its own DI scope so
             //    the request returns promptly; the user can keep
-            //    using the vault while it rebuilds.
-            _ = Task.Run(async () =>
-            {
-                try { await _index.RebuildAsync(vaultId); }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "Post-restore index rebuild failed.");
-                }
-            });
+            //    using the vault while it rebuilds. Evict again first:
+            //    a search between the first eviction and the move may
+            //    have reopened a connection on the old location.
+            await _indexPool.EvictAsync(vaultId);
+            _ = _rebuilder.Queue(vaultId, "restore");
 
             sw.Stop();
             _log.LogInformation(
@@ -189,17 +224,13 @@ public sealed class RestoreService : IRestoreService
         }
     }
 
-    private static void CopyVaultMarkdownOnly(string source, string dest, CancellationToken ct)
+    private static void CopyVaultWithoutIndex(string source, string dest, CancellationToken ct)
     {
         Directory.CreateDirectory(dest);
 
-        // Only copy files that aren't inside a .notesapp/ folder.
-        // We let the index rebuild produce a fresh index DB on
-        // first use.
         foreach (var dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(source, dir);
-            if (IsInsideNotesApp(rel)) continue;
             Directory.CreateDirectory(Path.Combine(dest, rel));
         }
 
@@ -207,21 +238,35 @@ public sealed class RestoreService : IRestoreService
         {
             ct.ThrowIfCancellationRequested();
             var rel = Path.GetRelativePath(source, file);
-            if (IsInsideNotesApp(rel)) continue;
-            var target = Path.Combine(dest, rel);
-            File.Copy(file, target, overwrite: true);
+            if (IsSearchIndexFile(rel)) continue;
+            File.Copy(file, Path.Combine(dest, rel), overwrite: true);
         }
     }
 
-    private static bool IsInsideNotesApp(string relativePath)
+    /// <summary>
+    /// True for <c>.notesapp/index.db</c> and its <c>-wal</c> /
+    /// <c>-shm</c> / <c>-journal</c> sidecars — the derived search
+    /// index. Everything else under <c>.notesapp/</c> is user data
+    /// (templates, dashboards, assignments, widgets, releases, trash)
+    /// and must be restored.
+    /// </summary>
+    public static bool IsSearchIndexFile(string relativePath)
     {
-        // Match folders called .notesapp at any nesting depth.
         var parts = relativePath.Split(
             new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar });
-        return parts.Any(p => string.Equals(p, ".notesapp", StringComparison.OrdinalIgnoreCase));
+        if (parts.Length < 2) return false;
+        if (!string.Equals(parts[^2], ".notesapp", StringComparison.OrdinalIgnoreCase)) return false;
+        var name = parts[^1];
+        return string.Equals(name, "index.db", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("index.db-", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void TryRollback(string liveVaultPath, string? preRestorePath, ILogger log)
+    /// <summary>
+    /// Undo a half-done restore. Returns true when the live vault is
+    /// back in its original state (original moved back, or there was
+    /// no original and the partial copy is gone).
+    /// </summary>
+    private static bool TryRollback(string liveVaultPath, string? preRestorePath, ILogger log)
     {
         // Step a: nuke whatever partial copy is at liveVaultPath.
         if (Directory.Exists(liveVaultPath))
@@ -230,6 +275,7 @@ public sealed class RestoreService : IRestoreService
             catch (Exception ex)
             {
                 log.LogError(ex, "Rollback step 1 (delete partial restore) failed at {Path}", liveVaultPath);
+                return false;
             }
         }
 
@@ -242,8 +288,10 @@ public sealed class RestoreService : IRestoreService
                 log.LogError(ex,
                     "Rollback step 2 (restore original vault) failed. ORIGINAL DATA IS AT {Path}.",
                     preRestorePath);
+                return false;
             }
         }
+        return true;
     }
 
     /// <summary>

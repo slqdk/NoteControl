@@ -7709,6 +7709,13 @@ a.nc-rss-item-title:hover {
   margin: 4px 0 20px;
 }
 
+/* Viewer-role notice above the note widgets (NoteWidgetStack readOnly). */
+.nc-note-widgets-readonly {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: -8px;
+}
+
 /* One widget's host. Auto-fits to the widget's natural height by
    default (the child flows in normal layout, so the host grows to
    contain it), and can be manually overridden by dragging the host's

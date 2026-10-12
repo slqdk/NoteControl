@@ -227,6 +227,25 @@ public sealed class ConfigService : IConfigService
 
         await _store.UpdateSectionsAsync(sections, ct);
 
+        // Re-read configuration NOW instead of waiting ~1 s for the file
+        // watcher. Callers read GetCurrent() straight after this; before,
+        // they got the PRE-save values — the tray re-bound its form from
+        // that response, so the fields snapped back and the next Save
+        // wrote the old values again (the "session lifetime resets"
+        // report). Reload raises the change tokens synchronously, so
+        // every IOptionsMonitor sees the new values on return.
+        if (_config is IConfigurationRoot root)
+        {
+            try
+            {
+                root.Reload();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Configuration reload after save failed; the file watcher will pick the change up.");
+            }
+        }
+
         // Ship 93: regenerate Caddyfile based on the new hostname list +
         // ask Caddy to reload. Both calls are best-effort:
         //   - Write to disk should be ~always-succeed; if it fails
@@ -436,9 +455,22 @@ public sealed class ConfigService : IConfigService
     // Validation
     // ---------------------------------------------------------------
 
+    private static bool Missing(object? section) => section is null;
+
     private static Dictionary<string, string> Validate(ServerConfigDto config)
     {
         var errors = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // A body missing a whole section used to throw a
+        // NullReferenceException (500). Every section is required —
+        // the Settings window always sends all of them.
+        // (Missing() rather than `is null` so the nullable analysis
+        // keeps treating the non-nullable sections as non-null below.)
+        if (Missing(config.Auth)) errors["Auth"] = "Section is required.";
+        if (Missing(config.Backup)) errors["Backup"] = "Section is required.";
+        if (Missing(config.Logging)) errors["Logging"] = "Section is required.";
+        if (Missing(config.Network)) errors["Network"] = "Section is required.";
+        if (errors.Count > 0) return errors;
 
         // Auth
         if (config.Auth.IdleTimeoutMinutes < 1 || config.Auth.IdleTimeoutMinutes > 60 * 24 * 30)
@@ -460,7 +492,7 @@ public sealed class ConfigService : IConfigService
         if (config.Backup.Enabled && string.IsNullOrWhiteSpace(config.Backup.TargetPath))
             errors["Backup.TargetPath"] = "Required when backups are enabled.";
         if (!System.Text.RegularExpressions.Regex.IsMatch(
-            config.Backup.DailyTime, @"^([01]\d|2[0-3]):[0-5]\d$"))
+            config.Backup.DailyTime ?? "", @"^([01]\d|2[0-3]):[0-5]\d$"))
             errors["Backup.DailyTime"] = "Must be HH:MM (24-hour).";
         if (config.Backup.RetainDailyCount < 1 || config.Backup.RetainDailyCount > 365)
             errors["Backup.RetainDailyCount"] = "Must be between 1 and 365.";
@@ -468,7 +500,7 @@ public sealed class ConfigService : IConfigService
             errors["Backup.RetainWeeklyCount"] = "Must be between 0 and 52.";
 
         // Logging
-        if (!ValidLogLevels.Contains(config.Logging.MinimumLevel))
+        if (config.Logging.MinimumLevel is null || !ValidLogLevels.Contains(config.Logging.MinimumLevel))
             errors["Logging.MinimumLevel"] = "Must be one of Verbose, Debug, Information, Warning, Error, Fatal.";
         if (config.Logging.RetainDays < 1 || config.Logging.RetainDays > 365)
             errors["Logging.RetainDays"] = "Must be between 1 and 365.";

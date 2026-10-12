@@ -23,6 +23,8 @@ import {
   type NavigationGuardVerdict,
 } from '../hooks/navigationGuard';
 import { useDebouncedSave } from '../hooks/useDebouncedSave';
+import { mergeRecord, saveSidecar, type SidecarSyncState } from '../util/sidecarSync';
+import { showToast } from '../utils/toast';
 import {
   NOTE_WIDGET_ADD_EVENT,
   buildNoteWidget,
@@ -158,39 +160,80 @@ export function EditorPage() {
   // and rewrite that one file, so the single-user assumption makes the
   // whole-map approach simpler and avoids cross-note write races.
   const [widgetsConfig, setWidgetsConfig] = useState<NoteWidgetsConfigDto | null>(null);
+  // ETag + last-known server map for conflict-safe saves
+  // (util/sidecarSync.ts). Replaced on every load.
+  const widgetsSyncRef = useRef<SidecarSyncState<NoteWidgetsConfigDto>>({ etag: null, base: null });
+  // Bumped to retry a failed load.
+  const [widgetsReload, setWidgetsReload] = useState(0);
 
   // Load the map when the vault changes. Note changes don't refetch —
   // the map covers every note in the vault, so switching notes just
   // re-slices what we already have.
+  //
+  // On failure the map stays NULL (widgets can't be added or edited)
+  // instead of falling back to an empty map: the empty fallback was
+  // the baseline of the next whole-map PUT, so one failed GET (server
+  // restart, 5xx, a hand-broken note-widgets.json) followed by any
+  // widget edit deleted every other note's widgets in the vault. The
+  // reset to null on vault change also stops vault A's map from
+  // standing in as vault B's baseline.
   useEffect(() => {
     if (!vaultId) return;
     let cancelled = false;
+    setWidgetsConfig(null);
     void (async () => {
       try {
-        const cfg = await noteWidgetsApi.getConfig(vaultId);
-        if (!cancelled) setWidgetsConfig(cfg);
+        const { data, etag } = await noteWidgetsApi.getConfigVersioned(vaultId);
+        if (cancelled) return;
+        widgetsSyncRef.current = { etag, base: data };
+        setWidgetsConfig(data);
       } catch {
-        // Non-fatal: a vault with no widgets yet, or a transient
-        // error. Fall back to an empty map so add still works (the
-        // first save creates the file). We deliberately don't surface
-        // this in the editor's save badge — widgets are auxiliary.
-        if (!cancelled) setWidgetsConfig({ version: 1, byNote: {} });
+        if (cancelled) return;
+        // Retry quietly a few seconds later; widgets are auxiliary.
+        window.setTimeout(() => {
+          if (!cancelled) setWidgetsReload((n) => n + 1);
+        }, 5000);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [vaultId]);
+  }, [vaultId, widgetsReload]);
 
   // Debounced save of the whole map, same 500ms cadence as the
   // startpage/assignments. First render (initial load) doesn't save —
-  // the hook skips the first value it sees.
+  // the hook skips the first value it sees. Viewers never save
+  // (the PUT would 403); their widget interactions stay local.
   useDebouncedSave(widgetsConfig, 500, (cfg) => {
-    if (!vaultId || !cfg) return;
-    void noteWidgetsApi.saveConfig(vaultId, cfg).catch(() => {
-      // Swallow — widgets are auxiliary and the next edit retries.
-      // A hard failure here shouldn't block note editing.
-    });
+    if (!vaultId || !cfg || !canEdit) return;
+    const state = widgetsSyncRef.current;
+    const vid = vaultId;
+    void (async () => {
+      try {
+        const { saved, merged } = await saveSidecar<NoteWidgetsConfigDto>({
+          local: cfg,
+          state,
+          put: (d, etag) => noteWidgetsApi.saveConfigVersioned(vid, d, etag),
+          load: () => noteWidgetsApi.getConfigVersioned(vid),
+          // Per-note merge: notes whose widgets we didn't touch keep
+          // the server's (another tab's) version.
+          merge: (base, local, server) => ({
+            ...server,
+            byNote: mergeRecord(base.byNote, local.byNote, server.byNote),
+          }),
+        });
+        if (merged && widgetsSyncRef.current === state) {
+          setWidgetsConfig((cur) =>
+            cur ? { ...saved, byNote: mergeRecord(cfg.byNote, cur.byNote, saved.byNote) } : cur,
+          );
+        }
+      } catch (e) {
+        showToast(
+          `Note widgets couldn't be saved: ${e instanceof Error ? e.message : 'unknown error'}`,
+          6000,
+        );
+      }
+    })();
   });
 
   // This note's widget slice. Empty array when the note has none.
@@ -202,14 +245,16 @@ export function EditorPage() {
     (next: NoteWidgetDto[]) => {
       if (!notePath) return;
       setWidgetsConfig((prev) => {
-        const base: NoteWidgetsConfigDto = prev ?? { version: 1, byNote: {} };
-        const byNote = { ...base.byNote };
+        // Not loaded (or the load failed): refuse rather than build a
+        // map from nothing — see the load effect.
+        if (!prev) return prev;
+        const byNote = { ...prev.byNote };
         if (next.length === 0) {
           delete byNote[notePath];
         } else {
           byNote[notePath] = next;
         }
-        return { ...base, byNote };
+        return { ...prev, byNote };
       });
     },
     [notePath],
@@ -246,6 +291,11 @@ export function EditorPage() {
     const onAdd = (e: Event) => {
       const detail = (e as CustomEvent<NoteWidgetAddDetail>).detail;
       if (!detail || detail.notePath !== notePath) return;
+      if (!widgetsConfig) {
+        showToast("Note widgets aren't loaded yet — try again in a moment.", 4000);
+        setWidgetsReload((n) => n + 1);
+        return;
+      }
       const widget = buildNoteWidget(detail);
       const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
       setNoteWidgets([...current, widget]);
@@ -326,6 +376,14 @@ export function EditorPage() {
   }
 
   function onDialogDiscard() {
+    // The user explicitly chose to throw the unsaved text away: tell
+    // the editor not to keep it as a local draft (it otherwise does
+    // on unmount after a failed save — see editor/noteDrafts.ts).
+    if (notePath) {
+      window.dispatchEvent(
+        new CustomEvent('nc:note-discard-draft', { detail: { path: notePath } }),
+      );
+    }
     setDialogOpen(false);
     const resolve = dialogResolverRef.current;
     dialogResolverRef.current = null;
@@ -722,7 +780,8 @@ export function EditorPage() {
           vaultId={vaultId}
           widgets={noteWidgets}
           onChange={updateNoteWidget}
-          onDelete={deleteNoteWidget}
+          onDelete={canEdit ? deleteNoteWidget : () => {}}
+          readOnly={!canEdit}
         />
       )}
 

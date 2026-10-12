@@ -238,6 +238,7 @@ public sealed class VaultService : IVaultService
         {
             throw new VaultException("A vault already exists at that path.", statusCode: 409);
         }
+        await EnsureNotNestedAsync(canonical, ct);
 
         // The leaf folder must not already exist on disk — even if there's
         // no Vault row pointing at it. Forces the admin to clean up
@@ -321,6 +322,40 @@ public sealed class VaultService : IVaultService
             vault.IconKey, vault.ColorKey);
     }
 
+    /// <summary>
+    /// Refuse a vault path that is inside an existing vault, contains
+    /// one, or differs from one only in letter case (the same folder on
+    /// Windows). A vault nested in another let the outer vault's
+    /// members read and write the inner vault's notes through the outer
+    /// one (no role on the inner vault needed), and deleting the outer
+    /// vault quarantined the inner one's folder with it.
+    /// </summary>
+    private async Task EnsureNotNestedAsync(string canonical, CancellationToken ct)
+    {
+        var existing = await _db.Vaults.Select(v => v.Path).ToListAsync(ct);
+        foreach (var other in existing)
+        {
+            if (string.Equals(other, canonical, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new VaultException(
+                    $"A vault already exists at '{other}' (paths differ only in letter case).",
+                    statusCode: 409);
+            }
+            if (canonical.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new VaultException(
+                    $"'{canonical}' is inside the existing vault '{other}'. A vault can't be placed inside another vault.",
+                    statusCode: 409);
+            }
+            if (other.StartsWith(canonical + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new VaultException(
+                    $"'{canonical}' contains the existing vault '{other}'. A vault can't contain another vault.",
+                    statusCode: 409);
+            }
+        }
+    }
+
     public async Task<VaultDto> RegisterAsync(
         Guid callerId,
         Guid targetOwnerId,
@@ -375,6 +410,7 @@ public sealed class VaultService : IVaultService
         {
             throw new VaultException("A vault is already registered at that path.", statusCode: 409);
         }
+        await EnsureNotNestedAsync(canonical, ct);
 
         // Folder MUST exist. This is the key difference from Create.
         if (!Directory.Exists(absolute))

@@ -26,13 +26,59 @@ import { recordApi } from '../util/debugRecorder';
 
 let csrfToken: string | null = null;
 
+/** Default name of the server's (non-HttpOnly) CSRF cookie. */
+const CSRF_COOKIE = 'nc_csrf';
+
 /** Set after login / on auth init. Cleared on logout / 401. */
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
 
+function readCsrfCookie(): string | null {
+  try {
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + CSRF_COOKIE + '=([^;]*)'));
+    return m && m[1] ? decodeURIComponent(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The token to echo in X-CSRF-Token. Read from the cookie at send
+ * time: the server refreshes that cookie on every authenticated
+ * response, so it always belongs to the session the browser is
+ * actually sending. The in-memory copy went stale when the user
+ * signed in again in another tab (every save and Sign out then got
+ * 403). The in-memory value is the fallback for an install that
+ * renamed the cookie (Auth:CsrfCookieName).
+ */
 export function getCsrfToken(): string | null {
-  return csrfToken;
+  return readCsrfCookie() ?? csrfToken;
+}
+
+function isCsrfRejection(status: number, problem: ProblemDetails | null): boolean {
+  return status === 403 && (problem?.title ?? '').startsWith('CSRF token');
+}
+
+/**
+ * Re-learn the CSRF token from the server after a CSRF 403. GET /me
+ * needs no token, returns the session's own token and re-sets the
+ * cookie. Returns false when there is no session to refresh from.
+ */
+async function refreshCsrfToken(): Promise<boolean> {
+  try {
+    const r = await fetch('/api/auth/me', {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    });
+    if (!r.ok) return false;
+    const me = (await r.json()) as AuthMeDto;
+    if (!me?.csrfToken) return false;
+    csrfToken = me.csrfToken;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -65,6 +111,14 @@ interface RequestOptions {
   headers?: Record<string, string>;
   /** Suppress the global 401 handler (for login attempts). */
   skipAuthRedirect?: boolean;
+  /**
+   * fetch keepalive: lets the request outlive the page (tab close,
+   * reload). Browsers cap keepalive bodies at 64 KB in total, so the
+   * caller must only ask for it with small bodies.
+   */
+  keepalive?: boolean;
+  /** Called with the raw Response (e.g. to read the ETag header). */
+  onResponse?: (response: Response) => void;
 }
 
 /**
@@ -73,7 +127,11 @@ interface RequestOptions {
  * Returns the parsed JSON body, or `null` for 204 No Content responses.
  * Throws {@link ApiError} on any non-2xx status.
  */
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+  isCsrfRetry = false,
+): Promise<T> {
   const method = options.method ?? 'GET';
   const isMutation = method !== 'GET';
 
@@ -88,8 +146,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   // CSRF: double-submit. The server compares the X-CSRF-Token header to
   // the value of the nc_csrf cookie (which the browser automatically sends).
-  if (isMutation && csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
+  const csrf = isMutation ? getCsrfToken() : null;
+  if (csrf) {
+    headers['X-CSRF-Token'] = csrf;
   }
 
   // Debug recorder: capture timing + result. The __ncTyped marker
@@ -102,9 +161,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers,
     credentials: 'include',
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    keepalive: options.keepalive === true ? true : undefined,
     // @ts-expect-error — non-standard marker read by debug recorder
     __ncTyped: true,
   });
+
+  options.onResponse?.(response);
 
   if (response.status === 401 && !options.skipAuthRedirect) {
     // Session expired or invalid. Clear CSRF and bounce.
@@ -131,6 +193,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       }
     } catch {
       // Body wasn't JSON — fall through to the fallback message.
+    }
+    // CSRF mismatch (token lost after a browser restart, or replaced
+    // by a sign-in in another tab): refresh it once and retry. The
+    // server rejected the request before doing anything, so a retry
+    // can't double-apply it.
+    if (isMutation && !isCsrfRetry && isCsrfRejection(response.status, problem)) {
+      if (await refreshCsrfToken()) {
+        return request<T>(path, options, true);
+      }
     }
     const errMsg = `Request failed: ${response.status} ${response.statusText}`;
     recordApi({
@@ -245,12 +316,18 @@ export const notesApi = {
     }),
 
   /** PUT /api/vaults/{id}/note?path=... — update with optional ETag. */
-  update: (vaultId: string, notePath: string, request_: UpdateNoteRequest) =>
+  update: (
+    vaultId: string,
+    notePath: string,
+    request_: UpdateNoteRequest,
+    opts: { keepalive?: boolean } = {},
+  ) =>
     request<NoteDto>(
       `/api/vaults/${vaultId}/note?path=${encodeURIComponent(notePath)}`,
       {
         method: 'PUT',
         body: request_,
+        keepalive: opts.keepalive,
       },
     ),
 
@@ -911,7 +988,49 @@ export const dailyNotesApi = {
  * NoteControl.Server.Startpage.Endpoints.StartpageEndpoints for the
  * routes; types live in api/types.ts mirroring NoteControl.Shared.
  */
+
+// ============================================================ SIDECAR ETAGS
+
+/**
+ * GET a per-vault sidecar together with its ETag (see
+ * util/sidecarSync.ts for why).
+ */
+async function getVersioned<T>(path: string): Promise<{ data: T; etag: string | null }> {
+  let etag: string | null = null;
+  const data = await request<T>(path, {
+    onResponse: (r) => {
+      etag = r.headers.get('ETag');
+    },
+  });
+  return { data, etag };
+}
+
+/**
+ * PUT a per-vault sidecar with If-Match. Rejects with ApiError 412
+ * when it changed elsewhere; resolves with the new ETag.
+ */
+async function putVersioned<T>(path: string, body: T, etag: string | null): Promise<string | null> {
+  let next: string | null = null;
+  await request<void>(path, {
+    method: 'PUT',
+    body,
+    headers: etag ? { 'If-Match': etag } : undefined,
+    onResponse: (r) => {
+      next = r.headers.get('ETag');
+    },
+  });
+  return next;
+}
+
 export const startpageApi = {
+  /** GET config + ETag (conflict-safe saving, util/sidecarSync.ts). */
+  getConfigVersioned: (vaultId: string) =>
+    getVersioned<StartpageConfigDto>(`/api/vaults/${vaultId}/startpage/config`),
+
+  /** PUT config with If-Match; 412 when changed elsewhere. */
+  saveConfigVersioned: (vaultId: string, config: StartpageConfigDto, etag: string | null) =>
+    putVersioned(`/api/vaults/${vaultId}/startpage/config`, config, etag),
+
   /** GET /api/vaults/{id}/startpage/config */
   getConfig: (vaultId: string) =>
     request<StartpageConfigDto>(`/api/vaults/${vaultId}/startpage/config`),
@@ -968,6 +1087,14 @@ export const startpageApi = {
  * for the auth split (GET = viewer, PUT = editor).
  */
 export const assignmentsApi = {
+  /** GET + ETag (conflict-safe saving, util/sidecarSync.ts). */
+  getConfigVersioned: (vaultId: string) =>
+    getVersioned<AssignmentsConfigDto>(`/api/vaults/${vaultId}/assignments`),
+
+  /** PUT with If-Match; 412 when changed elsewhere. */
+  saveConfigVersioned: (vaultId: string, config: AssignmentsConfigDto, etag: string | null) =>
+    putVersioned(`/api/vaults/${vaultId}/assignments`, config, etag),
+
   /** GET /api/vaults/{id}/assignments */
   getConfig: (vaultId: string) =>
     request<AssignmentsConfigDto>(`/api/vaults/${vaultId}/assignments`),
@@ -993,6 +1120,14 @@ export const assignmentsApi = {
  * the auth split (GET = viewer, PUT = editor).
  */
 export const noteWidgetsApi = {
+  /** GET + ETag (conflict-safe saving, util/sidecarSync.ts). */
+  getConfigVersioned: (vaultId: string) =>
+    getVersioned<NoteWidgetsConfigDto>(`/api/vaults/${vaultId}/note-widgets`),
+
+  /** PUT with If-Match; 412 when changed elsewhere. */
+  saveConfigVersioned: (vaultId: string, config: NoteWidgetsConfigDto, etag: string | null) =>
+    putVersioned(`/api/vaults/${vaultId}/note-widgets`, config, etag),
+
   /** GET /api/vaults/{id}/note-widgets */
   getConfig: (vaultId: string) =>
     request<NoteWidgetsConfigDto>(`/api/vaults/${vaultId}/note-widgets`),

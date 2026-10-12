@@ -59,6 +59,17 @@ public static class AuthEndpoints
             {
                 http.Response.Headers["Retry-After"] = seconds.ToString();
             }
+            // 423 for a locked account, 429 for the per-IP limit — the
+            // codes auth.md / api.md specify (both used to be 429).
+            if (decision.Outcome == ThrottleOutcome.AccountLockedOut)
+            {
+                var minutes = retrySeconds is { } s ? Math.Max(1, (int)Math.Ceiling(s / 60.0)) : (int?)null;
+                return Results.Problem(
+                    statusCode: StatusCodes.Status423Locked,
+                    title: minutes is null
+                        ? "This account is temporarily locked after too many failed sign-ins."
+                        : $"This account is temporarily locked after too many failed sign-ins. Try again in {minutes} minute(s).");
+            }
             return Results.Problem(statusCode: 429, title: "Too many login attempts. Try again later.");
         }
 
@@ -143,10 +154,15 @@ public static class AuthEndpoints
         return Results.Ok();
     }
 
-    private static IResult Me(HttpContext http, IOptionsMonitor<AuthOptions> authOptions)
+    private static IResult Me(HttpContext http)
     {
         var user = http.RequireUser();
-        var csrf = http.Request.Cookies[authOptions.CurrentValue.CsrfCookieName] ?? string.Empty;
+        // The session's own token — NOT the request's CSRF cookie. That
+        // cookie has no expiry, so after a browser restart the request
+        // carries only nc_sid and echoing the (missing) cookie handed
+        // the SPA an empty token: every save then failed with 403. The
+        // session resolver re-sets the cookie on this same response.
+        var csrf = http.GetSessionCsrfToken() ?? string.Empty;
         return Results.Ok(new MeResponse(ToDto(user), csrf));
     }
 

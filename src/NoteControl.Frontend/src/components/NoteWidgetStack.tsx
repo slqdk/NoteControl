@@ -63,6 +63,13 @@ export interface NoteWidgetStackProps {
   onChange: (widgetId: string, patch: Partial<NoteWidgetDto>) => void;
   /** Remove one widget by id. */
   onDelete: (widgetId: string) => void;
+  /**
+   * Viewer role: widgets stay usable (calculators recalculate, lists
+   * scroll) but nothing is saved and deleting does nothing. A note
+   * above the stack says so, instead of letting edits 403 silently
+   * and vanish on reload.
+   */
+  readOnly?: boolean;
 }
 
 /** Per-kind default height, used as the auto-fit baseline and the
@@ -108,11 +115,17 @@ export function NoteWidgetStack({
   widgets,
   onChange,
   onDelete,
+  readOnly = false,
 }: NoteWidgetStackProps) {
   if (widgets.length === 0) return null;
 
   return (
     <div className="nc-note-widgets">
+      {readOnly && (
+        <div className="nc-note-widgets-readonly" role="note">
+          View only — changes to these widgets aren&apos;t saved.
+        </div>
+      )}
       {widgets.map((w) => (
         <NoteWidgetItem
           key={w.id}

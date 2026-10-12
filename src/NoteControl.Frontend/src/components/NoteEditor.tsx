@@ -22,6 +22,7 @@ import { TrailingParagraph } from '../editor/TrailingParagraph';
 import { ParagraphWithEmpty } from '../editor/ParagraphWithEmpty';
 import { MarkdownExtension } from '../markdown/markdownExtension';
 import { stripStrayZeroWidthSpaces } from '../markdown/zwsp';
+import { clearDraft, loadDraft, storeDraft } from '../editor/noteDrafts';
 import { AssetPasteExtension, type UploadInfo } from '../editor/AssetPasteExtension';
 import { SlashMenuExtension } from '../editor/SlashMenuExtension';
 import { StAutocompleteExtension } from '../editor/StAutocompleteExtension';
@@ -213,8 +214,51 @@ export function NoteEditor({
     void refreshTemplates(vaultId);
   }, [vaultId]);
 
+  // Dirty-check baseline: the markdown the server holds, in the
+  // EDITOR'S OWN serialization. Seeded in useEditor's onCreate (see
+  // there), NOT from initialNote.body: the editor normalises on load
+  // (trailing paragraph → ZWSP line, `* a` → `- a`, …), so comparing
+  // against the raw body made merely opening a note look dirty and
+  // saved it. Until onCreate has run for the current editor instance
+  // (baselineEditorRef), no update counts as an edit and no save runs.
   const lastSavedMarkdownRef = useRef<string>(initialNote.body);
+  const baselineEditorRef = useRef<Editor | null>(null);
+  // A forceReadOnly editor (viewer role, archive viewer) never saves.
+  // The archive viewer is mounted on the LIVE note path, so a save
+  // from it would write the archived body over the current note.
+  const forceReadOnlyRef = useRef(forceReadOnly);
+  forceReadOnlyRef.current = forceReadOnly;
   const etagRef = useRef<string>(initialNote.etag);
+  // The note body we believe the server holds right now (raw, as the
+  // server returns it): the loaded body, then each successful PUT.
+  // Lets the etag-adoption path tell "a property save bumped the
+  // etag" (body unchanged — safe to adopt) from "someone else saved
+  // a new body" (must NOT adopt, or our stale text would overwrite
+  // theirs). inFlightMarkdownRef covers our own PUT racing a
+  // property save.
+  const serverBodyRef = useRef<string>(initialNote.body);
+  const inFlightMarkdownRef = useRef<string | null>(null);
+  // Mirrors saveState for effects/cleanups that must read the latest
+  // value without re-subscribing (unmount draft, beforeunload).
+  const saveStateRef = useRef(saveState);
+  saveStateRef.current = saveState;
+  // Set when the user picks "Discard changes" in the save-failed
+  // dialog: the unsaved text must then NOT be kept as a draft.
+  const discardedRef = useRef(false);
+  useEffect(() => {
+    function onDiscard(e: Event) {
+      const ce = e as CustomEvent<{ path: string }>;
+      if (ce.detail?.path !== initialNote.path) return;
+      discardedRef.current = true;
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      clearDraft(vaultId, initialNote.path);
+    }
+    window.addEventListener('nc:note-discard-draft', onDiscard);
+    return () => window.removeEventListener('nc:note-discard-draft', onDiscard);
+  }, [vaultId, initialNote.path]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef<boolean>(false);
   const pendingMarkdownRef = useRef<string | null>(null);
@@ -238,9 +282,15 @@ export function NoteEditor({
   // than racing with it. Cleared in the finally block.
   const inFlightPromiseRef = useRef<Promise<SaveNowOutcome> | null>(null);
 
-  const performSave = useCallback(async (): Promise<SaveNowOutcome> => {
+  const performSave = useCallback(async (
+    opts: { keepalive?: boolean } = {},
+  ): Promise<SaveNowOutcome> => {
     const editor = editorRef.current;
     if (!editor) return 'ok';
+    if (forceReadOnlyRef.current) return 'ok';
+    // No baseline yet for this editor instance → nothing the user
+    // could have changed; never PUT the load-time normalisation.
+    if (baselineEditorRef.current !== editor) return 'ok';
 
     const markdown = editor.storage.markdown.getMarkdown() as string;
     if (markdown === lastSavedMarkdownRef.current) {
@@ -268,13 +318,33 @@ export function NoteEditor({
     const promise = (async (): Promise<SaveNowOutcome> => {
       let outcome: SaveNowOutcome;
       try {
-        const updated = await notesApi.update(vaultId, initialNote.path, {
-          body: markdown,
-          etag: etagRef.current,
-        });
+        // keepalive lets a flush on tab-hide survive the page going
+        // away; browsers cap keepalive bodies at 64 KB, so only small
+        // notes get it (larger ones fall back to a normal request).
+        const keepalive =
+          opts.keepalive === true && new TextEncoder().encode(markdown).length < 60_000;
+        inFlightMarkdownRef.current = markdown;
+        const updated = await notesApi.update(
+          vaultId,
+          initialNote.path,
+          { body: markdown, etag: etagRef.current },
+          { keepalive },
+        );
         etagRef.current = updated.etag;
         lastSavedMarkdownRef.current = markdown;
-        setSaveState({ kind: 'saved' });
+        serverBodyRef.current = typeof updated.body === 'string' ? updated.body : markdown;
+        clearDraft(vaultId, initialNote.path);
+        // Only claim "Saved" if nothing newer is waiting. A keystroke
+        // during the PUT re-arms the debounce; reporting "Saved" then
+        // let beforeunload / the navigation guard wave a reload
+        // through while that edit was still unsaved.
+        const live = editorRef.current;
+        const newerPending =
+          debounceTimerRef.current !== null ||
+          (live !== null &&
+            !live.isDestroyed &&
+            (live.storage.markdown.getMarkdown() as string) !== markdown);
+        setSaveState(newerPending ? { kind: 'dirty' } : { kind: 'saved' });
         // Notify the Properties panel that the body just changed on
         // disk. The panel listens so it can refetch the history count
         // and keep its "Revert to last save (N)" label fresh. Without
@@ -288,6 +358,13 @@ export function NoteEditor({
         );
         outcome = 'ok';
       } catch (e) {
+        // Keep a local copy of what couldn't be saved. If the editor
+        // goes away before a retry succeeds (navigation, the 401
+        // bounce to /login, tab close), the next open of this note
+        // offers it back. See editor/noteDrafts.ts.
+        if (!discardedRef.current) {
+          storeDraft(vaultId, initialNote.path, markdown, etagRef.current);
+        }
         // Surface the failure loudly. The small badge in the breadcrumb
         // row was easy to miss - the user reported assuming the save
         // worked and losing work. A toast forces the failure into the
@@ -301,6 +378,13 @@ export function NoteEditor({
           setSaveState({ kind: 'conflict', message });
           showToast('Save conflict - reload the note', 6000);
           outcome = 'conflict';
+        } else if (e instanceof ApiError && e.status === 401) {
+          // Session ended. The auth layer already shows "sign in
+          // again" and redirects; a second toast would replace that
+          // message. The text is kept as a local draft (above) and
+          // comes back when the note reopens after signing in.
+          setSaveState({ kind: 'error', message: 'Not signed in. Your changes are kept and will be restored after you sign in.' });
+          outcome = 'failed';
         } else {
           const message = e instanceof Error ? e.message : 'Save failed.';
           setSaveState({ kind: 'error', message });
@@ -311,6 +395,7 @@ export function NoteEditor({
         }
       } finally {
         inFlightRef.current = false;
+        inFlightMarkdownRef.current = null;
       }
 
       // Pending follow-up: a re-entrant call landed during the
@@ -377,12 +462,14 @@ export function NoteEditor({
    * one - the in-flight save already represents the latest text,
    * so duplicating it would double-PUT for no reason.
    */
-  const saveNow = useCallback(async (): Promise<SaveNowOutcome> => {
+  const saveNow = useCallback(async (
+    opts?: { keepalive?: boolean },
+  ): Promise<SaveNowOutcome> => {
     if (debounceTimerRef.current !== null) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-    return await performSave();
+    return await performSave(opts);
   }, [performSave]);
 
   // Hand saveNow up to the host once (and again if its identity
@@ -397,6 +484,48 @@ export function NoteEditor({
   useEffect(() => {
     onSaveNowReadyRef.current?.(saveNow);
   }, [saveNow]);
+
+  /**
+   * Offer back a local draft left by a failed save (editor/noteDrafts).
+   * Runs from onCreate, after the baseline is set, so restoring goes
+   * through the normal dirty → autosave path.
+   *
+   * - Draft equals what loaded → stale copy, drop it.
+   * - Server etag unchanged since the draft → nobody else touched the
+   *   note; put the draft back silently (toast says so).
+   * - Etag changed → the note was edited elsewhere since; ask, because
+   *   restoring replaces that newer text.
+   * Read-only editors (viewer, archive, released) leave the draft in
+   * place for a later editable open.
+   */
+  function restoreDraftIfAny(ed: Editor): void {
+    if (forceReadOnlyRef.current || !ed.isEditable) return;
+    const draft = loadDraft(vaultId, initialNote.path);
+    if (!draft) return;
+    const current = ed.storage.markdown.getMarkdown() as string;
+    if (draft.markdown === current || draft.markdown === initialNote.body) {
+      clearDraft(vaultId, initialNote.path);
+      return;
+    }
+    const when = new Date(draft.savedAt).toLocaleString();
+    const restore =
+      draft.baseEtag === initialNote.etag ||
+      window.confirm(
+        `You have unsaved changes to this note from ${when}, ` +
+          'but the note has been changed since then.\n\n' +
+          'OK: put your unsaved version back (it replaces the current text).\n' +
+          'Cancel: discard your unsaved version.',
+      );
+    if (!restore) {
+      clearDraft(vaultId, initialNote.path);
+      return;
+    }
+    ed.commands.setContent(
+      preprocessMarkdownForMath(stripStrayZeroWidthSpaces(draft.markdown)),
+      true,
+    );
+    showToast('Restored your unsaved changes to this note.', 5000);
+  }
 
   const editor = useEditor(
     {
@@ -653,7 +782,23 @@ export function NoteEditor({
         // editor/tableClipboardSerializer.ts for the walk.
         clipboardTextSerializer: tableAwareClipboardTextSerializer,
       },
+      // Baseline the dirty-check on the editor's own serialization of
+      // the freshly loaded doc. TipTap emits 'create' after every
+      // extension's onCreate (TrailingParagraph's fix-up transaction
+      // has been dispatched by then), so this string already includes
+      // all load-time normalisation. From here on, only a real edit
+      // makes getMarkdown() differ from it.
+      onCreate: ({ editor: ed }) => {
+        lastSavedMarkdownRef.current = ed.storage.markdown.getMarkdown() as string;
+        baselineEditorRef.current = ed;
+        restoreDraftIfAny(ed);
+      },
       onUpdate: ({ editor: ed }) => {
+        // Updates before the baseline exists are load-time fix-ups
+        // (or the lock effect), never user edits. Read-only editors
+        // never schedule saves.
+        if (baselineEditorRef.current !== ed) return;
+        if (forceReadOnlyRef.current) return;
         const md = ed.storage.markdown.getMarkdown() as string;
         if (md !== lastSavedMarkdownRef.current) {
           setSaveState({ kind: 'dirty' });
@@ -691,16 +836,35 @@ export function NoteEditor({
     editorRef.current = editor;
   }, [editor]);
 
+  // Note swap: the editor is rebuilt for the new path (useEditor deps)
+  // and its onCreate seeds the new baseline. We deliberately do NOT
+  // re-seed lastSavedMarkdownRef from initialNote.body here — a
+  // same-path refetch (source view, back-from-archive) hands us the
+  // raw server body, which differs from the editor's serialization
+  // and would make the next unrelated update look dirty.
   useEffect(() => {
-    lastSavedMarkdownRef.current = initialNote.body;
-    etagRef.current = initialNote.etag;
     pendingMarkdownRef.current = null;
     setSaveState({ kind: 'idle' });
-  }, [initialNote.path, initialNote.body, initialNote.etag]);
+  }, [initialNote.path]);
+
+  // Adopt a refetched etag (same path) so the next save doesn't 412.
+  useEffect(() => {
+    etagRef.current = initialNote.etag;
+    serverBodyRef.current = initialNote.body;
+    // initialNote.body is read together with the etag it belongs to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialNote.path, initialNote.etag]);
 
   useEffect(() => {
     function onBeforeUnload(e: BeforeUnloadEvent) {
-      if (saveState.kind === 'dirty' || saveState.kind === 'saving') {
+      // error / conflict too: those are exactly the states where the
+      // text exists only in this tab (plus the local draft copy).
+      if (
+        saveState.kind === 'dirty' ||
+        saveState.kind === 'saving' ||
+        saveState.kind === 'error' ||
+        saveState.kind === 'conflict'
+      ) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -725,6 +889,25 @@ export function NoteEditor({
       // (showToast lives on document.body, independent of React's
       // tree), and the next time the user opens the note they'll
       // see the unsaved version.
+      // A save already failed (error / conflict): the text exists
+      // only in this editor. Keep it as a local draft before the
+      // editor goes away, so reopening the note can offer it back.
+      const st = saveStateRef.current.kind;
+      if ((st === 'error' || st === 'conflict') && !discardedRef.current) {
+        const ed = editorRef.current;
+        if (ed && !ed.isDestroyed && baselineEditorRef.current === ed) {
+          try {
+            storeDraft(
+              vaultId,
+              initialNote.path,
+              ed.storage.markdown.getMarkdown() as string,
+              etagRef.current,
+            );
+          } catch {
+            // best effort
+          }
+        }
+      }
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
@@ -735,6 +918,9 @@ export function NoteEditor({
         void performSave();
       }
     };
+    // vaultId / initialNote.path are fixed for a given performSave
+    // (it rebinds on either), so listing performSave is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [performSave]);
 
   // Save on tab/window visibility change. When the user switches
@@ -749,7 +935,9 @@ export function NoteEditor({
     function onVisibilityChange() {
       if (document.visibilityState === 'hidden') {
         if (debounceTimerRef.current !== null || saveState.kind === 'dirty') {
-          void saveNow();
+          // keepalive: hiding is often the first step of closing the
+          // tab; let the request finish after the page is gone.
+          void saveNow({ keepalive: true });
         }
       }
     }
@@ -968,7 +1156,10 @@ export function NoteEditor({
   // particular TipTap version defers the attribute re-eval.
   useEffect(() => {
     if (!editor) return;
-    editor.setEditable(!locked);
+    // emitUpdate=false: TipTap's default emits an 'update' event,
+    // which ran onUpdate's dirty-check on every mount and every
+    // lock change — one of the "opening a note saves it" causes.
+    editor.setEditable(!locked, false);
     const dom = editor.view.dom as HTMLElement;
     dom.classList.toggle('nc-editor-locked', locked);
   }, [editor, locked]);
@@ -1020,8 +1211,36 @@ export function NoteEditor({
   // again — accurate signal.
   useEffect(() => {
     function onEtagChange(e: Event) {
-      const ce = e as CustomEvent<{ path: string; etag: string }>;
+      const ce = e as CustomEvent<{ path: string; etag: string; body?: string }>;
       if (!ce.detail || ce.detail.path !== initialNote.path) return;
+      // A read-only editor never saves; nothing to protect.
+      if (forceReadOnlyRef.current) {
+        etagRef.current = ce.detail.etag;
+        return;
+      }
+      // Only adopt the fresh etag when the server's body is still the
+      // one this editor is based on. If another tab/device saved a
+      // new body in the meantime, the property save's etag already
+      // covers THEIR text — adopting it would let our next save (or
+      // the retry below) silently overwrite their edit.
+      if (typeof ce.detail.body === 'string') {
+        const norm = (t: string) => t.replace(/\s+$/, '');
+        const theirs = norm(ce.detail.body);
+        const known =
+          theirs === norm(serverBodyRef.current) ||
+          (inFlightMarkdownRef.current !== null &&
+            theirs === norm(inFlightMarkdownRef.current));
+        if (!known) {
+          setSaveState({
+            kind: 'conflict',
+            message:
+              'This note was changed elsewhere (another tab or device). ' +
+              'Reload the note to see the latest version.',
+          });
+          return;
+        }
+        serverBodyRef.current = ce.detail.body;
+      }
       etagRef.current = ce.detail.etag;
       // Kick a retry if we were stuck. We read saveState off the
       // ref-via-closure problem by checking the current React state

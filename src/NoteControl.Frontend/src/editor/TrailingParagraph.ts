@@ -71,18 +71,20 @@ import type { Editor } from '@tiptap/core';
  *     logic. Both want "doc ends in paragraph"; this hook is
  *     where that invariant lives.
  *
- * Why it doesn't pollute saves:
+ * Why it doesn't trigger a save on open:
  *
- *   An empty trailing paragraph serialises to nothing in
- *   markdown (the paragraph serializer writes inline content
- *   then closeBlock; empty inline writes nothing, and the final
- *   closeBlock at the very end of the doc is never flushed). So
- *   getMarkdown() returns the same string before and after the
- *   trailing paragraph is added. The dirty-check in NoteEditor's
- *   onUpdate compares strings, so the onCreate-dispatched
- *   transaction triggers onUpdate but the equality check passes
- *   and no save is scheduled. Verified by inspection of
- *   prosemirror-markdown's paragraph serializer.
+ *   The added paragraph is NOT invisible in markdown: since
+ *   ParagraphWithEmpty, an empty paragraph serialises as a ZWSP
+ *   placeholder line, so getMarkdown() gains "\n\n​". (An
+ *   earlier version of this comment claimed it serialised to
+ *   nothing; that stopped being true and caused the "opening a
+ *   note saves it" bug.) NoteEditor therefore baselines its
+ *   dirty-check in the editor-level onCreate, which TipTap runs
+ *   AFTER this extension's onCreate — the baseline already
+ *   includes the trailing paragraph, and onUpdate ignores updates
+ *   that arrive before the baseline exists. The placeholder line
+ *   reaches disk only with the note's next real edit, after which
+ *   the file is stable.
  *
  * Why it doesn't pollute history:
  *

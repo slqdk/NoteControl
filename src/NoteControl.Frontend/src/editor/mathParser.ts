@@ -14,7 +14,15 @@
  * reload never silently rewrites a file. Files stay portable to
  * Obsidian, GitHub's math rendering, and Pandoc, all of which
  * default to dollars. The `\(...\)` / `\[...\]` styles are still
- * ACCEPTED on paste and on load — we just always emit dollars.
+ * ACCEPTED on paste — we just always emit dollars. They are NOT
+ * recognised when loading a note from disk: there, `\[` / `\(` are
+ * the serializer's own escapes for literal brackets and link-URL
+ * parentheses (see the comment in scanMathTokens).
+ *
+ * `$$` blocks are accepted in two shapes: tight (`$$x$$`, no
+ * whitespace inside the delimiters) and display (`$$` alone on a
+ * line, source lines, `$$` alone on a line) — the display shape is
+ * what the serializer writes.
  *
  * --- The "currency $" problem ---
  *
@@ -41,7 +49,9 @@
  *     we approximate this as "any line starting with 4+ spaces
  *     OR a tab", which is over-aggressive but safe)
  *   - inline code spans ( `...` )
- *   - raw HTML tags  ( <...> )
+ *   - raw HTML tags  ( <...> ), and the whole content of raw-text
+ *     elements such as <pre>…</pre> and <code>…</code> (titled code
+ *     blocks are saved in that HTML form)
  *
  * Because tiptap-markdown's `html: true` lets raw HTML through,
  * the *output* of this scan is a string with the math spans
@@ -209,7 +219,7 @@ function scanMathTokens(
 
   // Lexical-state flags. Only one is "open" at any time.
   let inFence = false;
-  let fenceMarker = '';        // '```' or '~~~'
+  let fenceMarker: { ch: string; len: number } | null = null;
   let atLineStart = true;
   let inHtmlTag = false;
 
@@ -229,6 +239,18 @@ function scanMathTokens(
       continue;
     }
     if (ch === '<' && !inFence) {
+      // Raw-text HTML elements (<pre>, <code>, …): skip everything up
+      // to the matching close tag, not just the tag itself. Titled
+      // code blocks are saved as <pre data-title><code>…</code></pre>
+      // and TwinCAT string escapes like '$R$N' inside them would
+      // otherwise be read as an inline math span and cut the block
+      // apart on the next load.
+      const rawEnd = matchRawHtmlElement(input, i);
+      if (rawEnd > i) {
+        i = rawEnd;
+        atLineStart = false;
+        continue;
+      }
       // Heuristic: `<` followed by ASCII letter, `/`, or `!` is a
       // tag start. Other `<` is a literal less-than sign.
       const next = input[i + 1];
@@ -249,9 +271,12 @@ function scanMathTokens(
       const fence = matchFenceStart(input, i);
       if (fence) {
         if (inFence) {
-          if (fence === fenceMarker) {
+          // CommonMark: the closing fence uses the same character
+          // and is at least as long as the opener. A ``` line inside
+          // a ```` block is content, not a close.
+          if (fenceMarker && fence.ch === fenceMarker.ch && fence.len >= fenceMarker.len) {
             inFence = false;
-            fenceMarker = '';
+            fenceMarker = null;
           }
         } else {
           inFence = true;
@@ -308,7 +333,14 @@ function scanMathTokens(
     }
 
     // --- Math: try to consume a token at this position -----------
-    const tok = tryConsumeMath(input, i);
+    // On the load-from-disk path (allowFences) only the dollar forms
+    // count. NoteControl always SAVES math as dollars, while the
+    // markdown serializer writes a literal `[` as `\[` and a `(` in
+    // a link URL as `\(` — so on disk `\[..\]` / `\(..\)` are
+    // escaped brackets, never math. Treating them as LaTeX turned
+    // "Press [F5]" and links like ".../Foo_(bar)" into math on every
+    // reload. The LaTeX-style forms stay accepted on paste.
+    const tok = tryConsumeMath(input, i, { latexStyle: !options.allowFences });
     if (tok) {
       tokens.push(tok);
       i = tok.end;
@@ -324,7 +356,7 @@ function scanMathTokens(
   return tokens;
 }
 
-function matchFenceStart(input: string, i: number): string | null {
+function matchFenceStart(input: string, i: number): { ch: string; len: number } | null {
   // Allow up to 3 leading spaces before a fence (commonmark).
   let p = i;
   let spaces = 0;
@@ -332,13 +364,31 @@ function matchFenceStart(input: string, i: number): string | null {
     p++;
     spaces++;
   }
-  if (input[p] === '`' && input[p + 1] === '`' && input[p + 2] === '`') {
-    return '```';
-  }
-  if (input[p] === '~' && input[p + 1] === '~' && input[p + 2] === '~') {
-    return '~~~';
-  }
-  return null;
+  const ch = input[p];
+  if (ch !== '`' && ch !== '~') return null;
+  let len = 0;
+  while (input[p + len] === ch) len++;
+  return len >= 3 ? { ch, len } : null;
+}
+
+/**
+ * Raw-text HTML elements whose content must never be scanned for
+ * math: code (<pre>, <code>) plus the elements browsers treat as
+ * raw text anyway. Returns the index just past the matching close
+ * tag, or -1 when `input[i]` doesn't open one of them (or it's
+ * never closed — then the normal one-tag skip applies).
+ */
+const RAW_HTML_ELEMENTS = ['pre', 'code', 'script', 'style', 'textarea'];
+
+function matchRawHtmlElement(input: string, i: number): number {
+  const m = /^<([a-zA-Z]+)(?=[\s>/])/.exec(input.slice(i, i + 16));
+  if (!m) return -1;
+  const name = m[1].toLowerCase();
+  if (!RAW_HTML_ELEMENTS.includes(name)) return -1;
+  const close = input.toLowerCase().indexOf(`</${name}`, i + m[0].length);
+  if (close < 0) return -1;
+  const gt = input.indexOf('>', close);
+  return gt < 0 ? -1 : gt + 1;
 }
 
 function isIndentedCodeLineStart(input: string, i: number): boolean {
@@ -376,14 +426,26 @@ function findBacktickRun(input: string, from: number, runLen: number): number {
  *   3. \[ ... \]    (LaTeX block style)
  *   4. \( ... \)    (LaTeX inline style)
  */
-function tryConsumeMath(input: string, i: number): MathToken | null {
+function tryConsumeMath(
+  input: string,
+  i: number,
+  options: { latexStyle: boolean },
+): MathToken | null {
   // --- $$ ... $$ -----------------------------------------------
   if (input[i] === '$' && input[i + 1] === '$') {
     const start = i;
     const openEnd = i + 2;
-    // No whitespace immediately after the opener (matches the
-    // pandoc/markdown convention used by Obsidian, GitHub).
-    if (isWhitespace(input[openEnd])) return null;
+    // Display form: `$$` alone on its line, source on the following
+    // lines, closing `$$` alone on its own line. This is exactly what
+    // MathExtension's serializer writes, so it MUST be accepted —
+    // rejecting it made every block math node come back as a
+    // paragraph (and lose its backslashes on the next save).
+    if (isWhitespace(input[openEnd])) {
+      return tryConsumeDisplayBlock(input, i);
+    }
+    // Tight form (`$$x$$`): no whitespace immediately after the
+    // opener (the pandoc/markdown convention used by Obsidian,
+    // GitHub).
     // Find the next `$$` that isn't whitespace-preceded.
     let j = openEnd;
     while (j < input.length - 1) {
@@ -451,6 +513,8 @@ function tryConsumeMath(input: string, i: number): MathToken | null {
     return null;
   }
 
+  if (!options.latexStyle) return null;
+
   // --- \[ ... \] ------------------------------------------------
   if (input[i] === '\\' && input[i + 1] === '[') {
     const start = i;
@@ -485,6 +549,41 @@ function tryConsumeMath(input: string, i: number): MathToken | null {
     return null;
   }
 
+  return null;
+}
+
+/**
+ * `$$` display block: the opener must be the only thing on its line
+ * (leading indentation allowed — list items / callouts indent their
+ * content) and the closer a line of its own. Anything else returns
+ * null and the `$$` stays literal text.
+ */
+function tryConsumeDisplayBlock(input: string, i: number): MathToken | null {
+  // Only indentation may precede the opener on its line.
+  let k = i - 1;
+  while (k >= 0 && (input[k] === ' ' || input[k] === '\t')) k--;
+  if (k >= 0 && input[k] !== '\n') return null;
+
+  // Only whitespace may follow it.
+  let p = i + 2;
+  while (p < input.length && (input[p] === ' ' || input[p] === '\t' || input[p] === '\r')) p++;
+  if (p < input.length && input[p] !== '\n') return null;
+  const sourceStart = p + 1;
+
+  // Find a closing line that is just `$$`.
+  let lineStart = sourceStart;
+  while (lineStart < input.length) {
+    let lineEnd = input.indexOf('\n', lineStart);
+    if (lineEnd < 0) lineEnd = input.length;
+    const line = input.slice(lineStart, lineEnd);
+    if (/^[ \t]*\$\$[ \t\r]*$/.test(line)) {
+      const source = input.slice(sourceStart, Math.max(sourceStart, lineStart - 1)).trim();
+      if (source === '') return null;
+      const closeAt = lineStart + line.indexOf('$$');
+      return { kind: 'block', source, start: i, end: closeAt + 2 };
+    }
+    lineStart = lineEnd + 1;
+  }
   return null;
 }
 

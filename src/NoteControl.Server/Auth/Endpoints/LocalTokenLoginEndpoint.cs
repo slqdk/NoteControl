@@ -51,8 +51,16 @@ public static class LocalTokenLoginEndpoint
         // 1. Loopback check. We refuse before even looking at the
         //    token so a remote attacker can't probe whether tokens
         //    are valid by timing.
+        //    A request relayed by Caddy is never local, even though
+        //    its TCP connection is: the forwarded-headers middleware
+        //    has already replaced RemoteIpAddress with the real client
+        //    (so the check below fails for it), and the header test is
+        //    belt-and-braces in case that middleware is ever removed.
         var remote = http.Connection.RemoteIpAddress;
-        if (remote is null || !IPAddress.IsLoopback(remote))
+        var relayed = http.Request.Headers.ContainsKey("X-Forwarded-For")
+            || http.Request.Headers.ContainsKey("X-Original-For")
+            || http.Request.Headers.ContainsKey("Forwarded");
+        if (remote is null || !IPAddress.IsLoopback(remote) || relayed)
         {
             return Results.Problem(
                 statusCode: 403,
@@ -76,17 +84,28 @@ public static class LocalTokenLoginEndpoint
         // 3. Find an admin to log in as. Prefer the configured
         //    bootstrap admin (so the user knows whose audit trail
         //    they're touching) but fall back to any active admin
-        //    if that user has been renamed or deleted.
+        //    if that user has been renamed, deleted, disabled or
+        //    demoted. The role check matters: without it a demoted
+        //    bootstrap user got a NON-admin tray session and the tray
+        //    could no longer manage anything, even with other admins
+        //    present.
         var bootstrapUsername = opts.BootstrapAdmin?.Username;
         var admin = !string.IsNullOrWhiteSpace(bootstrapUsername)
             ? await db.Users.FirstOrDefaultAsync(
-                u => u.Username == bootstrapUsername && u.Status == "active",
+                u => u.Username == bootstrapUsername && u.Status == "active" && u.Role == "admin",
                 ct)
             : null;
 
-        admin ??= await db.Users.FirstOrDefaultAsync(
-            u => u.Role == "admin" && u.Status == "active",
-            ct);
+        if (admin is null)
+        {
+            // Oldest active admin, so the choice is stable. Ordered in
+            // memory: SQLite can't ORDER BY a DateTimeOffset column, and
+            // the list of admins is tiny.
+            var admins = await db.Users
+                .Where(u => u.Role == "admin" && u.Status == "active")
+                .ToListAsync(ct);
+            admin = admins.OrderBy(u => u.CreatedAt).FirstOrDefault();
+        }
 
         if (admin is null)
         {

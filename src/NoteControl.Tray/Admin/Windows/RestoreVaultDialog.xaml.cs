@@ -25,6 +25,7 @@ public partial class RestoreVaultDialog : Window
     private readonly IAdminClient _client;
     private readonly BackupListItemDto _backup;
     private bool _isBusy;
+    private bool _restored;
 
     public RestoreVaultDialog(IAdminClient client, BackupListItemDto backup)
     {
@@ -47,10 +48,12 @@ public partial class RestoreVaultDialog : Window
             SourceVaultBox.SelectedIndex = 0;
         }
 
-        // Target live vaults — fetch from the server.
+        // Target live vaults — fetch from the server. all: true so
+        // vaults the admin isn't a member of are offered too (restore
+        // is an admin operation on any vault).
         try
         {
-            var liveVaults = await _client.ListVaultsAsync();
+            var liveVaults = await _client.ListVaultsAsync(all: true);
             var rows = liveVaults
                 .Select(v => new TargetVaultRow
                 {
@@ -65,7 +68,7 @@ public partial class RestoreVaultDialog : Window
             // matches a live vault's path.
             PreselectTargetByPath();
         }
-        catch (AdminClientException ex)
+        catch (Exception ex)
         {
             StatusText.Text = "Could not load live vaults: " + ex.Message;
         }
@@ -109,7 +112,7 @@ public partial class RestoreVaultDialog : Window
         var hasSource = SourceVaultBox.SelectedItem is string;
         var hasTarget = TargetVaultBox.SelectedItem is TargetVaultRow;
         var confirmed = (Confirm1Box.IsChecked == true) && (Confirm2Box.IsChecked == true);
-        RestoreButton.IsEnabled = !_isBusy && hasSource && hasTarget && confirmed;
+        RestoreButton.IsEnabled = !_isBusy && !_restored && hasSource && hasTarget && confirmed;
     }
 
     private async void RestoreButton_Click(object sender, RoutedEventArgs e)
@@ -145,9 +148,16 @@ public partial class RestoreVaultDialog : Window
                     (result.PreRestoreFolderPath ?? "(none — vault was empty)") + "\n\n" +
                     "Tell any users with this vault open in their browser to refresh.";
 
+                // Stay open so the result (and the pre-restore path)
+                // can be read; Close reports success to the caller.
+                // Setting DialogResult here used to close the dialog
+                // in the same step that filled the result panel.
+                _restored = true;
+                _isBusy = false;
                 StatusText.Text = "Restore complete.";
                 RestoreButton.IsEnabled = false;
-                DialogResult = true;
+                Confirm1Box.IsEnabled = false;
+                Confirm2Box.IsEnabled = false;
             }
             else
             {
@@ -162,15 +172,27 @@ public partial class RestoreVaultDialog : Window
                 SetBusy(false, "");
             }
         }
-        catch (AdminClientException ex)
+        catch (Exception ex)
         {
+            // Network errors / server restart mid-call surface as
+            // HttpRequestException or TaskCanceledException, not
+            // AdminClientException — catch them here too instead of
+            // letting an async-void handler take the tray down. The
+            // server finishes the restore regardless of this call.
             SetBusy(false, "");
-            MessageBox.Show(this, "Restore failed: " + ex.Message,
+            MessageBox.Show(this,
+                "Restore request failed: " + ex.Message + "\n\n" +
+                "The server may still have completed the restore — check the Logs window " +
+                "(BackupRestored event) before trying again.",
                 "NoteControl", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_restored) DialogResult = true; // closes, tells the caller to refresh
+        else Close();
+    }
 
     // -------------------------------------------------------------
     // Helpers

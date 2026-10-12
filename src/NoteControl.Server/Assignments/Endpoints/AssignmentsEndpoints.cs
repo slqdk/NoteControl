@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NoteControl.Server.Configuration;
 using Microsoft.Extensions.Logging;
 using NoteControl.Server.Assignments.Services;
 using NoteControl.Server.Vaults;
@@ -40,12 +41,18 @@ public static class AssignmentsEndpoints
 
     private static async Task<IResult> GetAsync(
         Guid vaultId,
+        HttpContext http,
         IAssignmentsConfigService configs,
         CancellationToken ct)
     {
         try
         {
-            var dto = await configs.GetAsync(vaultId, ct);
+            // Read + ETag under the file lock so the ETag always
+            // belongs to the content returned (SidecarConcurrency).
+            var path = await configs.GetConfigFilePathAsync(vaultId, ct);
+            var (dto, etag) = await SidecarConcurrency.WithLockAsync(path, async () =>
+                (await configs.GetAsync(vaultId, ct), await SidecarConcurrency.ComputeEtagAsync(path)));
+            http.Response.Headers.ETag = etag;
             return Results.Ok(dto);
         }
         catch (AssignmentsException ex)
@@ -130,7 +137,22 @@ public static class AssignmentsEndpoints
 
         try
         {
-            await configs.SaveAsync(vaultId, config, ct);
+            // Optimistic concurrency: a PUT carrying If-Match is refused
+            // with 412 when the file changed since that ETag, instead of
+            // silently erasing another tab's/device's edits.
+            var path = await configs.GetConfigFilePathAsync(vaultId, ct);
+            var newEtag = await SidecarConcurrency.WithLockAsync<string?>(path, async () =>
+            {
+                var current = await SidecarConcurrency.ComputeEtagAsync(path);
+                if (!SidecarConcurrency.IfMatchSatisfied(http.Request, current)) return null;
+                await configs.SaveAsync(vaultId, config, ct);
+                return await SidecarConcurrency.ComputeEtagAsync(path);
+            });
+            if (newEtag is null)
+            {
+                return SidecarConcurrency.PreconditionFailed("assignments");
+            }
+            http.Response.Headers.ETag = newEtag;
             // Debug-level for the success case — the client
             // debounces saves while the user edits, so this fires
             // often. Errors stay at Error so they surface in the

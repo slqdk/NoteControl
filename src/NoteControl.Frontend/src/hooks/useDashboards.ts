@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, startpageApi } from '../api/client';
 import type {
@@ -7,6 +7,8 @@ import type {
 } from '../api/types';
 import { newId } from '../util/id';
 import { useDebouncedSave } from './useDebouncedSave';
+import { mergeById, saveSidecar, type SidecarSyncState } from '../util/sidecarSync';
+import { showToast } from '../utils/toast';
 
 /**
  * Per-vault dashboards data layer. Owns the StartpageConfigDto for
@@ -69,6 +71,8 @@ export function useDashboards(vaultId: string | undefined): UseDashboardsResult 
   const [config, setConfig] = useState<StartpageConfigDto | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // ETag + last-known server copy for conflict-safe saves.
+  const syncRef = useRef<SidecarSyncState<StartpageConfigDto>>({ etag: null, base: null });
 
   // ----- initial load
   useEffect(() => {
@@ -78,8 +82,12 @@ export function useDashboards(vaultId: string | undefined): UseDashboardsResult 
     setConfig(null);
     (async () => {
       try {
-        const dto = await startpageApi.getConfig(vaultId);
-        if (!cancelled) setConfig(dto);
+        const { data, etag } = await startpageApi.getConfigVersioned(vaultId);
+        if (cancelled) return;
+        // Fresh sync state per load: a save still in flight for the
+        // previous vault keeps its own object (captured in doSave).
+        syncRef.current = { etag, base: data };
+        setConfig(data);
       } catch (e) {
         if (!cancelled) {
           setLoadError(
@@ -103,9 +111,35 @@ export function useDashboards(vaultId: string | undefined): UseDashboardsResult 
   const doSave = useCallback(
     (cfg: StartpageConfigDto) => {
       if (!vaultId) return;
+      // Capture this vault's sync state + id: a flush after a vault
+      // switch must still write to the vault the edit belongs to.
+      const state = syncRef.current;
+      const vid = vaultId;
       void (async () => {
         try {
-          await startpageApi.saveConfig(vaultId, cfg);
+          // If another tab/device saved since we loaded, the server
+          // answers 412; saveSidecar re-reads, merges our change into
+          // theirs per item, and retries (util/sidecarSync.ts).
+          const { saved, merged } = await saveSidecar<StartpageConfigDto>({
+            local: cfg,
+            state,
+            put: (d, etag) => startpageApi.saveConfigVersioned(vid, d, etag),
+            load: () => startpageApi.getConfigVersioned(vid),
+            merge: (base, local, server) => ({
+              ...server,
+              dashboards: mergeById(base.dashboards, local.dashboards, server.dashboards),
+            }),
+          });
+          if (merged && syncRef.current === state) {
+            // Show what's now on the server, keeping any edits made
+            // while this save was in flight.
+            setConfig((cur) =>
+              cur
+                ? { ...saved, dashboards: mergeById(cfg.dashboards, cur.dashboards, saved.dashboards) }
+                : cur,
+            );
+            showToast('These dashboards were also changed in another tab or device — both changes were kept.', 5000);
+          }
           setSaveError(null);
         } catch (e) {
           setSaveError(

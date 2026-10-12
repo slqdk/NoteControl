@@ -25,11 +25,11 @@ namespace NoteControl.Server.Startpage.Services;
 ///     the client hotlinks it. If the image is paywalled or 403s,
 ///     it just doesn't render — the title/description still fill.
 ///
-/// SSRF guard: same as <see cref="FeedFetcher"/> — block loopback,
-/// link-local, RFC1918, and the literal "localhost" hostname. DNS
-/// rebinding remains a theoretical risk and an attacker controlling
-/// DNS could route around it; for NoteControl's single-admin
-/// threat model this is good enough.
+/// SSRF guard: same as <see cref="FeedFetcher"/> —
+/// <see cref="OutboundAddressGuard"/> refuses, at connect time, any
+/// connection (redirect hops included) to a loopback, private,
+/// link-local or otherwise non-public address, whatever the URL's
+/// host name. Any signed-in user, viewers included, can call this.
 ///
 /// Failure modes throw <see cref="StartpageException"/> with an
 /// appropriate status code; the endpoint maps to RFC 7807 Problem
@@ -87,7 +87,7 @@ public sealed class LinkPreviewFetcher : ILinkPreviewFetcher
                 "URL must be an absolute http:// or https:// URL.");
         }
 
-        if (IsLikelyLoopbackOrPrivate(parsed))
+        if (OutboundAddressGuard.IsObviouslyLocal(parsed))
         {
             throw new StartpageException(
                 "URL points to a loopback or private network address.");
@@ -200,6 +200,13 @@ public sealed class LinkPreviewFetcher : ILinkPreviewFetcher
             var charset = resp.Content.Headers.ContentType?.CharSet;
             var encoding = TryGetEncoding(charset) ?? Encoding.UTF8;
             body = encoding.GetString(ms.ToArray());
+        }
+        catch (HttpRequestException ex) when (OutboundAddressGuard.IsBlockedFailure(ex))
+        {
+            // Refused at connect time: the host name (or a redirect
+            // target) resolves to a non-public address.
+            throw new StartpageException(
+                "URL points to a loopback or private network address.");
         }
         catch (HttpRequestException ex)
         {
@@ -444,32 +451,6 @@ public sealed class LinkPreviewFetcher : ILinkPreviewFetcher
         if (string.IsNullOrWhiteSpace(name)) return null;
         try { return Encoding.GetEncoding(name); }
         catch { return null; }
-    }
-
-    /// <summary>
-    /// Same SSRF guard as <see cref="FeedFetcher.IsLikelyLoopbackOrPrivate"/>.
-    /// Kept duplicated rather than extracted to a shared helper because
-    /// the two fetchers may diverge (e.g. allowing http://localhost for
-    /// dev-mode RSS feeds while still blocking it here); when/if they
-    /// converge for good, refactor to one place.
-    /// </summary>
-    private static bool IsLikelyLoopbackOrPrivate(Uri uri)
-    {
-        var host = uri.Host;
-        if (IPAddress.TryParse(host, out var ip))
-        {
-            if (IPAddress.IsLoopback(ip)) return true;
-            var bytes = ip.GetAddressBytes();
-            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            {
-                if (bytes[0] == 10) return true;
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
-                if (bytes[0] == 192 && bytes[1] == 168) return true;
-                if (bytes[0] == 169 && bytes[1] == 254) return true;
-            }
-            return false;
-        }
-        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record CacheEntry(LinkPreviewDto Preview, DateTime ExpiresAtUtc)

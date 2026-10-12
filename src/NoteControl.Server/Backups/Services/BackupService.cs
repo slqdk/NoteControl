@@ -8,9 +8,26 @@ namespace NoteControl.Server.Backups.Services;
 /// <summary>
 /// Backup engine. Walks the data root, copies every vault folder
 /// and the <c>.server/</c> folder to a timestamped subdirectory of
-/// the configured target path. SQLite databases are snapshotted
-/// via <c>VACUUM INTO</c> so the result is guaranteed-consistent
-/// even while the server is taking writes.
+/// the configured target path. The two SQLite databases the server
+/// itself keeps open — <c>.server/server.db</c> and each vault's
+/// <c>.notesapp/index.db</c> — are snapshotted via <c>VACUUM INTO</c>
+/// so they're consistent even while the server is taking writes.
+/// Every other file is a plain copy, whatever its extension (a
+/// <c>Thumbs.db</c> in an assets folder is just a file).
+/// <para>
+/// Not copied: the local tray token, the CSRF key and
+/// <c>server.url</c> (secrets / per-start state the server recreates —
+/// a backup on a NAS must not hand out a working admin token), the
+/// SQLite <c>-wal</c>/<c>-shm</c> sidecars of the snapshotted
+/// databases, and in-flight <c>*.nc-tmp</c> atomic-write temp files.
+/// </para>
+/// <para>
+/// A file that can't be read (locked by another program, permission
+/// denied) is logged, listed in the manifest's <c>skipped</c> array
+/// and reported as a warning — it no longer aborts the whole run.
+/// Only a failure to snapshot <c>server.db</c> (users, vaults,
+/// permissions) fails the backup.
+/// </para>
 /// <para>
 /// Retention pruning runs at the END of a successful backup —
 /// failures don't trigger pruning, so a series of failed runs can
@@ -121,10 +138,13 @@ public sealed class BackupService : IBackupService
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var id = DateTimeOffset.UtcNow.ToString(IdFormat, CultureInfo.InvariantCulture);
+        var now = DateTimeOffset.UtcNow;
+        var id = now.ToString(IdFormat, CultureInfo.InvariantCulture);
         var dataRoot = _storage.CurrentValue.DataRoot;
         var backupRoot = Path.Combine(target, id);
+        var createdRoot = false;
         long bytesCopied = 0;
+        var skipped = new List<string>();
 
         try
         {
@@ -134,16 +154,37 @@ public sealed class BackupService : IBackupService
                 throw new InvalidOperationException(
                     $"Data root '{dataRoot}' does not exist or isn't readable.");
             }
+            if (IsSameOrUnder(target, dataRoot))
+            {
+                // Would copy the backups into themselves until the
+                // path gets too long, and a backup on the same folder
+                // tree as the data isn't a backup anyway.
+                throw new InvalidOperationException(
+                    $"Backup target '{target}' is inside the data root '{dataRoot}'. " +
+                    "Choose a folder outside it (ideally on another disk or a NAS).");
+            }
             Directory.CreateDirectory(target);
+
+            // Two runs in the same second (double-click on Run now,
+            // manual run as the schedule fires) would share a folder,
+            // and the second one's failure cleanup would delete the
+            // first one's backup. Step to the next free second.
+            while (Directory.Exists(backupRoot))
+            {
+                now = now.AddSeconds(1);
+                id = now.ToString(IdFormat, CultureInfo.InvariantCulture);
+                backupRoot = Path.Combine(target, id);
+            }
             Directory.CreateDirectory(backupRoot);
+            createdRoot = true;
 
             _log.LogInformation("Backup {Id} starting → {Target}", id, backupRoot);
 
             // 2. Walk the data root. Each top-level entry is either
-            //    a vault folder or the special .server/ folder. We
-            //    treat .server specially (it has SQLite databases
-            //    that need VACUUM INTO); vaults get plain copy
-            //    plus VACUUM INTO for any nested .notesapp/index.db.
+            //    a vault tree (users/, shared/) or the special .server/
+            //    folder. See the class remarks for which files get a
+            //    SQLite snapshot, which are left out, and how
+            //    unreadable files are handled.
             //
             //    NOTE: we deliberately skip files we don't recognise
             //    at the data-root level. The data root should only
@@ -154,13 +195,13 @@ public sealed class BackupService : IBackupService
                 var name = Path.GetFileName(entry);
                 var dest = Path.Combine(backupRoot, name);
 
-                bytesCopied += await CopyDirectoryAsync(entry, dest, ct);
+                bytesCopied += await CopyDirectoryAsync(entry, dest, name, skipped, ct);
             }
 
             // 3. Write a small manifest so callers / future tooling
             //    can identify a backup folder without parsing the
             //    folder name.
-            await WriteManifestAsync(backupRoot, id, dataRoot, bytesCopied, ct);
+            await WriteManifestAsync(backupRoot, id, dataRoot, bytesCopied, skipped, ct);
 
             // 4. Retention pruning. Errors here don't fail the run —
             //    we already have a good backup; pruning is best-effort.
@@ -174,16 +215,25 @@ public sealed class BackupService : IBackupService
             }
 
             sw.Stop();
+            // Success with skipped files: still a usable backup, but
+            // say so — Error doubles as the warning text (the tray
+            // shows it next to the ✓).
+            var warning = skipped.Count == 0
+                ? null
+                : $"{skipped.Count} file(s) could not be copied and are missing from this backup: " +
+                  string.Join(", ", skipped.Take(5)) +
+                  (skipped.Count > 5 ? ", …" : "") +
+                  " (full list in the backup's manifest and the server log).";
             _lastRunAt = DateTimeOffset.UtcNow;
             _lastRunSuccess = true;
-            _lastRunError = null;
+            _lastRunError = warning;
             _lastRunDurationMs = sw.ElapsedMilliseconds;
 
             _log.LogInformation(
-                "Backup {Id} succeeded ({Bytes} bytes, {Ms} ms).",
-                id, bytesCopied, sw.ElapsedMilliseconds);
+                "Backup {Id} succeeded ({Bytes} bytes, {Ms} ms, {Skipped} skipped).",
+                id, bytesCopied, sw.ElapsedMilliseconds, skipped.Count);
 
-            return new BackupRunResult(true, id, null, sw.ElapsedMilliseconds, bytesCopied);
+            return new BackupRunResult(true, id, warning, sw.ElapsedMilliseconds, bytesCopied);
         }
         catch (Exception ex)
         {
@@ -200,7 +250,8 @@ public sealed class BackupService : IBackupService
             // the user can delete it manually.
             try
             {
-                if (Directory.Exists(backupRoot))
+                // Only ever delete the folder THIS run created.
+                if (createdRoot && Directory.Exists(backupRoot))
                 {
                     Directory.Delete(backupRoot, recursive: true);
                 }
@@ -215,60 +266,152 @@ public sealed class BackupService : IBackupService
         }
     }
 
-    /// <summary>
-    /// Copy <paramref name="source"/> to <paramref name="dest"/>
-    /// recursively. SQLite files (anything ending in .db, .db-wal,
-    /// .db-shm) get the special <c>VACUUM INTO</c> treatment so we
-    /// produce a consistent snapshot even if the file is open
-    /// elsewhere in this process. Everything else is a plain copy.
-    /// <para>
-    /// Returns <c>Task&lt;long&gt;</c> rather than just <c>long</c>
-    /// so the call site can stay <c>await</c>-shaped — easier to
-    /// retrofit if we ever switch to genuinely async file I/O.
-    /// Today the work is sync (File.Copy + SQLite VACUUM INTO are
-    /// both blocking calls); marking the method async would just
-    /// produce a CS1998 "lacks await" warning.
-    /// </para>
-    /// </summary>
-    private Task<long> CopyDirectoryAsync(string source, string dest, CancellationToken ct)
+    /// <summary>What happens to one file under DataRoot.</summary>
+    public enum FileAction
     {
-        Directory.CreateDirectory(dest);
-        long bytes = 0;
+        Copy,
+        /// <summary>VACUUM INTO; failure fails the backup.</summary>
+        SnapshotRequired,
+        /// <summary>VACUUM INTO; failure skips the file (derived data).</summary>
+        SnapshotOptional,
+        Exclude,
+    }
 
-        foreach (var dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+    /// <summary>
+    /// Classify a file by its path relative to DataRoot (any
+    /// separator). Pure — unit-tested.
+    /// </summary>
+    public static FileAction Classify(string relativeToDataRoot)
+    {
+        var parts = relativeToDataRoot.Split(
+            new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return FileAction.Exclude;
+        var name = parts[^1];
+        var parent = parts.Length >= 2 ? parts[^2] : "";
+
+        if (name.EndsWith(".nc-tmp", StringComparison.OrdinalIgnoreCase))
+            return FileAction.Exclude; // in-flight atomic write
+
+        if (parts.Length == 2 && string.Equals(parts[0], ".server", StringComparison.OrdinalIgnoreCase))
         {
-            var rel = Path.GetRelativePath(source, dir);
-            Directory.CreateDirectory(Path.Combine(dest, rel));
+            foreach (var secret in ServerStateExcludes)
+            {
+                if (string.Equals(name, secret, StringComparison.OrdinalIgnoreCase))
+                    return FileAction.Exclude;
+            }
+            if (string.Equals(name, "server.db", StringComparison.OrdinalIgnoreCase))
+                return FileAction.SnapshotRequired;
+            if (name.StartsWith("server.db-", StringComparison.OrdinalIgnoreCase))
+                return FileAction.Exclude; // -wal / -shm / -journal
         }
 
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        if (string.Equals(parent, ".notesapp", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(name, "index.db", StringComparison.OrdinalIgnoreCase))
+                return FileAction.SnapshotOptional;
+            if (name.StartsWith("index.db-", StringComparison.OrdinalIgnoreCase))
+                return FileAction.Exclude;
+        }
+
+        return FileAction.Copy;
+    }
+
+    /// <summary>
+    /// <c>.server/</c> files that never go into a backup: the local
+    /// tray token (an admin login while the server runs), the CSRF
+    /// signing key, and the per-start URL file. The server recreates
+    /// all three on start.
+    /// </summary>
+    private static readonly string[] ServerStateExcludes = { "tray.token", "csrf.key", "server.url" };
+
+    /// <summary>
+    /// Copy <paramref name="source"/> (DataRoot-relative
+    /// <paramref name="relRoot"/>) to <paramref name="dest"/>
+    /// recursively, applying <see cref="Classify"/> per file.
+    /// Unreadable files and folders are added to
+    /// <paramref name="skipped"/> instead of aborting the run.
+    /// <para>
+    /// Returns <c>Task&lt;long&gt;</c> rather than just <c>long</c>
+    /// so the call site can stay <c>await</c>-shaped. Today the work
+    /// is sync (File.Copy + SQLite VACUUM INTO are both blocking).
+    /// </para>
+    /// </summary>
+    private Task<long> CopyDirectoryAsync(
+        string source, string dest, string relRoot, List<string> skipped, CancellationToken ct)
+    {
+        long bytes = 0;
+        var pending = new Stack<(string Src, string Dst, string Rel)>();
+        pending.Push((source, dest, relRoot));
+
+        while (pending.Count > 0)
         {
             ct.ThrowIfCancellationRequested();
-            var rel = Path.GetRelativePath(source, file);
-            var target = Path.Combine(dest, rel);
+            var (src, dst, rel) = pending.Pop();
+            Directory.CreateDirectory(dst);
 
-            // SQLite WAL/SHM are sidecars and should be skipped —
-            // VACUUM INTO produces a self-contained snapshot, so
-            // copying them would just confuse the restored DB.
-            if (file.EndsWith("-wal", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith("-shm", StringComparison.OrdinalIgnoreCase))
+            string[] files, dirs;
+            try
             {
+                files = Directory.GetFiles(src);
+                dirs = Directory.GetDirectories(src);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _log.LogWarning(ex, "Backup: cannot read folder {Path}; skipped.", src);
+                skipped.Add(rel + "/");
                 continue;
             }
 
-            if (file.EndsWith(".db", StringComparison.OrdinalIgnoreCase))
+            foreach (var file in files)
             {
-                bytes += SqliteSnapshot(file, target);
-                continue;
+                ct.ThrowIfCancellationRequested();
+                var name = Path.GetFileName(file);
+                var fileRel = rel + "/" + name;
+                var target = Path.Combine(dst, name);
+                var action = Classify(fileRel);
+                if (action == FileAction.Exclude) continue;
+
+                try
+                {
+                    if (action == FileAction.Copy)
+                    {
+                        // Plain copy. File.Copy is sync but already
+                        // buffered; for IO-bound work sync vs async is
+                        // a wash.
+                        File.Copy(file, target, overwrite: true);
+                        bytes += new FileInfo(target).Length;
+                    }
+                    else
+                    {
+                        bytes += SqliteSnapshot(file, target);
+                    }
+                }
+                catch (Exception ex) when (action != FileAction.SnapshotRequired
+                                           && ex is not OperationCanceledException)
+                {
+                    _log.LogWarning(ex, "Backup: could not copy {Path}; skipped.", file);
+                    skipped.Add(fileRel);
+                    try { if (File.Exists(target)) File.Delete(target); } catch { /* ignored */ }
+                }
             }
 
-            // Plain copy. File.Copy is sync but already buffered;
-            // for a pure-IO bound workload sync vs async is a wash.
-            File.Copy(file, target, overwrite: true);
-            bytes += new FileInfo(target).Length;
+            foreach (var dir in dirs)
+            {
+                var name = Path.GetFileName(dir);
+                pending.Push((dir, Path.Combine(dst, name), rel + "/" + name));
+            }
         }
 
         return Task.FromResult(bytes);
+    }
+
+    /// <summary>True when <paramref name="path"/> equals or is inside <paramref name="root"/>.</summary>
+    public static bool IsSameOrUnder(string path, string root)
+    {
+        var p = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var r = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return string.Equals(p, r, StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -284,11 +427,15 @@ public sealed class BackupService : IBackupService
         // Open in read-only mode so we never accidentally modify
         // the live DB. Mode=ReadOnly + Cache=Shared lets us coexist
         // with the running server's connections.
+        // Pooling = false: a pooled handle would stay open on the live
+        // file after we're done, and on Windows an open index.db
+        // blocks moving its vault folder (restore, vault delete).
         var connStr = new SqliteConnectionStringBuilder
         {
             DataSource = source,
             Mode = SqliteOpenMode.ReadOnly,
             Cache = SqliteCacheMode.Shared,
+            Pooling = false,
         }.ToString();
 
         // Make sure the destination doesn't exist — VACUUM INTO
@@ -311,7 +458,8 @@ public sealed class BackupService : IBackupService
     }
 
     private static async Task WriteManifestAsync(
-        string backupRoot, string id, string dataRoot, long bytes, CancellationToken ct)
+        string backupRoot, string id, string dataRoot, long bytes,
+        IReadOnlyList<string> skipped, CancellationToken ct)
     {
         var manifest = new
         {
@@ -319,6 +467,7 @@ public sealed class BackupService : IBackupService
             createdAt = DateTimeOffset.UtcNow,
             dataRoot,
             bytesCopied = bytes,
+            skipped,
             schemaVersion = 1,
         };
         var path = Path.Combine(backupRoot, ManifestFileName);
@@ -476,28 +625,44 @@ public sealed class BackupService : IBackupService
     }
 
     /// <summary>
-    /// Walk a backup folder and return the relative paths of any
-    /// vault folders inside (folders containing a markdown file or
-    /// a <c>.notesapp/</c> subfolder). Used by the restore UI to
-    /// populate the "which vault" dropdown.
+    /// Walk a backup folder and return the relative paths of the
+    /// vault ROOTS inside it, for the restore UI's "which vault"
+    /// dropdown. A vault root is the outermost folder under
+    /// <c>users/</c> or <c>shared/</c> that has a <c>.notesapp/</c>
+    /// subfolder. We don't descend into a vault once found: folders
+    /// created from the UI carry their own <c>.notesapp/folder-marker</c>,
+    /// and listing them as vaults offered e.g.
+    /// <c>users/admin/Main/Projects/2026</c> — restoring which replaced
+    /// the whole live vault with that one subfolder.
     /// </summary>
-    private static IReadOnlyList<string> ListVaultFolders(string backupRoot)
+    public static IReadOnlyList<string> ListVaultFolders(string backupRoot)
     {
         var found = new List<string>();
-        // Vaults live at users/{username}/{vaultname}/ and
-        // shared/{vaultname}/. We probe both subtrees.
         foreach (var top in new[] { "users", "shared" })
         {
             var topPath = Path.Combine(backupRoot, top);
             if (!Directory.Exists(topPath)) continue;
 
-            foreach (var sub in Directory.EnumerateDirectories(topPath, "*", SearchOption.AllDirectories))
+            var pending = new Stack<string>();
+            pending.Push(topPath);
+            while (pending.Count > 0)
             {
-                var notesApp = Path.Combine(sub, ".notesapp");
-                if (Directory.Exists(notesApp))
+                string[] subs;
+                try { subs = Directory.GetDirectories(pending.Pop()); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+
+                foreach (var sub in subs)
                 {
-                    var rel = Path.GetRelativePath(backupRoot, sub).Replace('\\', '/');
-                    found.Add(rel);
+                    if (string.Equals(Path.GetFileName(sub), ".notesapp", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (Directory.Exists(Path.Combine(sub, ".notesapp")))
+                    {
+                        found.Add(Path.GetRelativePath(backupRoot, sub).Replace('\\', '/'));
+                    }
+                    else
+                    {
+                        pending.Push(sub);
+                    }
                 }
             }
         }

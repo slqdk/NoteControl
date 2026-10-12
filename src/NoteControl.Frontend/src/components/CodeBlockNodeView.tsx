@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   NodeViewContent,
   NodeViewWrapper,
@@ -87,7 +87,20 @@ export function CodeBlockNodeView({
     }
   }
 
+  // Set by Escape just before it blurs the input, so the blur's
+  // commit() skips the typed value instead of saving it (setDraft's
+  // reset hasn't been applied yet when blur fires in the same tick).
+  const cancelEditRef = useRef(false);
+
   function commit() {
+    const original = (node.attrs.title as string) || 'code';
+    // Read-only notes (released / viewer / archive): the title is
+    // part of the document, so never write it.
+    if (cancelEditRef.current || !editor?.isEditable) {
+      cancelEditRef.current = false;
+      if (draft !== original) setDraft(original);
+      return;
+    }
     const t = draft.trim() || 'code';
     if (t !== node.attrs.title) {
       updateAttributes({ title: t });
@@ -157,13 +170,17 @@ export function CodeBlockNodeView({
           className="nc-codeblock-title"
           value={draft}
           placeholder="code"
-          onChange={(e) => setDraft(e.target.value)}
+          readOnly={!editor?.isEditable}
+          onChange={(e) => {
+            if (editor?.isEditable) setDraft(e.target.value);
+          }}
           onBlur={commit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
               (e.target as HTMLInputElement).blur();
             } else if (e.key === 'Escape') {
+              cancelEditRef.current = true;
               setDraft((node.attrs.title as string) || 'code');
               (e.target as HTMLInputElement).blur();
             }

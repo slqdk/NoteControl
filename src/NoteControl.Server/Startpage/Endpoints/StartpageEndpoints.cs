@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NoteControl.Server.Configuration;
 using Microsoft.Extensions.Logging;
 using NoteControl.Server.Startpage.Services;
 using NoteControl.Server.Vaults;
@@ -64,12 +65,18 @@ public static class StartpageEndpoints
 
     private static async Task<IResult> GetConfigAsync(
         Guid vaultId,
+        HttpContext http,
         IStartpageConfigService configs,
         CancellationToken ct)
     {
         try
         {
-            var dto = await configs.GetAsync(vaultId, ct);
+            // Read + ETag under the file lock so the ETag always
+            // belongs to the content returned (SidecarConcurrency).
+            var path = await configs.GetConfigFilePathAsync(vaultId, ct);
+            var (dto, etag) = await SidecarConcurrency.WithLockAsync(path, async () =>
+                (await configs.GetAsync(vaultId, ct), await SidecarConcurrency.ComputeEtagAsync(path)));
+            http.Response.Headers.ETag = etag;
             return Results.Ok(dto);
         }
         catch (StartpageException ex)
@@ -164,7 +171,22 @@ public static class StartpageEndpoints
         }
         try
         {
-            await configs.SaveAsync(vaultId, config, ct);
+            // Optimistic concurrency: a PUT carrying If-Match is refused
+            // with 412 when the file changed since that ETag, instead of
+            // silently erasing another tab's/device's edits.
+            var path = await configs.GetConfigFilePathAsync(vaultId, ct);
+            var newEtag = await SidecarConcurrency.WithLockAsync<string?>(path, async () =>
+            {
+                var current = await SidecarConcurrency.ComputeEtagAsync(path);
+                if (!SidecarConcurrency.IfMatchSatisfied(http.Request, current)) return null;
+                await configs.SaveAsync(vaultId, config, ct);
+                return await SidecarConcurrency.ComputeEtagAsync(path);
+            });
+            if (newEtag is null)
+            {
+                return SidecarConcurrency.PreconditionFailed("dashboards");
+            }
+            http.Response.Headers.ETag = newEtag;
             // Debug-level: the user is debounce-saving every ~500ms while
             // dragging blocks, so this fires often. Information would
             // drown the log in routine activity.

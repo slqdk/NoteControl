@@ -163,7 +163,7 @@ export const CodeBlockWithTitle = CodeBlockLowlight.extend({
         serialize(
           state: {
             write: (s: string) => void;
-            text: (s: string) => void;
+            text: (s: string, escape?: boolean) => void;
             ensureNewLine: () => void;
             closeBlock: (n: unknown) => void;
           },
@@ -184,10 +184,24 @@ export const CodeBlockWithTitle = CodeBlockLowlight.extend({
             state.closeBlock(node);
           } else {
             // Standard fenced code block.
-            state.write('```' + language + '\n');
-            state.text(code);
+            //
+            // The code is written UNESCAPED (`text(code, false)`).
+            // prosemirror-markdown's text() escapes * _ [ ] \ ` ~ by
+            // default, but markdown never unescapes inside a fence,
+            // so every save added another layer of backslashes —
+            // and with save-on-open, every view did too.
+            //
+            // The fence must be longer than any backtick run inside
+            // the code, or a ``` line in the code would close it
+            // early (same rule as prosemirror-markdown's own
+            // code_block serializer).
+            const runs = code.match(/`{3,}/g);
+            const longest = runs ? Math.max(...runs.map((r) => r.length)) : 0;
+            const fence = '`'.repeat(Math.max(3, longest + 1));
+            state.write(fence + language + '\n');
+            state.text(code, false);
             state.ensureNewLine();
-            state.write('```');
+            state.write(fence);
             state.closeBlock(node);
           }
         },

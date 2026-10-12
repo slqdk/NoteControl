@@ -184,9 +184,8 @@ public static class VaultEndpoints
         HttpContext http,
         ServerDbContext db,
         IVaultService vaults,
-        IIndexService index,
+        IBackgroundIndexRebuilder rebuilder,
         IAuditLog audit,
-        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var user = http.RequireUser();
@@ -256,21 +255,10 @@ public static class VaultEndpoints
         // admin can manually re-trigger the rebuild via the search
         // index endpoint if it ever fails.
         //
-        // Same pattern as RestoreService.cs uses post-restore.
-        var log = loggerFactory.CreateLogger("VaultRegister");
-        var vaultId = dto.Id;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var count = await index.RebuildAsync(vaultId);
-                log.LogInformation("Post-register index rebuild for {VaultId} indexed {Count} notes.", vaultId, count);
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "Post-register index rebuild failed for {VaultId}.", vaultId);
-            }
-        });
+        // The rebuild runs in its own DI scope: capturing this
+        // request's IndexService (and its DbContext) in Task.Run used
+        // to leave vaults unindexed with no error recorded.
+        _ = rebuilder.Queue(dto.Id, "register");
 
         return Results.Created($"/api/vaults/{dto.Id}", dto);
     }
@@ -421,9 +409,8 @@ public static class VaultEndpoints
         // instead of an opaque body-binding failure.
         [FromServices] IVaultService vaults,
         [FromServices] ISampleDataInstaller installer,
-        [FromServices] IIndexService index,
+        [FromServices] IBackgroundIndexRebuilder rebuilder,
         [FromServices] IAuditLog audit,
-        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var user = http.RequireUser();
@@ -474,25 +461,9 @@ public static class VaultEndpoints
             ct);
 
         // Background re-index so the new notes appear in search.
-        // Identical pattern to Register's rebuild kickoff. Failures
-        // are logged but don't fail the response — the operator can
-        // re-trigger the rebuild manually.
-        var log = loggerFactory.CreateLogger("VaultSampleData");
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var count = await index.RebuildAsync(vaultId);
-                log.LogInformation(
-                    "Post-sample-install index rebuild for {VaultId} indexed {Count} notes.",
-                    vaultId, count);
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex,
-                    "Post-sample-install index rebuild failed for {VaultId}.", vaultId);
-            }
-        });
+        // Own DI scope (see Register); failures are logged and shown
+        // in the vault's index status.
+        _ = rebuilder.Queue(vaultId, "sample-data");
 
         return Results.Ok(new InstallSampleDataResponse(
             result.FilesWritten, result.FoldersCreated));

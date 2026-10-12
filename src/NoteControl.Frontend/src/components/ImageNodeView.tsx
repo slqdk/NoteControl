@@ -64,6 +64,8 @@ export function ImageNodeView({
         target instanceof HTMLTextAreaElement ||
         (target instanceof HTMLElement && target.isContentEditable && !containerRef.current?.contains(target));
       if (isInTextField) return;
+      // Read-only (released / viewer / archive): no keyboard delete.
+      if (!editor.isEditable) return;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
@@ -75,7 +77,7 @@ export function ImageNodeView({
     }
     document.addEventListener('keydown', onDocKey);
     return () => document.removeEventListener('keydown', onDocKey);
-  }, [active, deleteNode]);
+  }, [active, deleteNode, editor]);
 
   /**
    * Drag-resize. We only listen on the bottom-right corner handle
@@ -146,6 +148,11 @@ export function ImageNodeView({
    */
   function handleImageClick(e: React.MouseEvent) {
     e.stopPropagation();
+    // Read-only notes get no controls: resize, border, add-paragraph
+    // and delete all edit the document. Checked at click time
+    // because the editable flag can change while this view is
+    // mounted (release lock / unlock) without re-rendering it.
+    if (!editor.isEditable) return;
     setActive(true);
   }
 
@@ -155,7 +162,7 @@ export function ImageNodeView({
     ? { width: `${node.attrs.width}px`, height: 'auto' as const }
     : undefined;
 
-  const showControls = active || selected;
+  const showControls = (active || selected) && editor.isEditable;
 
   return (
     <NodeViewWrapper

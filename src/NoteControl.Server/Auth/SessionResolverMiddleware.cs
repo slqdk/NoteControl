@@ -44,6 +44,7 @@ public sealed class SessionResolverMiddleware
             {
                 context.Items[AuthContextKeys.User] = auth.User;
                 context.Items[AuthContextKeys.Session] = auth.Session;
+                context.Items[AuthContextKeys.CsrfToken] = auth.CsrfToken;
 
                 // Refresh the (non-httpOnly) CSRF cookie on each authenticated
                 // request so it stays in sync with the live session.

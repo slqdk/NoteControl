@@ -120,6 +120,26 @@ public static class UserEndpoints
 
         var changes = new Dictionary<string, object?>();
 
+        // Never leave the server without an active admin: demoting or
+        // disabling/locking the last one used to succeed, and the tray's
+        // local-token login then had no admin to sign in as — recovery
+        // meant hand-editing server.db. Same guard as Delete.
+        var wasActiveAdmin = IsActiveAdmin(user.Role, user.Status);
+        var willBeActiveAdmin = IsActiveAdmin(request.Role ?? user.Role, request.Status ?? user.Status);
+        if (wasActiveAdmin && !willBeActiveAdmin)
+        {
+            var otherAdmins = await db.Users.CountAsync(
+                u => u.Role == "admin" && u.Id != id && u.Status == "active", ct);
+            if (otherAdmins == 0)
+            {
+                return Results.Problem(
+                    statusCode: 400,
+                    title: "Cannot demote, disable or lock the last active admin. Make another user an active admin first.");
+            }
+        }
+
+        var revokeSessions = false;
+
         if (request.Email is not null && request.Email != user.Email)
         {
             var clash = await db.Users.AnyAsync(u => u.Email == request.Email && u.Id != id, ct);
@@ -150,11 +170,9 @@ public static class UserEndpoints
             changes["status"] = new { from = user.Status, to = request.Status };
             user.Status = request.Status;
 
-            // Disabling or locking should kick existing sessions immediately.
-            if (request.Status != "active")
-            {
-                await sessions.RevokeAllForUserAsync(user.Id, ct);
-            }
+            // Disabling or locking should kick existing sessions
+            // immediately — once the change is actually saved.
+            revokeSessions = request.Status != "active";
         }
 
         if (changes.Count == 0)
@@ -163,6 +181,10 @@ public static class UserEndpoints
         }
 
         await db.SaveChangesAsync(ct);
+        if (revokeSessions)
+        {
+            await sessions.RevokeAllForUserAsync(user.Id, ct);
+        }
         await audit.WriteAsync(
             AuditEventTypes.UserUpdated,
             userId: http.GetUser()?.Id,
@@ -177,7 +199,6 @@ public static class UserEndpoints
         Guid id,
         HttpContext http,
         ServerDbContext db,
-        ISessionService sessions,
         IAuditLog audit,
         CancellationToken ct)
     {
@@ -204,9 +225,29 @@ public static class UserEndpoints
             }
         }
 
-        await sessions.RevokeAllForUserAsync(user.Id, ct);
+        // A vault's owner can't be deleted (Vault.OwnerId is a Restrict
+        // FK). This used to surface as a 500 AFTER all the user's
+        // sessions had been revoked — the user stayed, logged out
+        // everywhere. Check first and say what to do.
+        var owned = await db.Vaults
+            .Where(v => v.OwnerId == id)
+            .Select(v => v.Name)
+            .OrderBy(n => n)
+            .ToListAsync(ct);
+        if (owned.Count > 0)
+        {
+            return Results.Problem(
+                statusCode: 409,
+                title: $"'{user.Username}' owns {owned.Count} vault(s) and can't be deleted: " +
+                    string.Join(", ", owned.Take(10)) + (owned.Count > 10 ? ", …" : "") + ".",
+                detail: "Delete those vaults first, or disable the user instead (Status = disabled) to keep their vaults.");
+        }
+
         db.Users.Remove(user);
         await db.SaveChangesAsync(ct);
+        // The user's sessions go with the row (Session.UserId is a
+        // Cascade FK), so nothing to revoke separately — and nothing is
+        // revoked when the delete is refused.
 
         await audit.WriteAsync(
             AuditEventTypes.UserDeleted,
@@ -217,6 +258,10 @@ public static class UserEndpoints
 
         return Results.NoContent();
     }
+
+    private static bool IsActiveAdmin(string role, string status) =>
+        string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(status, "active", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<IResult> ChangePasswordAsync(
         Guid id,

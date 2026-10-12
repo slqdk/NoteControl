@@ -70,6 +70,8 @@ export function VideoNodeView({
           t.tagName === 'TEXTAREA' ||
           t.isContentEditable);
       if (inField) return;
+      // Read-only (released / viewer / archive): no keyboard delete.
+      if (!editor.isEditable) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteNode();
@@ -79,7 +81,7 @@ export function VideoNodeView({
     }
     document.addEventListener('keydown', onDocKey);
     return () => document.removeEventListener('keydown', onDocKey);
-  }, [active, deleteNode]);
+  }, [active, deleteNode, editor]);
 
   /**
    * Drag-resize from the top-right corner. Same math as the image
@@ -138,7 +140,8 @@ export function VideoNodeView({
   function handleFrameClick(e: React.MouseEvent) {
     // Only activate if the click was actually on the frame, not on
     // the video element. We compare via the event's target.
-    if (e.target === containerRef.current) {
+    // Read-only notes get no controls (see ImageNodeView).
+    if (e.target === containerRef.current && editor.isEditable) {
       setActive(true);
     }
   }
@@ -147,7 +150,7 @@ export function VideoNodeView({
     ? ({ width: `${node.attrs.width}px`, height: 'auto' } as const)
     : undefined;
 
-  const showControls = active || selected;
+  const showControls = (active || selected) && editor.isEditable;
 
   return (
     <NodeViewWrapper

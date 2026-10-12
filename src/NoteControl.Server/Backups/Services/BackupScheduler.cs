@@ -11,9 +11,17 @@ namespace NoteControl.Server.Backups.Services;
 /// the configured time-of-day since the last run, and if so kicks
 /// off a backup.
 /// <para>
+/// <c>DailyTime</c> is the server machine's LOCAL time of day (the
+/// tray field says so). It used to be read as UTC, so "03:30" ran at
+/// 05:30 in Danish summer time.
+/// </para>
+/// <para>
 /// Missed-run policy: <strong>skip silently</strong>. If the
 /// server was off at 03:30 and starts at 09:00, we don't run
-/// retroactively — we just wait until the next 03:30.
+/// retroactively — we just wait until the next 03:30. But a server
+/// that starts BEFORE today's slot (e.g. a 03:00 Windows Update
+/// reboot with a 03:30 slot) still runs today; previously the
+/// start day was always skipped.
 /// </para>
 /// <para>
 /// Concurrency: <see cref="IBackupService.RunNowAsync"/> already
@@ -28,34 +36,61 @@ public sealed class BackupScheduler : BackgroundService
 
     private readonly IServiceProvider _services;
     private readonly IOptionsMonitor<BackupOptions> _options;
+    private readonly TimeProvider _time;
     private readonly ILogger<BackupScheduler> _log;
 
-    // We track the most recent date on which we successfully kicked
-    // off a scheduled run, so we don't fire repeatedly within the
-    // same day if the scheduled time has already passed at startup.
-    // Stored as DateOnly UTC.
+    // We track the most recent (local) date on which we kicked off a
+    // scheduled run — or decided that day's slot was missed — so we
+    // fire at most once per day.
     private DateOnly? _lastFiredDate;
 
     public BackupScheduler(
         IServiceProvider services,
         IOptionsMonitor<BackupOptions> options,
+        TimeProvider time,
         ILogger<BackupScheduler> log)
     {
         _services = services;
         _options = options;
+        _time = time;
         _log = log;
     }
+
+    /// <summary>
+    /// The "already handled" date to start with. If today's slot is
+    /// still ahead, yesterday — so today's run happens. If it has
+    /// passed (server started at 14:00 for a 03:30 slot), today — the
+    /// missed run is skipped, not run late. Pure; unit-tested.
+    /// </summary>
+    public static DateOnly InitialLastFiredDate(DateTime nowLocal, string dailyTime)
+    {
+        var today = DateOnly.FromDateTime(nowLocal);
+        if (!TryParseHhmm(dailyTime, out var hour, out var minute)) return today;
+        var slot = today.ToDateTime(new TimeOnly(hour, minute));
+        return nowLocal < slot ? today.AddDays(-1) : today;
+    }
+
+    /// <summary>
+    /// Should a tick at <paramref name="nowLocal"/> fire? True once
+    /// the local time of day has reached the slot on a day that
+    /// hasn't been handled yet. Pure; unit-tested.
+    /// </summary>
+    public static bool ShouldFire(DateTime nowLocal, DateOnly? lastFiredDate, int hour, int minute)
+    {
+        var today = DateOnly.FromDateTime(nowLocal);
+        if (lastFiredDate.HasValue && lastFiredDate.Value >= today) return false;
+        return nowLocal >= today.ToDateTime(new TimeOnly(hour, minute));
+    }
+
+    private DateTime NowLocal() => _time.GetLocalNow().DateTime;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _log.LogInformation("BackupScheduler started.");
 
-        // Initialise _lastFiredDate to "today" so we don't fire on
-        // the first poll when the user just started the server at
-        // 14:00 and the scheduled time is 03:30 (already past, but
-        // not "missed" in any actionable sense — we only run new
-        // scheduled times going forward).
-        _lastFiredDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        // See InitialLastFiredDate: skip today's slot only if it has
+        // already passed at startup.
+        _lastFiredDate = InitialLastFiredDate(NowLocal(), _options.CurrentValue.DailyTime);
 
         try
         {
@@ -88,23 +123,14 @@ public sealed class BackupScheduler : BackgroundService
             return;
         }
 
-        var nowUtc = DateTime.UtcNow;
-        var todayUtc = DateOnly.FromDateTime(nowUtc);
-
-        // Have we already fired today? (Either via our own
-        // scheduler, or because we just bumped the date marker.)
-        if (_lastFiredDate.HasValue && _lastFiredDate.Value >= todayUtc) return;
-
-        // Has the configured time-of-day passed for today?
-        var scheduledToday = new DateTime(
-            nowUtc.Year, nowUtc.Month, nowUtc.Day, hour, minute, 0, DateTimeKind.Utc);
-        if (nowUtc < scheduledToday) return;
+        var nowLocal = NowLocal();
+        if (!ShouldFire(nowLocal, _lastFiredDate, hour, minute)) return;
 
         // Fire. Mark the date BEFORE we await so a slow run doesn't
         // double-trigger from a subsequent tick.
-        _lastFiredDate = todayUtc;
+        _lastFiredDate = DateOnly.FromDateTime(nowLocal);
         _log.LogInformation(
-            "BackupScheduler firing: scheduled time {Time} UTC has passed.",
+            "BackupScheduler firing: scheduled time {Time} (server local time) has passed.",
             opts.DailyTime);
 
         try

@@ -364,7 +364,7 @@ export function PropertiesPanel({
       // from its own body PUTs otherwise.
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: selection.path, etag: updated.etag },
+          detail: { path: selection.path, etag: updated.etag, body: updated.body },
         }),
       );
       setRefreshTick((t) => t + 1);
@@ -409,7 +409,7 @@ export function PropertiesPanel({
       // to the editor so its next body autosave doesn't 412.
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: selection.path, etag: updated.etag },
+          detail: { path: selection.path, etag: updated.etag, body: updated.body },
         }),
       );
       setRefreshTick((t) => t + 1);
@@ -459,7 +459,7 @@ export function PropertiesPanel({
       // editor so the next body autosave doesn't 412.
       window.dispatchEvent(
         new CustomEvent('nc:note-etag-changed', {
-          detail: { path: selection.path, etag: updated.etag },
+          detail: { path: selection.path, etag: updated.etag, body: updated.body },
         }),
       );
     } catch (e) {

@@ -23,6 +23,12 @@ public interface INoteWidgetsConfigService
 {
     Task<NoteWidgetsConfigDto> GetAsync(Guid vaultId, CancellationToken ct = default);
     Task SaveAsync(Guid vaultId, NoteWidgetsConfigDto config, CancellationToken ct = default);
+
+    /// <summary>
+    /// Absolute path of the vault's note-widgets.json. Used by the endpoint for
+    /// the ETag / If-Match check (see Configuration.SidecarConcurrency).
+    /// </summary>
+    Task<string> GetConfigFilePathAsync(Guid vaultId, CancellationToken ct = default);
 }
 
 /// <summary>

@@ -12,6 +12,12 @@ public interface IStartpageConfigService
 {
     Task<StartpageConfigDto> GetAsync(Guid vaultId, CancellationToken ct = default);
     Task SaveAsync(Guid vaultId, StartpageConfigDto config, CancellationToken ct = default);
+
+    /// <summary>
+    /// Absolute path of the vault's startpage.json. Used by the endpoint for
+    /// the ETag / If-Match check (see Configuration.SidecarConcurrency).
+    /// </summary>
+    Task<string> GetConfigFilePathAsync(Guid vaultId, CancellationToken ct = default);
 }
 
 /// <summary>
