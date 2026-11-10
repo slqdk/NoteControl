@@ -219,6 +219,29 @@ public partial class App : Application
     {
         CrashLogger.WriteCrash("DispatcherUnhandledException", e.Exception);
 
+        // A failed call to the server (unreachable, timed out, odd
+        // response) that slipped past a window's catch block is not
+        // "unknown state" — nothing local is corrupt, the request just
+        // didn't work. Tell the user and keep the tray running; it used
+        // to exit, e.g. when a window was open across a server restart.
+        if (IsRecoverableServerCallFailure(e.Exception))
+        {
+            try
+            {
+                MessageBox.Show(
+                    "A request to the NoteControl server failed:\n\n" + e.Exception.Message,
+                    "NoteControl",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch
+            {
+                // Logged above; nothing more to do.
+            }
+            e.Handled = true;
+            return;
+        }
+
         // Show a user-visible dialog so they see *something* when
         // the tray hits an issue. We don't keep the app alive
         // (Handled=false) because the exception escaped a normal
@@ -251,6 +274,12 @@ public partial class App : Application
         // on next sign-in, or the user to relaunch manually.
         e.Handled = false;
     }
+
+    private static bool IsRecoverableServerCallFailure(Exception ex) =>
+        ex is NoteControl.Tray.Admin.Client.AdminClientException
+            or System.Net.Http.HttpRequestException
+            or System.Threading.Tasks.TaskCanceledException
+            or System.Text.Json.JsonException;
 
     private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {

@@ -7,7 +7,7 @@ import {
   formatRuntimeValue, pokeVariable, pokeMember,
 } from '../runtime/interpreter';
 import type { ParsedProgram, ScalarTypeName, VarSection } from '../runtime/ast';
-import { PillEditor, formatTimeForPill } from './InlineSource';
+import { PillEditor, formatTimeForPill, scheduleBoolPillOpen, clearPendingClick } from './InlineSource';
 
 /**
  * Watch table rendered in the Declaration pane when the user
@@ -526,7 +526,8 @@ function UnknownMemberRow({
       <td className="nc-runtime-watch-col-name">
         <span className="nc-runtime-watch-indent" />
         <span className="nc-runtime-watch-member-dot">.</span>
-        <span className="nc-runtime-ident-unknown">{memberLower}</span>
+        {/* Chain pokes are stored as `__chain__a(*).b`; show the chain itself. */}
+        <span className="nc-runtime-ident-unknown">{memberLower.startsWith('__chain__') ? memberLower.slice('__chain__'.length) : memberLower}</span>
         <span
           className="nc-runtime-watch-parent-hint"
           title={`Member of ${parentVarName} (${parentTypeName}, unknown)`}
@@ -610,13 +611,20 @@ function ValueCell({
   // defaulted FALSE to a real poked TRUE is the typical gesture).
   const canToggleBool = canPoke && data.pillType === 'BOOL';
 
+  // BOOL pills: defer the editor-open past the double-click window
+  // (as in InlineSource). Opening it on the first click put the
+  // second click into the editor, so double-click never toggled.
   const handleClick = canPoke
-    ? () => setEditing({ nameLower, memberLower })
+    ? () => {
+        if (canToggleBool) scheduleBoolPillOpen(() => setEditing({ nameLower, memberLower }));
+        else setEditing({ nameLower, memberLower });
+      }
     : undefined;
   const handleDoubleClick = canToggleBool
     ? (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        clearPendingClick();
         const flipped = !data.isBoolTrue;
         const newVal: ScalarValue = {
           kind: 'scalar', type: 'BOOL', value: flipped,
@@ -663,6 +671,7 @@ function SectionTag({ section }: { section: VarSection }) {
     TEMP:     { label: 'temp',     cls: 'nc-runtime-watch-section-temp' },
     GLOBAL:   { label: 'global',   cls: 'nc-runtime-watch-section-global' },
     EXTERNAL: { label: 'external', cls: 'nc-runtime-watch-section-external' },
+    RETURN:   { label: 'return',   cls: 'nc-runtime-watch-section-output' },
   };
   const m = meta[section];
   return (

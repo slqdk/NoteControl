@@ -152,9 +152,14 @@ export function RuntimeModal({
   >(() => {
     try {
       const program = parseProgram(declarationText, implementationText);
+      // Build an environment once here as a check: a bad initial
+      // value (`b : BOOL := 2;`, `x : INT := 1/0;`) throws, and doing
+      // it during render (below) used to blank the whole app. Same
+      // program → same result, so the render-time call is then safe.
+      createEnvironment(program);
       return { ok: true, program };
     } catch (e) {
-      if (e instanceof StParseError) {
+      if (e instanceof StParseError || e instanceof StRuntimeError) {
         return { ok: false, error: e.format(), line: e.line };
       }
       const msg = e instanceof Error ? e.message : String(e);
@@ -253,7 +258,15 @@ export function RuntimeModal({
     if (!parsed.ok) return;
     if (state.scanCount === 0 && state.envVersion !== resetSeenAtVersionRef.current) {
       resetSeenAtVersionRef.current = state.envVersion;
-      envRef.current = createEnvironment(parsed.program);
+      try {
+        envRef.current = createEnvironment(parsed.program);
+      } catch (e) {
+        dispatch({
+          type: 'SCAN_ERR',
+          message: e instanceof StRuntimeError ? e.format() : e instanceof Error ? e.message : String(e),
+          line: e instanceof StRuntimeError ? e.line : 0,
+        });
+      }
     }
   }, [state.envVersion, state.scanCount, parsed]);
 
@@ -281,7 +294,9 @@ export function RuntimeModal({
   // --- Esc to close -------------------------------------------
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
+      // An Escape that a pill editor (or any other control) already
+      // handled cancels that control, not the sandbox.
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

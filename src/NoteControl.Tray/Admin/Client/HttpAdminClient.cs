@@ -39,13 +39,16 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
             UseProxy = false,
             AllowAutoRedirect = false,
         };
-        _http = new HttpClient(_handler, disposeHandler: false)
+        // Timeouts live in AdminTransportHandler (which also turns
+        // network failures into AdminClientException — see there), so
+        // HttpClient's own timeout is switched off on both clients.
+        _http = new HttpClient(new AdminTransportHandler(_handler, DefaultCallTimeout), disposeHandler: false)
         {
             BaseAddress = new Uri(baseUrl),
-            Timeout = TimeSpan.FromSeconds(20),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan,
         };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("NoteControl.Tray/1.0");
-        _longHttp = new HttpClient(_handler, disposeHandler: false)
+        _longHttp = new HttpClient(new AdminTransportHandler(_handler, LongCallCap), disposeHandler: false)
         {
             BaseAddress = new Uri(baseUrl),
             Timeout = System.Threading.Timeout.InfiniteTimeSpan,
@@ -432,11 +435,9 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
         // server still finishes the run (it ignores client disconnects)
         // and the Backups window's status/list show the outcome.
         using var request = BuildRequest(HttpMethod.Post, "/api/admin/server/backup/run");
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(LongCallCap);
-        using var response = await _longHttp.SendAsync(request, cts.Token);
-        await EnsureSuccessAsync(response, cts.Token);
-        return await response.Content.ReadFromJsonAsync<BackupRunResultDto>(JsonOptions, cts.Token)
+        using var response = await _longHttp.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+        return await response.Content.ReadFromJsonAsync<BackupRunResultDto>(JsonOptions, ct)
             ?? throw new AdminClientException("Server returned an empty backup run payload.");
     }
 
@@ -460,16 +461,14 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
     {
         // Same long-poll treatment as backup-run — restore copy
         // duration scales with vault size.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(LongCallCap);
         using var request = BuildRequest(
             HttpMethod.Post,
             $"/api/admin/server/backup/{Uri.EscapeDataString(backupId)}/restore-vault");
         request.Content = JsonContent.Create(
             new RestoreVaultRequest(vaultId, vaultFolderInBackup), options: JsonOptions);
-        using var response = await _longHttp.SendAsync(request, cts.Token);
-        await EnsureSuccessAsync(response, cts.Token);
-        return await response.Content.ReadFromJsonAsync<RestoreResultDto>(JsonOptions, cts.Token)
+        using var response = await _longHttp.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+        return await response.Content.ReadFromJsonAsync<RestoreResultDto>(JsonOptions, ct)
             ?? throw new AdminClientException("Server returned an empty restore result.");
     }
 
@@ -525,6 +524,9 @@ public sealed class HttpAdminClient : IAdminClient, IDisposable
 
     /// <summary>Upper bound for backup-run / restore calls.</summary>
     private static readonly TimeSpan LongCallCap = TimeSpan.FromHours(2);
+
+    /// <summary>Every other admin call.</summary>
+    private static readonly TimeSpan DefaultCallTimeout = TimeSpan.FromSeconds(20);
 
     private async Task<HttpResponseMessage> SendJsonAsync<T>(
         HttpMethod method, string path, T payload, CancellationToken ct)

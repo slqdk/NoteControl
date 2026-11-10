@@ -138,6 +138,13 @@ export function TemplatesPage() {
       setDraft(dto);
       setOriginalForCompare(dto);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        // Deleted or renamed elsewhere (another tab, the file
+        // system) since the list loaded: say so and refresh the list.
+        setError(`Template "${name}" no longer exists.`);
+        void loadList();
+        return;
+      }
       setError(e instanceof ApiError ? e.message : 'Could not load template.');
     }
   }
@@ -286,9 +293,18 @@ export function TemplatesPage() {
           {/* Right pane: editor */}
           <main className="nc-templates-editor">
             {!draft && (
-              <p className="nc-empty">
-                Pick a template on the left, or click <em>+ New template</em>.
-              </p>
+              <>
+                {/*
+                  The error banner further down only exists while a
+                  draft is open, so a failure to OPEN a template (or
+                  to load the list, or to delete) used to show
+                  nothing at all. Show it here in that state.
+                */}
+                {error && <div className="nc-form-error">{error}</div>}
+                <p className="nc-empty">
+                  Pick a template on the left, or click <em>+ New template</em>.
+                </p>
+              </>
             )}
             {draft && (
               <>

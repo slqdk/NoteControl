@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 import './styles.css';
 // runtime.css is loaded after styles.css so its rules can refine
@@ -40,8 +41,10 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <ErrorBoundary variant="app" what="NoteControl">
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </ErrorBoundary>
   </StrictMode>,
 );

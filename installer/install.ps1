@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Install or upgrade NoteControl on this Windows machine.
 
@@ -595,7 +595,17 @@ if ([string]::IsNullOrWhiteSpace($sdshow)) {
 # ---------------------------------------------------------------
 Write-Section "Starting service"
 
-Start-Service -Name $ServiceName -ErrorAction Stop
+# A start failure must not abort the install (installer.md: "warns and
+# continues"): the binaries are in place, and the steps below still need
+# to run -- the Add/Remove Programs entry and, during an in-app update,
+# relaunching the tray (which has already been closed). The polling and
+# /health probe below report the outcome.
+try {
+    Start-Service -Name $ServiceName -ErrorAction Stop
+} catch {
+    Write-Step "  Start-Service failed: $($_.Exception.Message)" Yellow
+    Write-Step "  Continuing; fix the cause (see $logsDir) and start the service from the tray or services.msc." Yellow
+}
 
 # Verify the service actually reached Running. Start-Service is
 # fire-and-forget by default; on a heavily loaded box (or if the

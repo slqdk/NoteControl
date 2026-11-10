@@ -66,7 +66,8 @@ export function drawChart(
   const tConst = result.tConst;
   const tDec = result.tDec;
   const peakAcc = opts.showAcc ? result.acc : 0;
-  const peakJerk = opts.showJerk ? result.jerk : 0;
+  // Unbounded jerk (pure trapezoid) has no curve to draw.
+  const peakJerk = opts.showJerk && Number.isFinite(result.jerk) ? result.jerk : 0;
 
   const profile = buildProfile(tAcc, tConst, tDec, vMax, result.sfCurve, tTotal);
 

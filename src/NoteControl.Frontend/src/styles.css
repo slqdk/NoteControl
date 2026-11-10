@@ -7867,3 +7867,28 @@ a.nc-rss-item-title:hover {
   background: var(--nc-border);
   margin: 4px -2px;
 }
+
+/* Error boundary (components/ErrorBoundary.tsx). */
+.nc-error-boundary-app {
+  max-width: 640px;
+  margin: 15vh auto;
+  padding: 24px;
+  font-family: system-ui, sans-serif;
+}
+.nc-error-boundary-app h1 { font-size: 1.4rem; margin: 0 0 8px; }
+.nc-error-boundary-inline {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px solid #e0a0a0;
+  border-radius: 6px;
+  background: #fff4f4;
+  color: #6b1e1e;
+  font-size: 0.9rem;
+}
+.nc-error-boundary-detail {
+  margin: 6px 0 10px;
+  white-space: pre-wrap;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}

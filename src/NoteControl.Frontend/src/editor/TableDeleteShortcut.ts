@@ -54,13 +54,19 @@ function deleteTableIfAllCellsSelected(editor: {
     return false;
   }
 
-  // Count cells in the containing table. A CellSelection's
-  // $anchorCell.node(-1) is the row; node(-2) is the table.
+  // Count cells in the containing table. $anchorCell is resolved at
+  // the position just BEFORE the cell, so its parent (node(0)
+  // relative = .parent) is the row and node(-1) is the table. This
+  // used node(-2) — the table's PARENT (usually the doc) — and
+  // counted the children of its children, so in a note made of one
+  // 2-column table plus the trailing paragraph, selecting a single
+  // full column "matched" and Delete removed the whole table.
   // We sum row.childCount across all rows (cell counts) to get
   // the total cell count of the table.
   let totalCells = 0;
   try {
-    const table = (sel.$anchorCell as unknown as { node: (depth: number) => { childCount: number; child: (i: number) => { childCount: number } } }).node(-2);
+    const table = (sel.$anchorCell as unknown as { node: (depth: number) => { type?: { name: string }; childCount: number; child: (i: number) => { childCount: number } } }).node(-1);
+    if (table.type && table.type.name !== 'table') return false;
     for (let r = 0; r < table.childCount; r++) {
       totalCells += table.child(r).childCount;
     }

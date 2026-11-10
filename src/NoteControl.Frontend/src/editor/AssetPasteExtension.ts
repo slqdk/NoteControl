@@ -2,7 +2,6 @@ import { Extension, type CommandProps } from '@tiptap/core';
 import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 
 import { ApiError, assetsApi } from '../api/client';
-import { normalizePastedHtml } from './PasteNormalizeExtension';
 
 /**
  * TipTap extension that intercepts pasted / dropped files and turns
@@ -325,11 +324,14 @@ function hasOfficeHtmlWithImagePlaceholders(event: ClipboardEvent): boolean {
   const html = dt.getData('text/html');
   if (!html) return false;
 
-  // Quick check: does it look like Office HTML with at least one
-  // unfetchable image reference? We don't fully parse here — just
-  // scan for the telltale patterns. False positives are cheap (we
-  // proceed to the full parse and decide to fall back if it's not
-  // really Office content).
+  // Claim the paste ONLY when it's Office HTML that actually holds an
+  // unfetchable image placeholder. Every other Office paste (Excel
+  // ranges, Word text, Outlook mail without pictures) goes through
+  // the editor's normal HTML paste. Claiming all of them used to send
+  // plain Excel/Word pastes down the insert path below, which parsed
+  // the HTML as markdown with whitespace preserved: a 2x2 Excel range
+  // became a 4x4 table of blanks, and Word paragraphs split at the
+  // line wraps of the HTML source.
   //
   // Patterns we look for:
   //   - file:/// — Word's clip cache references
@@ -343,7 +345,29 @@ function hasOfficeHtmlWithImagePlaceholders(event: ClipboardEvent): boolean {
     html.includes('cid:') ||
     html.includes('mso-') ||
     html.includes('xmlns:o="urn:schemas-microsoft-com:office:office"');
-  return looksOffice;
+  if (!looksOffice) return false;
+  if (!/<img\b/i.test(html)) return false;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return findPlaceholderImgs(doc).length > 0;
+}
+
+/**
+ * <img>s whose src the browser can't load: Word's clip-cache file:
+ * paths, Outlook cid: references, x-mso- markers, and the empty src
+ * Office writes when VML is the primary representation. DOM order =
+ * reading order, which is what the clipboard blobs are mapped to.
+ * Images with a real http(s)/data: src are left alone.
+ */
+function findPlaceholderImgs(doc: Document): HTMLImageElement[] {
+  return Array.from(doc.querySelectorAll('img')).filter((img) => {
+    const src = img.getAttribute('src') ?? '';
+    return (
+      src.startsWith('file:') ||
+      src.startsWith('cid:') ||
+      src.startsWith('x-mso-') ||
+      src === ''
+    );
+  });
 }
 
 async function uploadAndInsertOfficeHtml(
@@ -381,18 +405,7 @@ async function uploadAndInsertOfficeHtml(
   // We DON'T strip <img>s with http(s) src — those are real URLs
   // (e.g. someone pasted a web page through Word), they'll render
   // fine, and we leave them alone.
-  const allImgs = Array.from(doc.querySelectorAll('img'));
-  const placeholderImgs = allImgs.filter((img) => {
-    const src = img.getAttribute('src') ?? '';
-    return (
-      src.startsWith('file:') ||
-      src.startsWith('cid:') ||
-      src.startsWith('x-mso-') ||
-      // Empty src happens when VML is the primary representation
-      // and the <img> fallback is just a marker.
-      src === ''
-    );
-  });
+  const placeholderImgs = findPlaceholderImgs(doc);
 
   // Try to get the actual image bytes from the async clipboard API.
   // This requires:
@@ -431,30 +444,22 @@ async function uploadAndInsertOfficeHtml(
     }
   }
 
-  // Insert the rewritten HTML at the captured cursor position.
-  // TipTap's schema-driven parser drops MSO clutter, VML, and
-  // conditional comments automatically — we don't need to clean
-  // them up first. The body's innerHTML has the visible content.
+  // Insert the rewritten HTML at the captured selection through the
+  // editor's own HTML paste pipeline (view.pasteHTML): the same
+  // transformPastedHTML hooks (paste normaliser, math), clipboard
+  // parser and table handling as a normal paste. This used to be
+  // insertContentAt(html), which tiptap-markdown overrides to parse
+  // strings as MARKDOWN with whitespace preserved — Word's source
+  // line wraps became line breaks and `<o:p>` leaked through.
   //
-  // Run our paste normalizer over the rewritten HTML so the same
-  // font-family / font-size / colour / background-color stripping
-  // applies as in the regular text-paste path. Without this, the
-  // Office-image branch would slip a fully-styled Word paste
-  // straight past the editor's normalisation rules.
-  // PasteNormalizeExtension's transformPastedHTML hook doesn't fire
-  // here because we're inserting via insertContentAt, not via the
-  // browser's paste pipeline.
-  //
-  // If the user had a selection at paste time (insertPos < insertEnd),
-  // .deleteRange replaces it — standard paste behaviour. Empty
-  // selection is a no-op delete, then a regular insert.
-  const cleanedHtml = normalizePastedHtml(doc.body.innerHTML);
-  editor
-    .chain()
-    .focus()
-    .deleteRange({ from: insertPos, to: insertEnd })
-    .insertContentAt(insertPos, cleanedHtml)
-    .run();
+  // The selection is restored to what it was when the user pasted
+  // (clamped, in case the document shrank during the upload), so a
+  // non-empty selection is replaced — standard paste behaviour.
+  const size = editor.state.doc.content.size;
+  const from = Math.min(insertPos, size);
+  const to = Math.min(Math.max(insertEnd, from), size);
+  editor.chain().focus().setTextSelection({ from, to }).run();
+  editor.view.pasteHTML(doc.body.innerHTML);
 
   // Best-effort: if there were leftover blobs we couldn't map,
   // upload + append them at the end. This handles the case where

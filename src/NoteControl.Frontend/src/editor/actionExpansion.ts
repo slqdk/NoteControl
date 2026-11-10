@@ -388,6 +388,53 @@ export function parseActionTitle(title: string | null | undefined): string | nul
  * document. Keeping that part out of this module lets us unit-
  * test the substitution logic without any prosemirror dependency.
  */
+/** A top-level document child, as seen by the action scoping. */
+export interface TopLevelBlock {
+  /** True for code blocks; other nodes (paragraphs, headings…) only
+   *  matter as positions. */
+  isCode: boolean;
+  title: string | null;
+  language: string | null;
+  text: string;
+}
+
+function isBare(b: TopLevelBlock, title: string): boolean {
+  return b.isCode && b.language === 'st' && (b.title ?? '').trim().toLowerCase() === title;
+}
+
+/**
+ * The code blocks whose actions belong to the POU whose
+ * Implementation block is `blocks[implIndex]`.
+ *
+ * A POU starts at a bare "Declaration" block that's directly
+ * followed by a bare "Implementation" block — the layout the
+ * PLCopen / TcPOU import writes for each POU, with that POU's
+ * members (ACTION … — Implementation, METHOD …) after it. The POU
+ * owns everything from its start up to the next POU's start;
+ * blocks before the first POU belong to the first one.
+ *
+ * Before, actions were collected note-wide, so in a multi-POU note
+ * FB_A's ACTION Reset replaced FB_B's own `Reset();` (whichever
+ * came last won). A note with a single POU behaves exactly as
+ * before.
+ */
+export function actionBlocksForPou(
+  blocks: ReadonlyArray<TopLevelBlock>,
+  implIndex: number,
+): TopLevelBlock[] {
+  const starts: number[] = [];
+  for (let i = 0; i + 1 < blocks.length; i++) {
+    if (isBare(blocks[i], 'declaration') && isBare(blocks[i + 1], 'implementation')) {
+      starts.push(i);
+    }
+  }
+  const own = starts.indexOf(implIndex - 1);
+  if (starts.length <= 1 || own < 0) return blocks.filter((b) => b.isCode);
+  const from = own === 0 ? 0 : starts[own];
+  const to = own + 1 < starts.length ? starts[own + 1] : blocks.length;
+  return blocks.slice(from, to).filter((b) => b.isCode);
+}
+
 export function collectActionBodies(
   blocks: ReadonlyArray<{ title: string | null; language: string | null; text: string }>,
 ): ActionBodies {

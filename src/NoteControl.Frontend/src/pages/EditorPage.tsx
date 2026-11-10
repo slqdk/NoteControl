@@ -241,13 +241,20 @@ export function EditorPage() {
     (notePath && widgetsConfig?.byNote[notePath]) || [];
 
   // Replace this note's widget list inside the map immutably.
+  //
+  // Takes an updater over the CURRENT list. Add / update / delete
+  // used to build the new list from the widget map captured at the
+  // last render, so two changes before React re-rendered (two quick
+  // adds, a widget reporting two changes in one tick, an edit in one
+  // widget while another saves) silently dropped the earlier one.
   const setNoteWidgets = useCallback(
-    (next: NoteWidgetDto[]) => {
+    (update: (current: NoteWidgetDto[]) => NoteWidgetDto[]) => {
       if (!notePath) return;
       setWidgetsConfig((prev) => {
         // Not loaded (or the load failed): refuse rather than build a
         // map from nothing — see the load effect.
         if (!prev) return prev;
+        const next = update(prev.byNote[notePath] ?? []);
         const byNote = { ...prev.byNote };
         if (next.length === 0) {
           delete byNote[notePath];
@@ -262,26 +269,23 @@ export function EditorPage() {
 
   const updateNoteWidget = useCallback(
     (widgetId: string, patch: Partial<NoteWidgetDto>) => {
-      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
-      const next = current.map((w) => {
+      setNoteWidgets((current) => current.map((w) => {
         if (w.id !== widgetId) return w;
         // Merge the payload field that the patch carries. The stack
         // sends a full replacement payload for the active kind, so a
         // shallow spread of the patch onto the widget is correct —
         // patch.rss / patch.task / etc. fully replace the field.
         return { ...w, ...patch };
-      });
-      setNoteWidgets(next);
+      }));
     },
-    [notePath, widgetsConfig, setNoteWidgets],
+    [setNoteWidgets],
   );
 
   const deleteNoteWidget = useCallback(
     (widgetId: string) => {
-      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
-      setNoteWidgets(current.filter((w) => w.id !== widgetId));
+      setNoteWidgets((current) => current.filter((w) => w.id !== widgetId));
     },
-    [notePath, widgetsConfig, setNoteWidgets],
+    [setNoteWidgets],
   );
 
   // Listen for the Properties panel's "Add Note Widget" event. Ignore
@@ -297,8 +301,7 @@ export function EditorPage() {
         return;
       }
       const widget = buildNoteWidget(detail);
-      const current = (notePath && widgetsConfig?.byNote[notePath]) || [];
-      setNoteWidgets([...current, widget]);
+      setNoteWidgets((current) => [...current, widget]);
     };
     window.addEventListener(NOTE_WIDGET_ADD_EVENT, onAdd);
     return () => window.removeEventListener(NOTE_WIDGET_ADD_EVENT, onAdd);

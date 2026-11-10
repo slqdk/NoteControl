@@ -43,6 +43,9 @@ export type TokenKind =
   | 'STRING'
   | 'TIME'
   | 'PUNCT'
+  /** A direct I/O address after AT: `%I*`, `%QX0.1`, `%MW10`. Value
+   *  is the address text including the leading `%`. */
+  | 'ADDRESS'
   | 'EOF';
 
 export interface Token {
@@ -66,6 +69,7 @@ const KEYWORDS = new Set([
   'function_block', 'end_function_block',
   'var', 'var_input', 'var_output', 'var_in_out',
   'var_temp', 'var_global', 'var_external', 'end_var',
+  'var_stat', 'var_inst',
   // Control
   'if', 'then', 'elsif', 'else', 'end_if',
   'case', 'of', 'end_case',
@@ -104,8 +108,11 @@ export function tokenize(source: string): Token[] {
   while (i < n) {
     const ch = source[i];
 
-    // Whitespace
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
+    // Whitespace. Besides space/tab/CR: NBSP and the other Unicode
+    // spaces, and a BOM — code copied from a web page or a UTF-8
+    // file brings them along and they used to be a lex error.
+    if (ch === ' ' || ch === '\t' || ch === '\r' ||
+        (ch !== '\n' && /[\s\ufeff\u200b]/.test(ch))) {
       i++;
       continue;
     }
@@ -150,15 +157,24 @@ export function tokenize(source: string): Token[] {
       continue;
     }
 
-    // Block comment (* ... *)
+    // Block comment (* ... *). TwinCAT nests them —
+    // `(* a (* b *) c *)` is one comment — so count depth; the first
+    // `*)` used to end it and leave `c *)` as code.
     if (ch === '(' && source[i + 1] === '*') {
       const startLine = line;
       const startCol = col();
       i += 2;
+      let depth = 1;
       while (i < n) {
+        if (source[i] === '(' && source[i + 1] === '*') {
+          depth++;
+          i += 2;
+          continue;
+        }
         if (source[i] === '*' && source[i + 1] === ')') {
           i += 2;
-          break;
+          if (--depth === 0) break;
+          continue;
         }
         if (source[i] === '\n') {
           line++;
@@ -168,11 +184,30 @@ export function tokenize(source: string): Token[] {
           i++;
         }
       }
-      if (i >= n) {
+      if (depth > 0) {
         throw new StParseError(
           'lex', startLine, startCol,
           'unterminated block comment',
         );
+      }
+      continue;
+    }
+
+    // Dereference `^`: `p^`, `pData^.nValue`, `THIS^.nCount`,
+    // `SUPER^.Init()`. There's no pointer model — a pointer is an
+    // unknown, pokeable value — so `p^` reads the same slot as `p`.
+    // `THIS^.x` is the FB's own `x`: drop the `THIS^.` prefix.
+    // `SUPER^.M()` stays a chain on SUPER (an unknown base FB).
+    if (ch === '^') {
+      i++;
+      const prev = out[out.length - 1];
+      if (prev && prev.kind === 'IDENT' && prev.value.toLowerCase() === 'this') {
+        let j = i;
+        while (j < n && (source[j] === ' ' || source[j] === '\t')) j++;
+        if (source[j] === '.') {
+          out.pop();
+          i = j + 1;
+        }
       }
       continue;
     }
@@ -214,20 +249,39 @@ export function tokenize(source: string): Token[] {
       continue;
     }
 
-    // Time literal: T#... or TIME#...  (case-insensitive)
-    // Has to be checked before the IDENT path because T is a
-    // valid identifier start char.
-    if ((ch === 'T' || ch === 't') &&
-        (source[i + 1] === '#' ||
-         (source.slice(i, i + 5).toUpperCase() === 'TIME#'))) {
+    // Direct address (`bIn AT %I* : BOOL;`, `%QX0.1`, `%MW10`).
+    // Only meaningful after AT in a declaration; the parser skips it.
+    if (ch === '%') {
+      const startCol = col();
+      let addr = '%';
+      i++;
+      while (i < n && /[A-Za-z0-9.*_]/.test(source[i])) {
+        addr += source[i];
+        i++;
+      }
+      if (addr.length === 1) {
+        throw new StParseError('lex', line, startCol, 'expected a direct address after "%" (e.g. %I*, %QX0.1)');
+      }
+      out.push({ kind: 'ADDRESS', value: addr, line, column: startCol });
+      continue;
+    }
+
+    // Time literal: T#… / TIME#… and the 64-bit LT#… / LTIME#…
+    // (case-insensitive). Checked before the IDENT path because T
+    // and L are identifier start chars. LTIME is held in ms like
+    // TIME (no ns resolution here).
+    const timePrefix = (() => {
+      const up = source.slice(i, i + 6).toUpperCase();
+      if (up.startsWith('LTIME#')) return 6;
+      if (up.startsWith('TIME#')) return 5;
+      if (up.startsWith('LT#')) return 3;
+      if (up.startsWith('T#')) return 2;
+      return 0;
+    })();
+    if (timePrefix > 0) {
       const startLine = line;
       const startCol = col();
-      // Skip prefix
-      if (source[i + 1] === '#') {
-        i += 2;
-      } else {
-        i += 5;
-      }
+      i += timePrefix;
       let body = '';
       while (i < n) {
         const c = source[i];

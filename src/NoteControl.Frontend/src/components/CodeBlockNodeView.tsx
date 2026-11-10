@@ -6,9 +6,12 @@ import {
 } from '@tiptap/react';
 
 import { RuntimeModal } from './RuntimeModal';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
+  actionBlocksForPou,
   collectActionBodies,
   expandActions,
+  type TopLevelBlock,
 } from '../editor/actionExpansion';
 
 /**
@@ -144,7 +147,7 @@ export function CodeBlockNodeView({
     if (typeof getPos !== 'function' || !editor) return;
     const declarationText = readDeclarationSibling(getPos, editor) ?? '';
     const rawImplementation = node.textContent as string;
-    const actionBodies = collectActionBodiesFromDoc(editor);
+    const actionBodies = collectActionBodiesFromDoc(editor, getPos);
 
     let expanded: string;
     try {
@@ -209,11 +212,13 @@ export function CodeBlockNodeView({
         <NodeViewContent as="code" />
       </pre>
       {runtimePayload && (
-        <RuntimeModal
-          declarationText={runtimePayload.declarationText}
-          implementationText={runtimePayload.implementationText}
-          onClose={() => setRuntimePayload(null)}
-        />
+        <ErrorBoundary variant="inline" what="The ST sandbox" onClose={() => setRuntimePayload(null)}>
+          <RuntimeModal
+            declarationText={runtimePayload.declarationText}
+            implementationText={runtimePayload.implementationText}
+            onClose={() => setRuntimePayload(null)}
+          />
+        </ErrorBoundary>
       )}
     </NodeViewWrapper>
   );
@@ -296,14 +301,23 @@ function readPreviousSibling(
  */
 function collectActionBodiesFromDoc(
   editor: NonNullable<NodeViewProps['editor']>,
+  getPos: NodeViewProps['getPos'],
 ): ReturnType<typeof collectActionBodies> {
-  const blocks: Array<{ title: string | null; language: string | null; text: string }> = [];
-  editor.state.doc.forEach((child) => {
-    if (child.type.name !== 'codeBlock') return;
-    const title = (child.attrs.title as string | null) ?? null;
-    const language = (child.attrs.language as string | null) ?? null;
-    const text = child.textContent as string;
-    blocks.push({ title, language, text });
+  // Scoped to THIS block's POU (see actionBlocksForPou): in a note
+  // holding several imported POUs, each one only sees its own
+  // actions.
+  const blocks: TopLevelBlock[] = [];
+  const ownPos = typeof getPos === 'function' ? getPos() : undefined;
+  let implIndex = -1;
+  editor.state.doc.forEach((child, offset) => {
+    if (offset === ownPos) implIndex = blocks.length;
+    const isCode = child.type.name === 'codeBlock';
+    blocks.push({
+      isCode,
+      title: isCode ? ((child.attrs.title as string | null) ?? null) : null,
+      language: isCode ? ((child.attrs.language as string | null) ?? null) : null,
+      text: isCode ? (child.textContent as string) : '',
+    });
   });
-  return collectActionBodies(blocks);
+  return collectActionBodies(actionBlocksForPou(blocks, implIndex));
 }

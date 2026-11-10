@@ -100,6 +100,13 @@ export function normalizePastedHtml(html: string): string {
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
 
+  // Word wraps paragraph ends in <o:p></o:p> (and empty paragraphs in
+  // <o:p>&nbsp;</o:p>). Unwrap them: the tag means nothing outside
+  // Office, and on some insert paths it leaked into the note as text.
+  for (const op of Array.from(tpl.content.querySelectorAll('o\\:p'))) {
+    op.replaceWith(...Array.from(op.childNodes));
+  }
+
   // Walk every element in the fragment. We use a TreeWalker so we
   // hit elements in document order without re-walking after mutation
   // (we only mutate attributes / styles, not the tree shape, so the

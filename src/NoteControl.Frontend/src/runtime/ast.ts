@@ -99,7 +99,8 @@ export type VarSection =
   | 'IN_OUT'     // VAR_IN_OUT
   | 'TEMP'       // VAR_TEMP
   | 'GLOBAL'     // VAR_GLOBAL
-  | 'EXTERNAL';  // VAR_EXTERNAL
+  | 'EXTERNAL'   // VAR_EXTERNAL
+  | 'RETURN';    // a FUNCTION's own name: its return value
 
 export interface VarDecl {
   /** Original spelling, e.g. "Counter". */
@@ -114,6 +115,12 @@ export interface VarDecl {
    *  evaluates literals where it can; the interpreter treats this
    *  as just an expression to evaluate when entering scan 0. */
   initial: Expr | null;
+  /**
+   * Built-in FB instance initializer: `fbTimer : TON := (PT := T#1S);`
+   * → [{ name: 'PT', value: <T#1S> }]. Seeds the instance's stored
+   * inputs at environment creation.
+   */
+  fbInit?: { name: string; nameLower: string; value: Expr }[];
   /** Source line of the declaration. */
   line: number;
 }
@@ -128,6 +135,12 @@ export interface ProgramDecl {
   /** Original program name from `PROGRAM <name>`. */
   name: string;
   vars: VarDecl[];
+  /**
+   * Which POU header the declaration had (absent for a bare VAR
+   * block). A FUNCTION's VAR locals and return value start fresh
+   * on every call (= scan); VAR_TEMP does so for every kind.
+   */
+  pouKind?: 'PROGRAM' | 'FUNCTION_BLOCK' | 'FUNCTION';
 }
 
 // --- Expressions -----------------------------------------------
@@ -193,6 +206,9 @@ export type BinaryOp =
   | 'ADD' | 'SUB' | 'MUL' | 'DIV' | 'MOD' | 'POW'
   // Bitwise (also serve as logical for BOOL)
   | 'AND' | 'OR' | 'XOR'
+  // Short-circuit boolean: the right side is only evaluated when
+  // the left doesn't decide the result.
+  | 'AND_THEN' | 'OR_ELSE'
   // Comparison
   | 'EQ' | 'NE' | 'LT' | 'LE' | 'GT' | 'GE';
 
@@ -564,4 +580,14 @@ export interface ExpressionStmt {
 export interface ParsedProgram {
   program: ProgramDecl;
   body: Statement[];
+  /**
+   * Enum-like labels found in CASE statements: `E_State.Idle:` where
+   * `E_State` isn't a declared variable. Base (lowercased) → member
+   * names (lowercased) in order of first appearance. The runtime has
+   * no enum schemas, so it gives these members sequential values
+   * 0, 1, 2… (TwinCAT's implicit numbering when the CASE lists the
+   * states in declaration order) — that's what lets an enum state
+   * machine actually step from one state to the next. Pokeable.
+   */
+  enumHints?: Map<string, string[]>;
 }

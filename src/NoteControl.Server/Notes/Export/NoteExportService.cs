@@ -110,6 +110,13 @@ public sealed class NoteExportService : INoteExportService
     private const string CalloutMarkerSep   = ">>>";
     private const string CalloutMarkerEnd   = "<<<NC_CALLOUT_END>>>";
 
+    // Math markers: `[[NCMATH:I:<base64 latex>]]` (inline) /
+    // `[[NCMATH:B:<base64 latex>]]` (display). Base64 so no LaTeX
+    // character is touched by the HTML → OOXML conversion; replaced
+    // by Office Math (OMML) objects afterwards. See MaterializeMath.
+    private const string MathMarkerOpen  = "[[NCMATH:";
+    private const string MathMarkerClose = "]]";
+
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _vaultPaths;
     private readonly INotePathResolver _notePaths;
@@ -319,10 +326,39 @@ public sealed class NoteExportService : INoteExportService
             div.Remove();
         }
 
+        // Task list checkboxes (`- [x] done`): Markdig emits a
+        // disabled <input type="checkbox">, which HtmlToOpenXml drops
+        // — the done/open state vanished. Use ballot-box characters.
+        foreach (var input in root.QuerySelectorAll("input[type=checkbox]").ToArray())
+        {
+            var box = doc.CreateTextNode(input.HasAttribute("checked") ? "\u2611 " : "\u2610 ");
+            input.Parent?.ReplaceChild(box, input);
+        }
+
+        // Math: Markdig renders `$x$` as <span class="math">\(x\)</span>
+        // and `$$…$$` as <div class="math">\[…\]</div>, which exported
+        // as raw LaTeX with the delimiters. Swap each for a marker that
+        // MaterializeMath turns into a Word equation (OMML).
+        foreach (var el in root.QuerySelectorAll(".math").ToArray())
+        {
+            var isBlock = string.Equals(el.LocalName, "div", StringComparison.OrdinalIgnoreCase);
+            var latex = StripMathDelimiters(el.TextContent);
+            var marker = MathMarkerOpen + (isBlock ? "B:" : "I:") +
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(latex)) + MathMarkerClose;
+            if (isBlock)
+            {
+                var p = doc.CreateElement("p");
+                p.TextContent = marker;
+                el.Parent?.ReplaceChild(p, el);
+            }
+            else
+            {
+                el.Parent?.ReplaceChild(doc.CreateTextNode(marker), el);
+            }
+        }
+
         // Code blocks with titles: <pre data-title="x"><code>...</code></pre>.
         // Lift the title into a <p><strong> above the <pre>.
-        // Plain code blocks (no data-title) are left alone — they
-        // still render fine through HtmlToOpenXml.
         foreach (var pre in root.QuerySelectorAll("pre[data-title]").ToArray())
         {
             var title = pre.GetAttribute("data-title");
@@ -346,6 +382,9 @@ public sealed class NoteExportService : INoteExportService
         // here" we inject a non-breaking space when the body is
         // whitespace-only, so HtmlToOpenXml has at least one run to
         // emit. Word renders it as a small empty styled paragraph.
+        // (Code inside a <pre> was always plain text — Markdig
+        // HTML-escapes it — so replacing the children with TextContent
+        // loses nothing.)
         foreach (var pre in root.QuerySelectorAll("pre").ToArray())
         {
             var existing = pre.GetAttribute("style") ?? "";
@@ -356,11 +395,19 @@ public sealed class NoteExportService : INoteExportService
 
             if (string.IsNullOrWhiteSpace(pre.TextContent))
             {
-                // Find the deepest <code> child so the NBSP lands
-                // inside the typical structure HtmlToOpenXml expects;
-                // fall back to the <pre> itself for malformed inputs.
-                var code = pre.QuerySelector("code") ?? pre;
-                code.TextContent = "\u00A0";
+                pre.TextContent = "\u00A0";
+                continue;
+            }
+
+            // Unwrap <pre><code>…</code></pre> to a bare <pre>: with
+            // the <code> inside, HtmlToOpenXml collapses the
+            // whitespace and the whole block lands on one line
+            // (`IF a THEN b := 1; END_IF`). A bare <pre> keeps a line
+            // break per line and the indentation. The trailing newline
+            // Markdig adds would become an empty last line — drop it.
+            if (pre.QuerySelector("code") is not null)
+            {
+                pre.TextContent = pre.TextContent.TrimEnd('\n', '\r');
             }
         }
 
@@ -408,8 +455,11 @@ public sealed class NoteExportService : INoteExportService
 
             try
             {
-                var canonical = _notePaths.CanonicalizeNote(p);
-                absoluteImage = _notePaths.Resolve(vaultRoot, canonical);
+                // An asset path, not a note path: CanonicalizeNote
+                // insists on ".md", so these images never embedded.
+                // ResolveFolder applies the same segment validation
+                // (no "..", no .notesapp) without that rule.
+                absoluteImage = _notePaths.ResolveFolder(vaultRoot, p);
             }
             catch (InvalidNotePathException)
             {
@@ -418,7 +468,17 @@ public sealed class NoteExportService : INoteExportService
         }
         else
         {
-            var rel = src.TrimStart('.', '/');
+            // Relative to the note's folder; `../x.png` is legitimate
+            // (it used to be mangled by trimming every leading dot).
+            // A leading "/" means vault-root-relative.
+            var baseDir = noteParent;
+            var rel = src;
+            while (rel.StartsWith("./", StringComparison.Ordinal)) rel = rel[2..];
+            if (rel.StartsWith('/'))
+            {
+                baseDir = vaultRoot;
+                rel = rel.TrimStart('/');
+            }
             var decoded = string.Join('/',
                 rel.Split('/').Select(seg =>
                 {
@@ -426,10 +486,9 @@ public sealed class NoteExportService : INoteExportService
                     catch { return seg; }
                 }));
 
-            // Combine with the note's folder, then sanity-check the
-            // result is under vaultRoot. Path.GetFullPath collapses
-            // any ../.. that snuck through the markdown.
-            var combined = Path.Combine(noteParent, decoded.Replace('/', Path.DirectorySeparatorChar));
+            // Combine, then sanity-check the result is under
+            // vaultRoot. Path.GetFullPath collapses the ../ segments.
+            var combined = Path.Combine(baseDir, decoded.Replace('/', Path.DirectorySeparatorChar));
             absoluteImage = Path.GetFullPath(combined);
             var rootFull = Path.GetFullPath(vaultRoot);
             if (!absoluteImage.StartsWith(
@@ -538,6 +597,7 @@ public sealed class NoteExportService : INoteExportService
             // OOXML paragraphs, not HTML — it's the reliable way
             // to get fill colour and border-left rendered in Word.
             MaterializeCallouts(mainPart);
+            MaterializeMath(mainPart);
 
             mainPart.Document.Save();
         }
@@ -741,8 +801,10 @@ public sealed class NoteExportService : INoteExportService
             // so we don't need xml:space="preserve" handling.
             var run = new Run(runProps, new Text(text));
 
+            // Child order follows the OOXML schema (spacing before
+            // jc); out-of-order children fail validation and can make
+            // Word report "unreadable content".
             var paraProps = new ParagraphProperties(
-                new Justification { Val = justify },
                 // Tight line-height — header is metadata; no extra
                 // breathing room.
                 new SpacingBetweenLines
@@ -750,14 +812,15 @@ public sealed class NoteExportService : INoteExportService
                     After = "0",
                     Before = "0",
                     LineRule = LineSpacingRuleValues.Auto,
-                });
+                },
+                new Justification { Val = justify });
 
             // Borderless cell.
             var cellProps = new TableCellProperties(
                 new TableCellBorders(
                     new TopBorder    { Val = BorderValues.Nil },
-                    new BottomBorder { Val = BorderValues.Nil },
                     new LeftBorder   { Val = BorderValues.Nil },
+                    new BottomBorder { Val = BorderValues.Nil },
                     new RightBorder  { Val = BorderValues.Nil }));
 
             return new TableCell(cellProps, new Paragraph(paraProps, run));
@@ -773,8 +836,8 @@ public sealed class NoteExportService : INoteExportService
             new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
             new TableBorders(
                 new TopBorder     { Val = BorderValues.Nil },
-                new BottomBorder  { Val = BorderValues.Nil },
                 new LeftBorder    { Val = BorderValues.Nil },
+                new BottomBorder  { Val = BorderValues.Nil },
                 new RightBorder   { Val = BorderValues.Nil },
                 new InsideHorizontalBorder { Val = BorderValues.Nil },
                 new InsideVerticalBorder   { Val = BorderValues.Nil }),
@@ -847,87 +910,56 @@ public sealed class NoteExportService : INoteExportService
         var body = mainPart.Document?.Body;
         if (body is null) return;
 
-        // Snapshot child paragraphs as an indexed list so we can
-        // splice safely. We only care about top-level body children
-        // — markers were emitted as top-level <p>, and HtmlToOpenXml
-        // preserves that structure.
-        var children = body.ChildElements.ToList();
-
-        // Track ranges to replace as (beginIndex, endIndex, variant).
-        // Built in a forward pass; applied in REVERSE so earlier
-        // ranges' indices stay valid while we mutate.
-        var ranges = new List<(int Begin, int End, string Variant)>();
-
-        for (int i = 0; i < children.Count; i++)
+        // Pair the markers with a stack, in document order, so a
+        // callout nested in another pairs with ITS end marker; each
+        // pair is materialised as soon as it closes, i.e. innermost
+        // first — the inner table then simply becomes part of the
+        // outer callout's content. Pairs must share a parent (they
+        // always do: both markers were emitted as siblings).
+        //
+        // The previous version moved the content into the cell and
+        // then removed everything from begin to end — including the
+        // content it had just moved — so every callout exported with
+        // only its title, and a nested callout left a literal
+        // <<<NC_CALLOUT_END>>> behind.
+        var open = new Stack<(Paragraph Begin, string Variant)>();
+        foreach (var p in body.Descendants<Paragraph>().ToList())
         {
-            if (children[i] is not Paragraph p) continue;
             var text = p.InnerText ?? "";
-            if (!text.StartsWith(CalloutMarkerBegin, StringComparison.Ordinal)) continue;
-
-            // Parse variant out of "<<<NC_CALLOUT_BEGIN:error>>>".
-            var sepIdx = text.IndexOf(CalloutMarkerSep, CalloutMarkerBegin.Length, StringComparison.Ordinal);
-            if (sepIdx < 0) continue;
-            var variant = text.Substring(CalloutMarkerBegin.Length, sepIdx - CalloutMarkerBegin.Length);
-
-            // Find the matching end paragraph.
-            int endIdx = -1;
-            for (int j = i + 1; j < children.Count; j++)
+            if (text.StartsWith(CalloutMarkerBegin, StringComparison.Ordinal))
             {
-                if (children[j] is Paragraph candidate &&
-                    string.Equals(candidate.InnerText, CalloutMarkerEnd, StringComparison.Ordinal))
-                {
-                    endIdx = j;
-                    break;
-                }
-            }
-            if (endIdx < 0)
-            {
-                // Unmatched begin marker — skip and continue scanning.
-                // The visible literal marker is the user-facing
-                // signal that something went sideways.
+                var sepIdx = text.IndexOf(CalloutMarkerSep, CalloutMarkerBegin.Length, StringComparison.Ordinal);
+                if (sepIdx < 0) continue;
+                open.Push((p, text.Substring(CalloutMarkerBegin.Length, sepIdx - CalloutMarkerBegin.Length)));
                 continue;
             }
+            if (!string.Equals(text, CalloutMarkerEnd, StringComparison.Ordinal) || open.Count == 0) continue;
 
-            ranges.Add((i, endIdx, variant));
-            // Skip past the end marker so a subsequent callout
-            // doesn't pick up paragraphs already consumed.
-            i = endIdx;
-        }
-
-        // Apply ranges in REVERSE so prior-range index validity
-        // is preserved during list mutation.
-        for (int r = ranges.Count - 1; r >= 0; r--)
-        {
-            var (begin, end, variant) = ranges[r];
+            var (begin, variant) = open.Pop();
+            var parent = begin.Parent;
+            if (parent is null || !ReferenceEquals(parent, p.Parent))
+            {
+                // Unbalanced across containers — leave the literal
+                // markers visible rather than guess.
+                continue;
+            }
             if (!CalloutStyles.TryGetValue(variant, out var style))
             {
                 style = CalloutStyles["note"];
             }
 
-            // Collect the body paragraphs (BETWEEN markers, exclusive).
-            // These are the user's note content for the callout.
+            // Content strictly between the markers, read live (an
+            // inner callout has already been replaced by its table).
             var inner = new List<OpenXmlElement>();
-            for (int k = begin + 1; k < end; k++)
+            for (var el = begin.NextSibling(); el is not null && !ReferenceEquals(el, p); el = el.NextSibling())
             {
-                inner.Add(children[k]);
+                inner.Add(el);
             }
 
-            // Build the OOXML table.
             var table = BuildCalloutTable(style, inner);
-
-            // Splice: remove begin marker, all inner paragraphs,
-            // and end marker; insert the table at the begin
-            // position. We work on the live body, not the snapshot,
-            // to ensure the changes show up in mainPart.Document.
-            var beginNode = children[begin];
-
-            // Insert table BEFORE the begin marker, then remove the
-            // bracketed range. Order: build invariant first.
-            beginNode.InsertBeforeSelf(table);
-            for (int k = begin; k <= end; k++)
-            {
-                children[k].Remove();
-            }
+            begin.InsertBeforeSelf(table);
+            begin.Remove();
+            p.Remove();
         }
     }
 
@@ -975,24 +1007,26 @@ public sealed class NoteExportService : INoteExportService
         // to avoid OOXML SDK naming inconsistencies (the SDK has
         // both LeftMargin/RightMargin and StartMargin/EndMargin
         // depending on package version). The default looks fine.
+        // Child order follows the OOXML schema: tcW, tcBorders, shd;
+        // inside tcBorders: top, left, bottom, right.
         var cellProps = new TableCellProperties(
             new TableCellWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
-            new Shading
-            {
-                Val = ShadingPatternValues.Clear,
-                Color = "auto",
-                Fill = fillHex,
-            },
             new TableCellBorders(
+                new TopBorder { Val = BorderValues.Nil },
                 new LeftBorder
                 {
                     Val = BorderValues.Single,
                     Size = 24,
                     Color = borderHex,
                 },
-                new TopBorder { Val = BorderValues.Nil },
                 new BottomBorder { Val = BorderValues.Nil },
-                new RightBorder { Val = BorderValues.Nil }));
+                new RightBorder { Val = BorderValues.Nil }),
+            new Shading
+            {
+                Val = ShadingPatternValues.Clear,
+                Color = "auto",
+                Fill = fillHex,
+            });
 
         var cell = new TableCell(cellProps);
 
@@ -1017,12 +1051,114 @@ public sealed class NoteExportService : INoteExportService
             cell.Append(bodyEl);
         }
 
-        // If there were no body paragraphs (empty callout), Word
-        // renders a single-paragraph cell which is fine — the title
-        // row still shows.
+        // OOXML requires a cell to end with a paragraph; a callout
+        // whose last block is a table (a markdown table, or a nested
+        // callout) would otherwise produce a cell Word may refuse to
+        // open.
+        if (cell.LastChild is Table)
+        {
+            cell.Append(new Paragraph());
+        }
 
         var row = new TableRow(cell);
         return new Table(tblProps, grid, row);
+    }
+
+    /// <summary>
+    /// Replace the math markers left by <see cref="PostProcessHtmlAsync"/>
+    /// with Office Math objects. The equation holds the LaTeX source
+    /// in Word's linear form: it reads as an equation (Cambria Math,
+    /// math zone), and in Word "Equation → Convert → Professional"
+    /// (LaTeX input) builds the formatted version. A full LaTeX → OMML
+    /// translator is out of scope.
+    /// </summary>
+    private static void MaterializeMath(MainDocumentPart mainPart)
+    {
+        var body = mainPart.Document?.Body;
+        if (body is null) return;
+
+        foreach (var run in body.Descendants<Run>().ToList())
+        {
+            var textEl = run.GetFirstChild<Text>();
+            if (textEl is null || run.Elements<Text>().Count() != 1) continue;
+            var text = textEl.Text ?? "";
+            if (!text.Contains(MathMarkerOpen, StringComparison.Ordinal)) continue;
+
+            // Display math sits alone in its paragraph → oMathPara.
+            if (run.Parent is Paragraph para && para.Elements<Run>().Count() == 1 &&
+                TryParseMathMarker(text.Trim(), out var blockKind, out var blockLatex, out var consumed) &&
+                blockKind == 'B' && consumed == text.Trim().Length)
+            {
+                run.Remove();
+                para.Append(new DocumentFormat.OpenXml.Math.Paragraph(BuildOfficeMath(blockLatex)));
+                continue;
+            }
+
+            // Inline: split the run around each marker.
+            var pieces = new List<OpenXmlElement>();
+            var pos = 0;
+            while (pos < text.Length)
+            {
+                var at = text.IndexOf(MathMarkerOpen, pos, StringComparison.Ordinal);
+                if (at < 0 || !TryParseMathMarker(text[at..], out _, out var latex, out var len))
+                {
+                    pieces.Add(CloneRunWithText(run, text[pos..]));
+                    break;
+                }
+                if (at > pos) pieces.Add(CloneRunWithText(run, text[pos..at]));
+                pieces.Add(BuildOfficeMath(latex));
+                pos = at + len;
+            }
+            foreach (var piece in pieces) run.InsertBeforeSelf(piece);
+            run.Remove();
+        }
+    }
+
+    private static bool TryParseMathMarker(string s, out char kind, out string latex, out int length)
+    {
+        kind = ' '; latex = ""; length = 0;
+        if (!s.StartsWith(MathMarkerOpen, StringComparison.Ordinal) || s.Length < MathMarkerOpen.Length + 2) return false;
+        kind = s[MathMarkerOpen.Length];
+        if (s[MathMarkerOpen.Length + 1] != ':') return false;
+        var close = s.IndexOf(MathMarkerClose, MathMarkerOpen.Length + 2, StringComparison.Ordinal);
+        if (close < 0) return false;
+        try
+        {
+            latex = Encoding.UTF8.GetString(Convert.FromBase64String(s[(MathMarkerOpen.Length + 2)..close]));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        length = close + MathMarkerClose.Length;
+        return true;
+    }
+
+    private static DocumentFormat.OpenXml.Math.OfficeMath BuildOfficeMath(string latex) =>
+        new(new DocumentFormat.OpenXml.Math.Run(
+            new DocumentFormat.OpenXml.Math.Text(latex) { Space = SpaceProcessingModeValues.Preserve }));
+
+    private static Run CloneRunWithText(Run template, string text)
+    {
+        var r = new Run();
+        if (template.RunProperties is { } rp) r.Append(rp.CloneNode(true));
+        r.Append(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
+        return r;
+    }
+
+    /// <summary>`\(x\)` / `\[x\]` / `$x$` / `$$x$$` → `x`.</summary>
+    private static string StripMathDelimiters(string s)
+    {
+        var t = s.Trim();
+        foreach (var (open, close) in new[] { ("\\(", "\\)"), ("\\[", "\\]"), ("$$", "$$"), ("$", "$") })
+        {
+            if (t.Length >= open.Length + close.Length &&
+                t.StartsWith(open, StringComparison.Ordinal) && t.EndsWith(close, StringComparison.Ordinal))
+            {
+                return t[open.Length..^close.Length].Trim();
+            }
+        }
+        return t;
     }
 
     // ----------------------------------------------------------------

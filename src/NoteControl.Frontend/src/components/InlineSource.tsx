@@ -1037,7 +1037,12 @@ export function PillEditor({
             e.preventDefault();
             commit();
           } else if (e.key === 'Escape') {
+            // Cancel this edit only. preventDefault also tells the
+            // sandbox modal's window-level Escape handler to leave
+            // the modal open (it used to close the whole sandbox,
+            // losing the run state and every poke).
             e.preventDefault();
+            e.stopPropagation();
             onCommit(false);
           }
         }}
@@ -1084,7 +1089,20 @@ export function formatTimeForPill(ms: number): string {
  */
 const PENDING_CLICK: { id: number | null } = { id: null };
 
-function clearPendingClick(): void {
+/**
+ * Open a BOOL pill's editor after the double-click window, unless a
+ * dblclick (which calls clearPendingClick) arrives first. Shared
+ * with the Watch table so both toggle the same way.
+ */
+export function scheduleBoolPillOpen(open: () => void): void {
+  clearPendingClick();
+  PENDING_CLICK.id = window.setTimeout(() => {
+    PENDING_CLICK.id = null;
+    open();
+  }, 250);
+}
+
+export function clearPendingClick(): void {
   if (PENDING_CLICK.id !== null) {
     window.clearTimeout(PENDING_CLICK.id);
     PENDING_CLICK.id = null;

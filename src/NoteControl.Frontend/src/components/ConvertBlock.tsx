@@ -9,6 +9,30 @@ import {
 } from '../util/convertUnits';
 
 /**
+ * Parse a typed number, accepting a decimal comma ("2,5" — Danish /
+ * European keyboards; the Motion widget's parseNum already does).
+ * `Number("2,5")` is NaN, so the other fields silently kept the
+ * previous conversion. With both separators present the last one
+ * is the decimal mark ("1.234,5" and "1,234.5" are both 1234.5);
+ * spaces between digit groups are ignored. Returns NaN for partial
+ * input ("1e", "-") like Number() does.
+ */
+export function parseDecimalInput(text: string): number {
+  let t = text.replace(/[\s\u00a0\u202f]/g, '');
+  const lastComma = t.lastIndexOf(',');
+  const lastDot = t.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    t = lastComma > lastDot
+      ? t.replace(/\./g, '').replace(',', '.')
+      : t.replace(/,/g, '');
+  } else if (lastComma >= 0) {
+    if (t.indexOf(',') !== lastComma) return NaN; // "1,2,3"
+    t = t.replace(',', '.');
+  }
+  return t === '' ? NaN : Number(t);
+}
+
+/**
  * Live unit-converter widget.
  *
  * Pick a category (Force, Torque, Mass, Inertia, Length, Rotational
@@ -78,7 +102,7 @@ export function ConvertBlock({ block, onChange, onDelete }: ConvertBlockProps) {
         setBase(0);
         return;
       }
-      const n = Number(trimmed);
+      const n = parseDecimalInput(trimmed);
       if (Number.isFinite(n)) {
         setBase(n * unit.factor);
       }

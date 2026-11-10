@@ -1,4 +1,5 @@
 import Table from '@tiptap/extension-table';
+import { escapeForHtmlAttr } from './mathParser';
 
 /**
  * Extends the upstream @tiptap/extension-table with two things:
@@ -17,8 +18,11 @@ import Table from '@tiptap/extension-table';
  *        - any cell has colspan/rowspan > 1 (merged cells)
  *        - any cell has user-set column widths (colwidth array,
  *          set by dragging the column resize handle)
- *        - any cell holds multi-block content (e.g. a list inside)
+ *        - any cell holds multi-block content, or a single block that
+ *          isn't a paragraph (a list, quote, heading, code block...)
  *        - the table has a header column (header cells outside row 0)
+ *        - a cell holds math whose LaTeX contains `|` (a pipe row
+ *          can't carry it: escaping it would change the LaTeX)
  *
  *      The first three are NoteControl-specific. The last three match
  *      what the upstream tiptap-markdown serializer also falls back
@@ -134,6 +138,8 @@ function needsHtmlSerialization(node: unknown): boolean {
           colwidth?: number[] | null;
         };
         childCount: number;
+        firstChild?: { type: { name: string } } | null;
+        descendants?: (fn: (n: { type: { name: string }; attrs?: Record<string, unknown> }) => boolean | void) => void;
       };
     };
   };
@@ -156,8 +162,28 @@ function needsHtmlSerialization(node: unknown): boolean {
       if ((cell.attrs?.colspan ?? 1) > 1) return true;
       if ((cell.attrs?.rowspan ?? 1) > 1) return true;
 
-      // 4. Multi-block cell content (e.g. a list inside a cell)? → HTML
+      // 4. Multi-block cell content, or one block that isn't a
+      //    paragraph (a list, quote, heading...)? → HTML. A pipe row
+      //    can only hold inline content: a lone list used to go the
+      //    pipe path and write its newlines into the row, which
+      //    split the row on reload (cells dropped, next row lost).
       if (cell.childCount > 1) return true;
+      if (cell.childCount === 1 && cell.firstChild?.type.name !== 'paragraph') return true;
+
+      // 4b. Math whose LaTeX contains `|`? → HTML. In a pipe row the
+      //     `|` would have to be escaped as `\|`, which in LaTeX is a
+      //     different symbol (double bar).
+      let mathWithPipe = false;
+      cell.descendants?.((n) => {
+        if (mathWithPipe) return false;
+        if ((n.type.name === 'mathInline' || n.type.name === 'mathBlock')
+            && String(n.attrs?.latex ?? '').includes('|')) {
+          mathWithPipe = true;
+          return false;
+        }
+        return true;
+      });
+      if (mathWithPipe) return true;
 
       // 5. Header column (header cell outside row 0)? → HTML
       //    Header cells in row 0 are normal "header row" tables and
@@ -227,6 +253,7 @@ function serializeTableAsPipe(state: unknown, node: unknown): void {
     ensureNewLine: () => void;
     renderInline: (node: unknown) => void;
     inTable?: boolean;
+    out: string;
   };
   const tableNode = node as {
     forEach: (fn: (row: unknown, p: number, i: number) => void) => void;
@@ -242,11 +269,23 @@ function serializeTableAsPipe(state: unknown, node: unknown): void {
     s.write('| ');
     rowNode.forEach((col, _q, j) => {
       if (j) s.write(' | ');
-      const cellContent = (col as { firstChild: { textContent: string } }).firstChild;
-      // Empty cells: skip the renderInline call so we don't emit
-      // a stray space/marker. Matches upstream behaviour.
-      if (cellContent && cellContent.textContent.trim()) {
+      const cellContent = (col as {
+        firstChild: { textContent: string; childCount: number } | null;
+      }).firstChild;
+      // Empty cells: skip the renderInline call so we don't emit a
+      // stray space/marker. "Empty" means no inline content at all —
+      // NOT empty textContent: a math-only cell has textContent ""
+      // and used to be dropped on save.
+      if (cellContent && cellContent.childCount > 0
+          && (cellContent.textContent.trim() || hasNonTextInline(cellContent))) {
+        // prosemirror-markdown's escaping doesn't know about table
+        // cells, so a `|` in the text (or inside inline code) went
+        // to disk raw and split the cell on reload. Escape every
+        // `|` this cell wrote. GFM unescapes `\|` inside code spans
+        // in table cells too, so code round-trips as well.
+        const start = s.out.length;
         s.renderInline(cellContent);
+        s.out = s.out.slice(0, start) + escapeCellPipes(s.out.slice(start));
       }
     });
     s.write(' |');
@@ -263,6 +302,33 @@ function serializeTableAsPipe(state: unknown, node: unknown): void {
   });
   s.closeBlock(node);
   s.inTable = false;
+}
+
+/** True when a cell paragraph holds inline nodes other than text (math, images). */
+function hasNonTextInline(block: unknown): boolean {
+  const b = block as { childCount: number; child: (i: number) => { isText?: boolean; type: { name: string } } };
+  for (let i = 0; i < b.childCount; i++) {
+    const c = b.child(i);
+    if (!c.isText && c.type.name !== 'hardBreak') return true;
+  }
+  return false;
+}
+
+/**
+ * Escape each `|` that isn't already escaped (preceded by an odd
+ * number of backslashes). Text-level backslashes were already doubled
+ * by prosemirror-markdown's esc(), so a literal `\` before a `|`
+ * shows up as an even run and still gets its own escape.
+ */
+export function escapeCellPipes(cell: string): string {
+  let out = '';
+  let backslashes = 0;
+  for (const ch of cell) {
+    if (ch === '|' && backslashes % 2 === 0) out += '\\';
+    out += ch;
+    backslashes = ch === '\\' ? backslashes + 1 : 0;
+  }
+  return out;
 }
 
 // ---- HTML serialization (round-trips custom attrs) ------------------
@@ -475,6 +541,7 @@ interface InlineChild {
   isText?: boolean;
   text?: string;
   type: { name: string };
+  attrs?: Record<string, unknown>;
   marks?: MarkLike[];
   textContent?: string;
 }
@@ -561,6 +628,14 @@ function renderInlineHtml(block: CellChildNode): string {
       out += '<br>';
       continue;
     }
+    if (child.type.name === 'mathInline') {
+      // Same placeholder the markdown preprocessor produces, so the
+      // node's parseHTML reads it straight back. (Falling through to
+      // textContent wrote nothing — math atoms have no text.)
+      const latex = String(child.attrs?.latex ?? '').trim();
+      if (latex) out += `<span data-math-inline="${escapeForHtmlAttr(latex)}"></span>`;
+      continue;
+    }
     if (!child.isText || typeof child.text !== 'string') {
       out += escapeHtmlText(child.textContent ?? '');
       continue;
@@ -620,11 +695,23 @@ function renderBlockHtml(block: CellChildNode): string {
       const startAttr = start === 1 ? '' : ` start="${start}"`;
       return `<ol${startAttr}>${renderListItemsHtml(block)}</ol>`;
     }
+    case 'blockquote': {
+      let inner = '';
+      for (let i = 0; i < block.childCount; i++) inner += renderBlockHtml(block.child(i));
+      return `<blockquote>${inner}</blockquote>`;
+    }
+    case 'mathBlock': {
+      const latex = String((block.attrs ?? {}).latex ?? '').trim();
+      return latex ? `<div data-math-block="${escapeForHtmlAttr(latex)}"></div>` : '';
+    }
     default:
-      // Unknown block — code block, callout, image, math, etc.
+      // Unknown block — code block, callout, image, etc.
       // Fall back to escaped textContent. See the docblock above
-      // renderCellContents for the rationale.
-      return escapeHtmlText(block.textContent ?? '');
+      // renderCellContents for the rationale. Line breaks become
+      // <br>: a raw newline (worse, a blank line, which ends a raw
+      // HTML block in markdown) inside the <table> would cut the
+      // table apart on reload.
+      return escapeHtmlText(block.textContent ?? '').replace(/\r?\n/g, '<br>');
   }
 }
 

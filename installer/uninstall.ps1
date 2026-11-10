@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Uninstall NoteControl from this Windows machine.
 
@@ -15,10 +15,15 @@
   asked to confirm interactively unless -Force is also given.
 
 .PARAMETER InstallDir
-  Where the binaries live. Defaults to "C:\Program Files\NoteControl"
-  unless the script is running from inside the install dir, in which
-  case we use that. (This handles the Add/Remove Programs path: the
-  script is invoked as $InstallDir\uninstall.ps1 with no arguments.)
+  Where the binaries live. Defaults to the script's own folder when
+  that folder IS an install (it holds server\NoteControl.Server.exe or
+  tray\NoteControl.Tray.exe -- the Add/Remove Programs path, where the
+  script runs as $InstallDir\uninstall.ps1 with no arguments), and to
+  "C:\Program Files\NoteControl" otherwise (e.g. when run from the
+  release zip's installer\ folder, which must never be deleted).
+
+  If not started as Administrator the script relaunches itself
+  elevated (UAC prompt) with the same parameters.
 
 .PARAMETER ServiceName
   Default "NoteControlServer".
@@ -58,29 +63,58 @@ param(
 
 $ErrorActionPreference = 'Continue'  # we tolerate "thing wasn't there" failures
 
-# Default $InstallDir to wherever this script lives if not specified.
-# Works for: Add/Remove Programs invocation (script is in the install
-# dir), manual run from the install dir, and direct invocation with
-# explicit -InstallDir.
+# Self-elevate. Add/Remove Programs runs the UninstallString without
+# elevation, so the old "must run as Administrator" exit made the
+# console window just flash and close. Relaunch elevated with the same
+# parameters and pass the exit code through.
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal   = New-Object Security.Principal.WindowsPrincipal($currentUser)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Requesting administrator rights to uninstall NoteControl ..."
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'))
+    if ($PSBoundParameters.ContainsKey('InstallDir'))  { $argList += @('-InstallDir',  ('"' + $InstallDir + '"')) }
+    if ($PSBoundParameters.ContainsKey('ServiceName')) { $argList += @('-ServiceName', ('"' + $ServiceName + '"')) }
+    foreach ($sw in @('RemoveData', 'Force', 'Silent')) {
+        if ($PSBoundParameters.ContainsKey($sw)) { $argList += ('-' + $sw) }
+    }
+    try {
+        $hostExe = (Get-Process -Id $PID).Path
+        $child = Start-Process -FilePath $hostExe -ArgumentList $argList -Verb RunAs -PassThru -Wait -ErrorAction Stop
+        exit $child.ExitCode
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: Administrator rights are required and the elevation was declined or failed." -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  Right-click PowerShell -> 'Run as administrator', then re-run." -ForegroundColor Yellow
+        Write-Host ""
+        if (-not $Silent) {
+            Write-Host "Press Enter to exit..." -ForegroundColor DarkGray
+            [void][System.Console]::ReadLine()
+        }
+        exit 1
+    }
+}
+
+# Default $InstallDir: this script's folder only when it really is an
+# install (Add/Remove Programs runs <InstallDir>\uninstall.ps1 with no
+# arguments). Run from anywhere else -- e.g. the release zip's
+# installer\ folder -- the default is the standard install location,
+# so the uninstaller never deletes the folder it was started from.
 if (-not $InstallDir) {
-    $InstallDir = $PSScriptRoot
+    $looksInstalled =
+        (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'server\NoteControl.Server.exe')) -or
+        (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tray\NoteControl.Tray.exe'))
+    if ($looksInstalled) {
+        $InstallDir = $PSScriptRoot
+    } else {
+        $InstallDir = Join-Path $env:ProgramFiles 'NoteControl'
+    }
 }
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host " NoteControl uninstaller" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
-
-# Admin check.
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal   = New-Object Security.Principal.WindowsPrincipal($currentUser)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host ""
-    Write-Host "ERROR: This script must run as Administrator." -ForegroundColor Red
-    Write-Host "  Right-click PowerShell -> 'Run as administrator', then re-run." -ForegroundColor Yellow
-    Write-Host ""
-    exit 1
-}
 
 # Resolve the data root the same way install.ps1 does. We don't try
 # to read it from the installed appsettings.json because the user may
@@ -203,7 +237,8 @@ if (Test-Path -LiteralPath $InstallDir) {
     # Delete everything except this script and its containing dir
     # if we're running from inside the install dir.
     $scriptFullPath = $MyInvocation.MyCommand.Path
-    $runningFromInstallDir = $scriptFullPath -and $scriptFullPath.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase)
+    $installPrefix = $InstallDir.TrimEnd('\') + '\'
+    $runningFromInstallDir = $scriptFullPath -and $scriptFullPath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)
 
     if ($runningFromInstallDir) {
         # Remove children one-by-one, skipping our own script.
@@ -214,7 +249,10 @@ if (Test-Path -LiteralPath $InstallDir) {
             try {
                 Remove-Item -LiteralPath $itemFullPath -Recurse -Force -ErrorAction Stop
             } catch {
-                Write-Host "  Could not remove $itemFullPath: $($_.Exception.Message)" -ForegroundColor Yellow
+                # ${...} braces: "$itemFullPath:" is a parse error (PowerShell
+                # reads "itemFullPath:" as a drive-qualified variable name),
+                # which stopped the whole script from ever running.
+                Write-Host "  Could not remove ${itemFullPath}: $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
         Write-Host "  Cleared install dir contents." -ForegroundColor Green

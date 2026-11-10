@@ -43,13 +43,35 @@ public sealed class TemplateService : ITemplateService
     private const string AssetsFolderSuffix = ".assets";
 
     /// <summary>
-    /// Allowed template name characters. Letters, digits, dash,
-    /// underscore, space. Length 1-100. Disallows leading dots so
-    /// users can't write hidden filenames.
+    /// Characters allowed when a template is CREATED or RENAMED:
+    /// letters (any script, so "Møde" works), digits, combining
+    /// marks, space, underscore, dash, dot and parentheses. Length
+    /// 1-100. No leading dot, so users can't write hidden filenames.
+    /// <para>
+    /// Parentheses are needed because the server's own auto-naming
+    /// (<see cref="PickAvailableTemplateName"/>, "Template … (2)")
+    /// and note import ("Foo (2).md") produce them; the old ASCII-only
+    /// rule without "()" made those templates impossible to open,
+    /// rename, delete or insert (audit SV-13).
+    /// </para>
+    /// <para>
+    /// Templates that already exist are checked with the looser
+    /// <see cref="ValidateExistingName"/> instead, so anything the
+    /// list shows can always be opened and deleted.
+    /// </para>
     /// </summary>
-    private static readonly System.Text.RegularExpressions.Regex NameRegex =
-        new(@"^[A-Za-z0-9 _\-][A-Za-z0-9 _\-\.]{0,99}$",
+    private static readonly System.Text.RegularExpressions.Regex NewNameRegex =
+        new(@"^[\p{L}\p{N}\p{M} _\-()][\p{L}\p{N}\p{M} _\-\.()]{0,99}$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Characters Windows refuses in a filename, plus the path
+    /// separators. Checked explicitly rather than via
+    /// Path.GetInvalidFileNameChars(), which on Linux (tests) only
+    /// lists '/' and NUL.
+    /// </summary>
+    private static readonly char[] UnsafeFileNameChars =
+        { '/', '\\', '<', '>', ':', '"', '|', '?', '*' };
 
     private readonly ServerDbContext _db;
     private readonly IVaultPathResolver _vaultPaths;
@@ -102,7 +124,7 @@ public sealed class TemplateService : ITemplateService
         string name,
         CancellationToken ct = default)
     {
-        ValidateName(name);
+        ValidateExistingName(name);
         var folder = await ResolveTemplatesFolderAsync(vaultId, ct);
         var file = Path.Combine(folder, name + ".md");
         if (!File.Exists(file)) return null;
@@ -119,7 +141,7 @@ public sealed class TemplateService : ITemplateService
         TemplateUpsertRequest request,
         CancellationToken ct = default)
     {
-        ValidateName(request.Name);
+        ValidateNewName(request.Name);
         var folder = await ResolveTemplatesFolderAsync(vaultId, ct);
         Directory.CreateDirectory(folder);
 
@@ -235,7 +257,7 @@ public sealed class TemplateService : ITemplateService
         string targetNotePath,
         CancellationToken ct = default)
     {
-        ValidateName(templateName);
+        ValidateExistingName(templateName);
         if (string.IsNullOrWhiteSpace(targetNotePath))
         {
             throw new TemplateException("targetNotePath is required.");
@@ -317,8 +339,15 @@ public sealed class TemplateService : ITemplateService
         TemplateUpsertRequest request,
         CancellationToken ct = default)
     {
-        ValidateName(name);
-        ValidateName(request.Name);
+        ValidateExistingName(name);
+        // Only a NEW name has to meet the creation rule; saving an
+        // existing template's body under its current name must work
+        // even if that name predates the rule (hand-made file, older
+        // version, import).
+        if (!string.Equals(name, request.Name, StringComparison.Ordinal))
+        {
+            ValidateNewName(request.Name);
+        }
 
         var folder = await ResolveTemplatesFolderAsync(vaultId, ct);
         var oldFile = Path.Combine(folder, name + ".md");
@@ -407,7 +436,7 @@ public sealed class TemplateService : ITemplateService
 
     public async Task DeleteAsync(Guid vaultId, string name, CancellationToken ct = default)
     {
-        ValidateName(name);
+        ValidateExistingName(name);
         var folder = await ResolveTemplatesFolderAsync(vaultId, ct);
         var file = Path.Combine(folder, name + ".md");
         if (!File.Exists(file))
@@ -831,17 +860,42 @@ public sealed class TemplateService : ITemplateService
         return Path.Combine(vaultRoot, TemplatesSubfolder);
     }
 
-    private static void ValidateName(string name)
+    /// <summary>
+    /// Rule for a name being created or renamed to.
+    /// </summary>
+    private static void ValidateNewName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new TemplateException("Template name is required.");
         }
-        if (!NameRegex.IsMatch(name))
+        if (!NewNameRegex.IsMatch(name))
         {
             throw new TemplateException(
-                "Template name must contain only letters, digits, dashes, " +
-                "underscores, dots, or spaces (max 100 chars, no leading dot).");
+                "Template name must contain only letters, digits, spaces, " +
+                "dashes, underscores, dots or parentheses (max 100 chars, " +
+                "no leading dot).");
+        }
+    }
+
+    /// <summary>
+    /// Rule for addressing a template that already exists: the name
+    /// only has to be a single, safe filename inside the templates
+    /// folder (no separators, no "..", no leading dot, nothing Windows
+    /// rejects). Whatever <see cref="ListAsync"/> returns passes this.
+    /// </summary>
+    private static void ValidateExistingName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new TemplateException("Template name is required.");
+        }
+        if (name.Length > 250
+            || name.StartsWith('.')
+            || name.IndexOfAny(UnsafeFileNameChars) >= 0
+            || name.Any(char.IsControl))
+        {
+            throw new TemplateException("Invalid template name.");
         }
     }
 }

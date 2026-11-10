@@ -296,10 +296,7 @@ try
         NoteControl.Server.Startpage.Services.StartpageConfigService>();
     builder.Services.AddSingleton<NoteControl.Server.Startpage.Services.IFeedFetcher,
         NoteControl.Server.Startpage.Services.FeedFetcher>();
-    // SSRF guard: every connection (redirect hops included) is checked
-    // against the resolved address — see OutboundAddressGuard.
-    builder.Services.AddHttpClient("feedfetcher")
-        .ConfigurePrimaryHttpMessageHandler(NoteControl.Server.Startpage.Services.OutboundAddressGuard.CreateHandler);
+    builder.Services.AddHttpClient("feedfetcher");
 
     // LinkPreviewFetcher: same lifetime + reasoning as FeedFetcher
     // (singleton with in-memory cache + dedicated HttpClient pool).
@@ -307,10 +304,7 @@ try
     // much less often than feed content.
     builder.Services.AddSingleton<NoteControl.Server.Startpage.Services.ILinkPreviewFetcher,
         NoteControl.Server.Startpage.Services.LinkPreviewFetcher>();
-    // SSRF guard: every connection (redirect hops included) is checked
-    // against the resolved address — see OutboundAddressGuard.
-    builder.Services.AddHttpClient("linkpreviewfetcher")
-        .ConfigurePrimaryHttpMessageHandler(NoteControl.Server.Startpage.Services.OutboundAddressGuard.CreateHandler);
+    builder.Services.AddHttpClient("linkpreviewfetcher");
 
     // Assignments service. Per-vault JSON file at
     // {vault}/.notesapp/assignments.json. Scoped because it depends

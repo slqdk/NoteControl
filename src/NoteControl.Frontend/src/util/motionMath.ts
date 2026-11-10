@@ -102,12 +102,24 @@ export function calculateForward(input: ModeAInput): MotionResult | null {
   const tConst = Math.max(T - tAcc - tDec, 0);
 
   const vPeak = D / (0.5 * tAcc + tConst + 0.5 * tDec);
-  const acc = tAcc > 0 ? vPeak / tAcc : 0;
-  const jerk = tAcc > 0 ? acc / Math.max(dynFrac * tAcc, 0.001) : 0;
 
   // Slider 0..1 maps to S-curve sf 0..0.5. Same mapping as the
   // standalone calculator; see SCurveVelocity() below.
   const sfCurve = dynFrac * 0.5;
+
+  // Peak values of the profile that's actually drawn
+  // (sCurveVelocity with sf = sfCurve): jerk ramps take sf·tAcc at
+  // each end, the straight middle part has slope
+  // vPeak / (tAcc·(1−sf)) — that's the peak acceleration — and the
+  // jerk is peakAcc / (sf·tAcc). These used to be the AVERAGE
+  // acceleration vPeak/tAcc (up to 2× low at full S-curve) and a
+  // jerk from the slider fraction instead of sf (up to 4× low, and
+  // falling as S-curve % rose). At 0 % the ramp is a pure
+  // trapezoid: jerk is unbounded, shown as "—".
+  const acc = tAcc > 0 ? vPeak / (tAcc * (1 - sfCurve)) : 0;
+  const jerk = tAcc > 0
+    ? (sfCurve > 0 ? acc / (sfCurve * tAcc) : Number.POSITIVE_INFINITY)
+    : 0;
 
   return {
     mode: 0,

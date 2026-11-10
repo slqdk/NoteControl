@@ -50,19 +50,29 @@ import { lookupTypeName, lookupFbType } from './types';
 export function parseProgram(declText: string, bodyText: string): ParsedProgram {
   const program = parseDeclaration(declText);
   const body = parseBody(bodyText);
+  // Initial values are walked like body expressions: a chain base
+  // or a bare name they use that isn't declared here (a GVL
+  // constant: `nMax : INT := GVL_Param.nMax;` / `:= cMaxItems;`) is
+  // auto-declared as an unknown external, so the initializer
+  // evaluates to that type's default instead of failing.
+  const initExprs = program.vars.flatMap((v) => [
+    ...(v.initial ? [v.initial] : []),
+    ...(v.fbInit ?? []).map((a) => a.value),
+  ]);
   // Auto-declare any chain bases that aren't in the VAR block.
   // These typically refer to namespaced globals
   // (`XTS_Configuration.MoverCount`) or other-POU constants that
   // the user hasn't bothered to mirror in the local VAR block.
   // Synthesising them as unknown FB instances lets the body parse
   // and run; reads/pokes work like any other unknown chain.
-  autoDeclareChainBases(body, program.vars);
+  autoDeclareChainBases(body, program.vars, initExprs);
   // Cross-check: every reference in the body must resolve to a
   // declared variable. We do this in the parser (rather than the
   // interpreter) so a misspelled variable surfaces immediately
   // when the user opens the modal.
-  validateVarRefs(body, program.vars);
-  return { program, body };
+  validateVarRefs(body, program.vars, initExprs);
+  const enumHints = collectEnumHints(body, program.vars);
+  return { program, body, enumHints };
 }
 
 export function parseDeclaration(text: string): ProgramDecl {
@@ -172,9 +182,19 @@ class Parser {
     // the body reads and writes (and the user can poke), so we
     // collapse them all into a single flat list.
     let name = '(unnamed)';
-    if (this.acceptKeyword('program') ||
-        this.acceptKeyword('function_block') ||
-        this.acceptKeyword('function')) {
+    let pouKind: ProgramDecl['pouKind'];
+    const vars: VarDecl[] = [];
+    if (this.acceptKeyword('program')) pouKind = 'PROGRAM';
+    else if (this.acceptKeyword('function_block')) pouKind = 'FUNCTION_BLOCK';
+    else if (this.acceptKeyword('function')) pouKind = 'FUNCTION';
+    if (pouKind) {
+      // Access / inheritance modifiers before the name:
+      // `FUNCTION_BLOCK PUBLIC ABSTRACT FB_Base`. Not modelled.
+      while (this.peek().kind === 'IDENT' &&
+             POU_MODIFIERS.has(this.peek().value.toLowerCase()) &&
+             this.peek(1).kind === 'IDENT') {
+        this.consume();
+      }
       const id = this.peek();
       if (id.kind !== 'IDENT') {
         throw this.err(id, `expected POU name after the header keyword, got ${describeToken(id)}`);
@@ -183,19 +203,35 @@ class Parser {
       this.consume();
       // FUNCTION POUs declare a return type after the name:
       //   FUNCTION FooBar : INT
-      // We accept the colon-and-type but ignore it — the v1
-      // runtime has no concept of "function return value", and
-      // when the body is run it just executes statements.
+      // The function's name is then its return variable
+      // (`FooBar := a + b;`), which used to be rejected as an
+      // undeclared variable. Declare it so the body can assign it
+      // and the Watch table shows the result.
       if (this.acceptPunct(':')) {
-        const t = this.peek();
-        if (t.kind !== 'IDENT' && t.kind !== 'KEYWORD') {
-          throw this.err(t, `expected return type after ":", got ${describeToken(t)}`);
+        // Return type — any type shape (STRING(80), a dotted DUT...).
+        const retType = this.readTypeRef();
+        if (pouKind === 'FUNCTION') {
+          vars.push({
+            name,
+            nameLower: name.toLowerCase(),
+            type: retType,
+            section: 'RETURN',
+            initial: null,
+            line: id.line,
+          });
         }
+      }
+      // `EXTENDS FB_Base` / `IMPLEMENTS I_A, I_B` — inheritance and
+      // interfaces aren't modelled; skip the (possibly dotted) names.
+      while (this.peek().kind === 'IDENT') {
+        const kw = this.peek().value.toLowerCase();
+        if (kw !== 'extends' && kw !== 'implements') break;
         this.consume();
+        do {
+          this.readDottedName('type name');
+        } while (this.acceptPunct(','));
       }
     }
-
-    const vars: VarDecl[] = [];
 
     // Any VAR / VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT / VAR_TEMP
     // section opens a flat declaration list. We loop accepting
@@ -212,6 +248,10 @@ class Parser {
       ['var_temp',     'TEMP'],
       ['var_global',   'GLOBAL'],
       ['var_external', 'EXTERNAL'],
+      // VAR_STAT / VAR_INST: storage classes the sandbox doesn't
+      // distinguish (one instance, one scan loop) — plain locals.
+      ['var_stat',     'LOCAL'],
+      ['var_inst',     'LOCAL'],
     ]);
     while (true) {
       const t = this.peek();
@@ -222,11 +262,16 @@ class Parser {
         // keywords like `CONSTANT`, `RETAIN`, `PERSISTENT` after
         // the section keyword. Skip them — they're attributes,
         // not part of variable shape. (We don't enforce them.)
+        // (They arrive as IDENTs — the lexer doesn't reserve them —
+        // which is why the old KEYWORD-only check never skipped
+        // anything and `VAR CONSTANT` failed on its first line.)
         while (true) {
           const m = this.peek();
-          if (m.kind === 'KEYWORD' &&
-              (m.value === 'constant' || m.value === 'retain' ||
-               m.value === 'persistent')) {
+          if ((m.kind === 'KEYWORD' || m.kind === 'IDENT') &&
+              VAR_SECTION_MODIFIERS.has(m.value.toLowerCase()) &&
+              // `VAR constant : INT;` — a variable that happens to be
+              // called "constant" — is followed by ':' or ','.
+              !(this.peek(1).kind === 'PUNCT' && (this.peek(1).value === ':' || this.peek(1).value === ','))) {
             this.consume();
             continue;
           }
@@ -238,7 +283,7 @@ class Parser {
       break;
     }
 
-    return { name, vars };
+    return { name, vars, ...(pouKind ? { pouKind } : {}) };
   }
 
   /**
@@ -267,6 +312,16 @@ class Parser {
       while (this.acceptPunct(',')) {
         names.push(this.readVarName());
       }
+      // `bIn AT %I* : BOOL;` — I/O mapping. No real I/O here; the
+      // variable is an ordinary (pokeable) slot.
+      if (this.peek().kind === 'IDENT' && this.peek().value.toLowerCase() === 'at') {
+        this.consume();
+        const addr = this.peek();
+        if (addr.kind !== 'ADDRESS') {
+          throw this.err(addr, `expected a direct address after AT (e.g. %I*, %QX0.1), got ${describeToken(addr)}`);
+        }
+        this.consume();
+      }
       this.expectPunct(':');
 
       // Type — handled by `readTypeRef()` which supports plain
@@ -282,14 +337,26 @@ class Parser {
       // done by the runtime, so we still reject `:= ...` for
       // anything that isn't a scalar.
       let initial: Expr | null = null;
+      let fbInit: { name: string; nameLower: string; value: Expr }[] | undefined;
       if (this.acceptPunct(':=')) {
-        if (typeRef.kind !== 'scalar') {
-          throw this.err(
-            typeTok,
-            `${typeRef.kind === 'fb' ? 'FB instances' : 'unknown-typed variables'} cannot have an initial value (drop the := for "${describeTypeRef(typeRef)}")`,
-          );
+        void typeTok;
+        const next = this.peek();
+        const opensGroup = next.kind === 'PUNCT' && (next.value === '(' || next.value === '[');
+        if (typeRef.kind === 'scalar') {
+          initial = this.parseExpression();
+        } else if (typeRef.kind === 'fb' && next.kind === 'PUNCT' && next.value === '(') {
+          // `fbTimer : TON := (PT := T#1S);` — seeds the instance's inputs.
+          fbInit = this.parseNamedInitList();
+        } else if (typeRef.kind === 'unknown' && !opensGroup) {
+          // `eState : E_State := E_State.Idle;`, `n : MyAlias := 5;`
+          initial = this.parseExpression();
+        } else {
+          // Struct / array initializers — `st : ST_X := (a := 1);`,
+          // `arr : ARRAY[1..3] OF INT := [1, 2, 3];` — are everyday
+          // TwinCAT and used to be a parse error. Not modelled (no
+          // per-member / per-element storage): skip them.
+          this.skipUntilDeclEnd();
         }
-        initial = this.parseExpression();
       }
       this.expectPunct(';');
 
@@ -305,10 +372,77 @@ class Parser {
           type: typeRef,
           section,
           initial,
+          ...(fbInit ? { fbInit } : {}),
           line: n.tok.line,
         });
       }
     }
+  }
+
+  /** `( Name := expr { , Name := expr } )` */
+  private parseNamedInitList(): { name: string; nameLower: string; value: Expr }[] {
+    this.expectPunct('(');
+    const out: { name: string; nameLower: string; value: Expr }[] = [];
+    if (this.acceptPunct(')')) return out;
+    do {
+      const id = this.peek();
+      if (id.kind !== 'IDENT') {
+        throw this.err(id, `expected an input name in the FB initializer, got ${describeToken(id)}`);
+      }
+      this.consume();
+      this.expectPunct(':=');
+      out.push({ name: id.value, nameLower: id.value.toLowerCase(), value: this.parseExpression() });
+    } while (this.acceptPunct(','));
+    this.expectPunct(')');
+    return out;
+  }
+
+  /** Consume tokens up to (not including) the `;` that ends the
+   *  current declaration, respecting nested () and []. */
+  private skipUntilDeclEnd(): void {
+    let depth = 0;
+    while (!this.eof()) {
+      const t = this.peek();
+      if (t.kind === 'PUNCT') {
+        if (t.value === '(' || t.value === '[') depth++;
+        else if (t.value === ')' || t.value === ']') depth--;
+        else if (t.value === ';' && depth <= 0) return;
+      }
+      if (t.kind === 'KEYWORD' && t.value === 'end_var') return;
+      this.consume();
+    }
+  }
+
+  /** Skip a balanced `(...)` or `[...]` group starting at the cursor. */
+  private skipBalanced(open: string, close: string): void {
+    this.expectPunct(open);
+    let depth = 1;
+    while (!this.eof() && depth > 0) {
+      const t = this.consume();
+      if (t.kind === 'PUNCT') {
+        if (t.value === open) depth++;
+        else if (t.value === close) depth--;
+      }
+    }
+  }
+
+  /** `Name { . Name }` — returns the joined original-cased text. */
+  private readDottedName(what: string): string {
+    const head = this.peek();
+    if (head.kind !== 'IDENT' && head.kind !== 'KEYWORD') {
+      throw this.err(head, `expected ${what}, got ${describeToken(head)}`);
+    }
+    this.consume();
+    const parts = [head.value];
+    while (this.acceptPunct('.')) {
+      const t = this.peek();
+      if (t.kind !== 'IDENT' && t.kind !== 'KEYWORD') {
+        throw this.err(t, `expected ${what} part after ".", got ${describeToken(t)}`);
+      }
+      this.consume();
+      parts.push(t.value);
+    }
+    return parts.join('.');
   }
 
   private readVarName(): { tok: Token; name: string; nameLower: string } {
@@ -402,6 +536,20 @@ class Parser {
       };
     }
 
+    // POINTER TO T / REFERENCE TO T — no pointer model; an unknown.
+    if (head.kind === 'IDENT' &&
+        (head.value.toUpperCase() === 'POINTER' || head.value.toUpperCase() === 'REFERENCE') &&
+        this.peek(1).kind === 'KEYWORD' && this.peek(1).value === 'to') {
+      this.consume(); // POINTER / REFERENCE
+      this.consume(); // TO
+      const target = this.readTypeRef();
+      return {
+        kind: 'unknown',
+        unknownName: `${head.value.toUpperCase()} TO ${describeTypeRef(target)}`,
+        line: head.line,
+      };
+    }
+
     // Plain or dotted type name. Read one head IDENT/KEYWORD,
     // then keep consuming `.IDENT` while the next token is `.`.
     this.consume(); // head
@@ -413,6 +561,16 @@ class Parser {
       }
       this.consume();
       parts.push(t.value);
+    }
+
+    // Length / subrange suffixes: `STRING(80)`, `STRING[80]`,
+    // `WSTRING(255)`, `INT(0..100)`. The sandbox doesn't enforce
+    // them; the base type is what matters.
+    if (this.peek().kind === 'PUNCT' && this.peek().value === '(') {
+      this.skipBalanced('(', ')');
+    } else if (this.peek().kind === 'PUNCT' && this.peek().value === '[' &&
+               parts.length === 1 && /^w?string$/i.test(parts[0])) {
+      this.skipBalanced('[', ']');
     }
 
     // If the type is a SINGLE undotted name, try built-in
@@ -447,6 +605,8 @@ class Parser {
   parseStatementList(terminators: string[]): Statement[] {
     const out: Statement[] = [];
     while (!this.eof()) {
+      // The empty statement `;` (also `END_IF;;`) is legal ST.
+      if (this.acceptPunct(';')) continue;
       const t = this.peek();
       if (t.kind === 'KEYWORD' && terminators.includes(t.value)) {
         return out;
@@ -651,6 +811,7 @@ class Parser {
             (tn.value === 'else' || tn.value === 'end_case')) {
           break;
         }
+        if (this.acceptPunct(';')) continue;
         if (this.atCaseLabelStart()) break;
         body.push(this.parseStatement());
       }
@@ -662,6 +823,7 @@ class Parser {
       while (true) {
         const tn = this.peek();
         if (tn.kind === 'KEYWORD' && tn.value === 'end_case') break;
+        if (this.acceptPunct(';')) continue;
         body.push(this.parseStatement());
       }
       branches.push({ labels: [], body });
@@ -697,6 +859,13 @@ class Parser {
     ) {
       return false;
     }
+    // Enum-qualified label: `E_State.Idle:` — skip `.Member` parts.
+    if (t1.kind === 'IDENT') {
+      while (this.peek(off + 1).kind === 'PUNCT' && this.peek(off + 1).value === '.' &&
+             this.peek(off + 2).kind === 'IDENT') {
+        off += 2;
+      }
+    }
     const t2 = this.peek(off + 1);
     if (t2.kind === 'PUNCT' && (t2.value === ':' || t2.value === '..')) {
       return true;
@@ -714,12 +883,25 @@ class Parser {
   }
 
   private parseCaseLabel(): CaseLabel {
-    const low = this.parsePrimary();
+    const low = this.parseCaseLabelValue();
     if (this.acceptPunct('..')) {
-      const high = this.parsePrimary();
+      const high = this.parseCaseLabelValue();
       return { kind: 'Range', low, high };
     }
     return { kind: 'Single', low, high: low };
+  }
+
+  /** A label bound: a primary, optionally negated (`-1:`, `-5..-2:`). */
+  private parseCaseLabelValue(): Expr {
+    const t = this.peek();
+    if (t.kind === 'PUNCT' && (t.value === '-' || t.value === '+')) {
+      this.consume();
+      const operand = this.parsePrimary();
+      return t.value === '-'
+        ? { kind: 'Unary', op: 'NEG', operand, line: t.line }
+        : operand;
+    }
+    return this.parsePrimary();
   }
 
   private parseFor(): Statement {
@@ -800,10 +982,10 @@ class Parser {
 
   private parseOr(): Expr {
     let left = this.parseXor();
-    while (this.peekKw('or')) {
+    while (this.peekKw('or') || this.peekIdentWord('or_else')) {
       const t = this.consume();
       const right = this.parseXor();
-      left = { kind: 'Binary', op: 'OR', left, right, line: t.line };
+      left = { kind: 'Binary', op: t.kind === 'KEYWORD' ? 'OR' : 'OR_ELSE', left, right, line: t.line };
     }
     return left;
   }
@@ -818,10 +1000,10 @@ class Parser {
   }
   private parseAnd(): Expr {
     let left = this.parseEquality();
-    while (this.peekKw('and')) {
+    while (this.peekKw('and') || this.peekIdentWord('and_then')) {
       const t = this.consume();
       const right = this.parseEquality();
-      left = { kind: 'Binary', op: 'AND', left, right, line: t.line };
+      left = { kind: 'Binary', op: t.kind === 'KEYWORD' ? 'AND' : 'AND_THEN', left, right, line: t.line };
     }
     return left;
   }
@@ -1337,6 +1519,11 @@ class Parser {
     const t = this.peek();
     return t.kind === 'KEYWORD' && t.value === value;
   }
+  /** Operator words the lexer leaves as identifiers (AND_THEN, OR_ELSE). */
+  private peekIdentWord(lower: string): boolean {
+    const t = this.peek();
+    return t.kind === 'IDENT' && t.value.toLowerCase() === lower;
+  }
 }
 
 // --- Post-parse cross-checks ----------------------------------
@@ -1362,14 +1549,21 @@ class Parser {
  * validation — they're far more likely to be typos than valid
  * namespace references.
  */
-function autoDeclareChainBases(body: Statement[], vars: VarDecl[]): void {
+function autoDeclareChainBases(body: Statement[], vars: VarDecl[], initExprs: Expr[] = []): void {
   const declared = new Set(vars.map((v) => v.nameLower));
   const missing = new Map<string, { name: string; line: number }>();
 
   function collectFromExpr(e: Expr): void {
     switch (e.kind) {
       case 'Literal': return;
-      case 'VarRef': return;
+      case 'VarRef':
+        // `THIS^` / `SUPER^` passed on their own (`fb(Owner := THIS^)`):
+        // the instance itself — an unknown like any other.
+        if ((e.nameLower === 'this' || e.nameLower === 'super') &&
+            !declared.has(e.nameLower) && !missing.has(e.nameLower)) {
+          missing.set(e.nameLower, { name: e.name, line: e.line });
+        }
+        return;
       case 'Unary': collectFromExpr(e.operand); return;
       case 'Binary': collectFromExpr(e.left); collectFromExpr(e.right); return;
       case 'Member':
@@ -1439,6 +1633,27 @@ function autoDeclareChainBases(body: Statement[], vars: VarDecl[]): void {
 
   for (const s of body) collectFromStmt(s);
 
+  // Initial values: chain bases as above, plus BARE undeclared
+  // names — in a declaration those are global constants
+  // (`n : INT := cMaxItems;`), never typos the body could fix.
+  function collectBareRefs(e: Expr): void {
+    switch (e.kind) {
+      case 'VarRef':
+        if (!declared.has(e.nameLower) && !missing.has(e.nameLower)) {
+          missing.set(e.nameLower, { name: e.name, line: e.line });
+        }
+        return;
+      case 'Unary': collectBareRefs(e.operand); return;
+      case 'Binary': collectBareRefs(e.left); collectBareRefs(e.right); return;
+      case 'Call': for (const a of e.args) if (a.value) collectBareRefs(a.value); return;
+      default: return;
+    }
+  }
+  for (const e of initExprs) {
+    collectFromExpr(e);
+    collectBareRefs(e);
+  }
+
   for (const [nameLower, info] of missing) {
     vars.push({
       name: info.name,
@@ -1459,7 +1674,7 @@ function autoDeclareChainBases(body: Statement[], vars: VarDecl[]): void {
  *
  * The check is case-insensitive.
  */
-function validateVarRefs(body: Statement[], vars: VarDecl[]): void {
+function validateVarRefs(body: Statement[], vars: VarDecl[], initExprs: Expr[] = []): void {
   const declared = new Set(vars.map((v) => v.nameLower));
 
   function visitExpr(e: Expr): void {
@@ -1605,10 +1820,55 @@ function validateVarRefs(body: Statement[], vars: VarDecl[]): void {
   }
 
   for (const s of body) visitStmt(s);
+  for (const e of initExprs) visitExpr(e);
 }
+
+/**
+ * Find CASE labels of the form `Base.Member` whose base is an
+ * auto-declared (undeclared in the VAR block) name — i.e. an enum
+ * the sandbox has no schema for. Returns base → members in order of
+ * first appearance across the whole body. See ParsedProgram.enumHints.
+ */
+function collectEnumHints(body: Statement[], vars: VarDecl[]): Map<string, string[]> {
+  const auto = new Set(
+    vars.filter((v) => v.type.kind === 'unknown' && v.type.unknownName === '(auto)').map((v) => v.nameLower),
+  );
+  const hints = new Map<string, string[]>();
+  function note(e: Expr): void {
+    if (e.kind === 'Member' && auto.has(e.object.nameLower)) {
+      const list = hints.get(e.object.nameLower) ?? [];
+      if (!list.includes(e.memberLower)) list.push(e.memberLower);
+      hints.set(e.object.nameLower, list);
+    }
+  }
+  function walk(stmts: Statement[]): void {
+    for (const s of stmts) {
+      switch (s.kind) {
+        case 'If': for (const b of s.branches) walk(b.body); break;
+        case 'Case':
+          for (const b of s.branches) {
+            for (const l of b.labels) { note(l.low); if (l.kind === 'Range') note(l.high); }
+            walk(b.body);
+          }
+          break;
+        case 'For': case 'While': case 'Repeat': walk(s.body); break;
+        default: break;
+      }
+    }
+  }
+  walk(body);
+  return hints;
+}
+
+/** Words that may sit between FUNCTION_BLOCK/PROGRAM and the name. */
+const POU_MODIFIERS = new Set(['public', 'private', 'protected', 'internal', 'abstract', 'final']);
+
+/** Words that may follow VAR / VAR_INPUT / ... before the first declaration. */
+const VAR_SECTION_MODIFIERS = new Set(['constant', 'retain', 'persistent', 'non_retain']);
 
 function describeToken(t: Token): string {
   if (t.kind === 'EOF') return 'end of input';
+  if (t.kind === 'ADDRESS') return `address "${t.value}"`;
   if (t.kind === 'KEYWORD') return `"${t.value.toUpperCase()}"`;
   if (t.kind === 'PUNCT') return `"${t.value}"`;
   if (t.kind === 'IDENT') return `identifier "${t.value}"`;

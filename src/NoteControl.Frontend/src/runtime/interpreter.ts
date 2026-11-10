@@ -90,6 +90,15 @@ export interface ScalarValue {
    * better answer.
    */
   fromUnknownDefault?: true;
+  /**
+   * Set on a value that comes straight from a real literal (`0.1`)
+   * or from arithmetic on literals only. Such a value has no
+   * declared type yet: next to a REAL operand it behaves as REAL
+   * (TwinCAT types the literal from its context, so
+   * `r := 0.1; r = 0.1` is TRUE), otherwise as LREAL. Any store
+   * into a variable drops the flag.
+   */
+  realLiteral?: true;
 }
 
 /**
@@ -102,6 +111,14 @@ export interface FbInstance {
   kind: 'fb';
   fbType: FbTypeName;
   state: Record<string, unknown>;
+  /**
+   * The instance's input values (IN, PT, CLK…), kept between calls
+   * like a real FB instance: `fbTon(IN := TRUE, PT := T#1s);` then
+   * `fbTon(IN := FALSE);` still has PT = T#1s. Seeded with the
+   * inputs' defaults, the declaration initializer
+   * (`fbTon : TON := (PT := T#1s);`) and `fbTon.PT := …` writes.
+   */
+  inputs: Map<string, ScalarValue>;
 }
 
 /**
@@ -152,7 +169,30 @@ export type Environment = Map<string, RuntimeValue>;
 // require the discriminator. These tiny helpers keep the rest
 // of the file readable.
 function scalar(type: ScalarTypeName, value: ScalarValue['value']): ScalarValue {
+  // REAL is 32-bit. Rounding here — the one place REAL values are
+  // built — gives assignment, pokes, conversions and REAL⊕REAL
+  // arithmetic single precision (`r := 16777217` stores 16777216),
+  // where everything used to behave like LREAL.
+  if (type === 'REAL' && typeof value === 'number') value = Math.fround(value);
   return { kind: 'scalar', type, value };
+}
+
+function isRealLiteral(v: ScalarValue): boolean {
+  return v.realLiteral === true;
+}
+
+/** Type of a REAL/LREAL operation: LREAL if a typed LREAL takes
+ *  part, REAL if a REAL does, otherwise (literals and integers
+ *  only) an untyped real literal. */
+function realResultType(l: ScalarValue, r: ScalarValue): 'REAL' | 'LREAL' | 'literal' {
+  if ((l.type === 'LREAL' && !isRealLiteral(l)) || (r.type === 'LREAL' && !isRealLiteral(r))) return 'LREAL';
+  if (l.type === 'REAL' || r.type === 'REAL') return 'REAL';
+  return 'literal';
+}
+
+function realScalar(kind: 'REAL' | 'LREAL' | 'literal', n: number): ScalarValue {
+  if (kind === 'literal') return { kind: 'scalar', type: 'LREAL', value: n, realLiteral: true };
+  return scalar(kind, n);
 }
 
 /**
@@ -250,12 +290,17 @@ const MAX_BUDGET = 100_000;
  *   - for FB instances: a fresh state object (no init expression
  *     allowed, the parser rejects `MyTimer : TON := ...`)
  *
- * Initial expressions can reference earlier-declared variables —
- * the env is populated declaration-order, so `b : INT := a + 1;`
- * works iff `a` was declared above. (Matches TwinCAT.)
+ * Two passes: every variable is first created with its type's
+ * default, THEN the initial expressions run in declaration order.
+ * So an initializer may reference any declared name — earlier ones
+ * have their initialized value, later ones (or auto-declared
+ * globals such as `GVL_Param.nMax`, `cMaxItems`) their default.
+ * Before, a reference to anything not yet created threw
+ * "internal: unknown variable" and the modal went blank.
  *
- * Throws StRuntimeError if any initial expression fails (e.g.
- * div-by-zero in an init). Unlikely but possible.
+ * Still throws StRuntimeError for a genuinely bad initializer
+ * (`b : BOOL := 2;`, `x : INT := 1/0;`) — RuntimeModal shows it in
+ * the error banner instead of running.
  */
 export function createEnvironment(program: ParsedProgram): Environment {
   const env: Environment = new Map();
@@ -279,14 +324,54 @@ export function createEnvironment(program: ParsedProgram): Environment {
       });
       continue;
     }
-    // Scalar.
-    if (v.initial) {
-      const value = evalExpr(v.initial, initCtx);
-      env.set(v.nameLower, coerceTo(value, v.type.name, v.line));
-    } else {
-      const meta = TYPE_META[v.type.name];
-      env.set(v.nameLower, scalar(v.type.name, meta.defaultValue));
+    // Scalar: default now, initializer in the second pass.
+    const meta = TYPE_META[v.type.name];
+    env.set(v.nameLower, scalar(v.type.name, meta.defaultValue));
+  }
+
+  // Enum-like CASE labels (`E_State.Idle:` with no declared
+  // E_State): number the members 0, 1, 2… in order of appearance,
+  // as real values (not "defaulted"), so `eState := E_State.Run;`
+  // followed by `CASE eState OF E_State.Run: …` takes that branch.
+  // Without this every member read as 0 and a state machine could
+  // never leave its first state. Pokeable like any member.
+  for (const [baseLower, members] of program.enumHints ?? []) {
+    const base = env.get(baseLower);
+    if (!base || base.kind !== 'unknown') continue;
+    members.forEach((m, i) => {
+      if (!base.members.has(m)) base.members.set(m, scalar('DINT', i));
+    });
+  }
+
+  for (const v of program.program.vars) {
+    if (v.type.kind === 'fb' && v.fbInit) {
+      const inst = env.get(v.nameLower);
+      if (inst && inst.kind === 'fb') {
+        for (const a of v.fbInit) {
+          const val = asScalar(evalExpr(a.value, initCtx), v.line, `initializer ${a.name}`);
+          if (!setFbInput(inst, a.nameLower, val, v.line)) {
+            throw new StRuntimeError(
+              'type-mismatch', v.line,
+              `"${a.name}" is not an input of ${inst.fbType} — inputs: ${Object.keys(FB_INPUTS[inst.fbType] ?? {}).map((k) => k.toUpperCase()).join(', ')}`,
+            );
+          }
+        }
+      }
+      continue;
     }
+    if (!v.initial) continue;
+    if (v.type.kind === 'unknown') {
+      // `eState : E_State := E_State.Idle;` — store as the bare value.
+      const cur = env.get(v.nameLower);
+      if (cur && cur.kind === 'unknown') {
+        const sv = asScalar(evalExpr(v.initial, initCtx), v.line, `initializer of ${v.name}`);
+        env.set(v.nameLower, { ...cur, scalarValue: sv });
+      }
+      continue;
+    }
+    if (v.type.kind !== 'scalar') continue;
+    const value = evalExpr(v.initial, initCtx);
+    env.set(v.nameLower, coerceTo(value, v.type.name, v.line));
   }
   return env;
 }
@@ -313,6 +398,7 @@ export function runScan(
     scanTimeMs,
     budgetLeft: MAX_BUDGET,
   };
+  resetPerCallVars(program, ctx);
   try {
     execStatements(program.body, ctx);
   } catch (sig) {
@@ -326,11 +412,49 @@ export function runScan(
   }
 }
 
+/**
+ * Variables that TwinCAT re-initialises on every call, i.e. here on
+ * every scan: VAR_TEMP in any POU, and a FUNCTION's VAR locals and
+ * return value (functions have no memory between calls). They used
+ * to keep their values, so `i := i + 1` on a VAR_TEMP counted
+ * 1, 2, 3… Only scalars are reset: an FB instance or unknown-typed
+ * value in such a section keeps its state and pokes.
+ */
+function resetPerCallVars(program: ParsedProgram, ctx: ScanContext): void {
+  const isFunction = program.program.pouKind === 'FUNCTION';
+  for (const v of program.program.vars) {
+    const perCall = v.section === 'TEMP' ||
+      (isFunction && (v.section === 'LOCAL' || v.section === 'RETURN'));
+    if (!perCall || v.type.kind !== 'scalar') continue;
+    const value = v.initial
+      ? coerceTo(evalExpr(v.initial, ctx), v.type.name, v.line)
+      : scalar(v.type.name, TYPE_META[v.type.name].defaultValue);
+    ctx.env.set(v.nameLower, value);
+  }
+}
+
 // --- Statement execution ---------------------------------------
 
 function execStatements(stmts: Statement[], ctx: ScanContext): void {
   for (const s of stmts) {
     execStatement(s, ctx);
+  }
+}
+
+/**
+ * Charge one unit of the per-scan budget for a loop iteration. A
+ * loop whose body is empty (`WHILE NOT bDone DO END_WHILE` — the
+ * classic busy-wait) executes no statements, so the per-statement
+ * charge alone never ran out and the tab froze. Every WHILE /
+ * REPEAT / FOR iteration now pays too.
+ */
+function chargeLoopIteration(ctx: ScanContext, line: number, what: string): void {
+  if (--ctx.budgetLeft < 0) {
+    throw new StRuntimeError(
+      'internal', line,
+      `execution budget exceeded (${MAX_BUDGET} statements / loop iterations per scan) in ${what} — ` +
+      'likely an endless loop. A PLC scan must not wait inside a loop; let the next scan check again.',
+    );
   }
 }
 
@@ -428,9 +552,11 @@ function execStatement(s: Statement, ctx: ScanContext): void {
     case 'For': {
       const startV = evalExpr(s.start, ctx);
       const endV = evalExpr(s.end, ctx);
-      const stepV: ScalarValue = s.step
+      let stepV: ScalarValue = s.step
         ? asScalar(evalExpr(s.step, ctx), s.line, 'FOR step')
         : scalar('INT', 1);
+      // An unpoked unknown step means "no BY": 1, not a zero-step halt.
+      if (stepV.fromUnknownDefault) stepV = scalar('INT', 1);
 
       const startN = toIntForLoop(startV, s.line);
       const endN = toIntForLoop(endV, s.line);
@@ -456,22 +582,48 @@ function execStatement(s: Statement, ctx: ScanContext): void {
           `FOR loop variable cannot be an FB instance`,
         );
       }
-      if (loopVarStored.kind === 'unknown') {
-        // Permissive: a FOR loop over an unknown-typed variable
-        // treats it like a DINT for stepping purposes. Each
-        // iteration writes the loop value through as a DINT
-        // scalar; the user can still poke a different value
-        // mid-loop and the next iteration overwrites it.
-        // Unusual to have an unknown loop var, but no reason to
-        // forbid it.
-        const ascending = stepN > 0n;
-        let i = startN;
-        while (ascending ? i <= endN : i >= endN) {
-          const iValue: ScalarValue = scalar('DINT', Number(i));
-          const cur = ctx.env.get(s.loopVar.nameLower);
-          if (cur && cur.kind === 'unknown') {
-            ctx.env.set(s.loopVar.nameLower, { ...cur, scalarValue: iValue });
-          }
+      // TwinCAT / IEC semantics, using the counter VARIABLE itself:
+      //   counter := start;
+      //   WHILE counter <= end (>= for a negative step) DO
+      //     body; counter := counter + step;   (in the counter's type)
+      // So the counter ends at end+step, a zero-iteration loop still
+      // assigns the start value, a body that changes the counter is
+      // respected, and `FOR bt := 0 TO 255` with a BYTE wraps 255+1 to
+      // 0 and never ends — TwinCAT's documented pitfall, reported here
+      // by the loop budget. (The old loop kept a private counter: final
+      // value `end`, body changes ignored, the BYTE loop terminated.)
+      //
+      // An unknown-typed counter is stepped as a DINT.
+      const isUnknownVar = loopVarStored.kind === 'unknown';
+      const targetType: ScalarTypeName = isUnknownVar ? 'DINT' : loopVarStored.type;
+      const setCounter = (v: bigint) => {
+        const value = coerceTo({ kind: 'scalar', type: 'LINT', value: v }, targetType, s.line);
+        const cur = ctx.env.get(s.loopVar.nameLower);
+        if (cur && cur.kind === 'unknown') ctx.env.set(s.loopVar.nameLower, { ...cur, scalarValue: value });
+        else ctx.env.set(s.loopVar.nameLower, value);
+      };
+      const getCounter = (): bigint => {
+        const cur = ctx.env.get(s.loopVar.nameLower);
+        if (!cur) return startN;
+        if (cur.kind === 'unknown') return cur.scalarValue ? toIntForLoop(cur.scalarValue, s.line) : startN;
+        return toIntForLoop(cur, s.line);
+      };
+
+      const ascending = stepN > 0n;
+      // Name the cause when the counter's type can't get past `end`.
+      const meta = TYPE_META[targetType];
+      const wraps = ascending
+        ? meta.max !== null && endN + stepN > meta.max
+        : meta.min !== null && endN + stepN < meta.min;
+      const what = wraps
+        ? `FOR (${s.loopVar.name} is ${targetType}: ${s.loopVar.name} ${ascending ? '+' : '−'} step wraps around before it can pass ${endN}, so the loop never ends)`
+        : 'FOR';
+      setCounter(startN);
+      try {
+        while (true) {
+          const i = getCounter();
+          if (ascending ? i > endN : i < endN) return;
+          chargeLoopIteration(ctx, s.line, what);
           try {
             execStatements(s.body, ctx);
           } catch (sig) {
@@ -482,35 +634,25 @@ function execStatement(s: Statement, ctx: ScanContext): void {
               throw sig;
             }
           }
-          i += stepN;
+          setCounter(getCounter() + stepN);
         }
-        return;
-      }
-      const targetType = loopVarStored.type;
-
-      const ascending = stepN > 0n;
-      let i = startN;
-      while (ascending ? i <= endN : i >= endN) {
-        const iValue: ScalarValue = { kind: 'scalar', type: 'LINT', value: i };
-        ctx.env.set(s.loopVar.nameLower, coerceTo(iValue, targetType, s.line));
-
-        try {
-          execStatements(s.body, ctx);
-        } catch (sig) {
-          if (sig instanceof ExitSignal) return;
-          if (sig instanceof ContinueSignal) {
-            // Fall through to the increment.
-          } else {
-            throw sig;
-          }
+      } catch (err) {
+        // The budget usually runs out on a body statement; name the
+        // wrap-around cause there too.
+        if (wraps && err instanceof StRuntimeError && /execution budget/.test(err.message) &&
+            !err.message.includes('wraps around')) {
+          throw new StRuntimeError(
+            'internal', s.line,
+            `execution budget exceeded in ${what}.`,
+          );
         }
-        i += stepN;
+        throw err;
       }
-      return;
     }
 
     case 'While': {
       while (true) {
+        chargeLoopIteration(ctx, s.line, 'WHILE');
         const c = evalExpr(s.condition, ctx);
         if (!truthy(c, s.condition.line)) return;
         try {
@@ -525,6 +667,7 @@ function execStatement(s: Statement, ctx: ScanContext): void {
 
     case 'Repeat': {
       while (true) {
+        chargeLoopIteration(ctx, s.line, 'REPEAT');
         try {
           execStatements(s.body, ctx);
         } catch (sig) {
@@ -577,10 +720,21 @@ function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
   switch (e.kind) {
     case 'Literal': {
       switch (e.litType) {
-        case 'INT':
-          return scalar('DINT', Number(e.value));
+        case 'INT': {
+          // DINT when it fits; otherwise LINT / ULINT from the exact
+          // digits in `raw` — `value` is a JS number and lost the low
+          // bits above 2^53 (16#FFFFFFFFFFFFFFFF read as 0,
+          // 9223372036854775807 as its negative).
+          const n = e.value as number;
+          if (Number.isSafeInteger(n) && n >= -2147483648 && n <= 2147483647) {
+            return scalar('DINT', n);
+          }
+          const big = /^\d+$/.test(e.raw) ? BigInt(e.raw) : BigInt(Math.trunc(n));
+          return big <= 9223372036854775807n ? scalar('LINT', big) : scalar('ULINT', big);
+        }
         case 'REAL':
-          return scalar('REAL', Number(e.value));
+          // Untyped until it meets a REAL/LREAL (see realLiteral).
+          return realScalar('literal', Number(e.value));
         case 'BOOL':
           return scalar('BOOL', Boolean(e.value));
         case 'STRING':
@@ -636,6 +790,13 @@ function evalExpr(e: Expr, ctx: ScanContext): RuntimeValue {
       return evalUnary(e.op, evalExpr(e.operand, ctx), e.line);
 
     case 'Binary':
+      if (e.op === 'AND_THEN' || e.op === 'OR_ELSE') {
+        // Short-circuit: `p <> 0 AND_THEN p^ > 5`.
+        const left = truthy(evalExpr(e.left, ctx), e.line);
+        if (e.op === 'AND_THEN' && !left) return scalar('BOOL', false);
+        if (e.op === 'OR_ELSE' && left) return scalar('BOOL', true);
+        return scalar('BOOL', truthy(evalExpr(e.right, ctx), e.line));
+      }
       return evalBinary(
         e.op,
         evalExpr(e.left, ctx),
@@ -792,7 +953,7 @@ function evalChain(e: ChainExpr, ctx: ScanContext): RuntimeValue {
     return defaultedScalar('BOOL');
   }
 
-  const key = CHAIN_KEY_PREFIX + chainKey(e.segments);
+  const key = memberStorageKey(chainKey(e.segments));
   const poked = v.members.get(key);
   if (!poked) {
     // Nothing poked yet — return a defaulted BOOL FALSE. Previously
@@ -833,6 +994,19 @@ function execChainAssign(s: ChainAssignStmt, ctx: ScanContext): void {
     );
   }
   if (v.kind === 'fb') {
+    // `fbTon.IN := x;` / `fbTon.PT := T#2s;` — writing an input
+    // ahead of a bare `fbTon();` call is ordinary TwinCAT.
+    const segs = s.target.segments;
+    if (segs.length === 1 && segs[0].kind === 'member') {
+      const rhsV = asScalar(evalExpr(s.value, ctx), s.line, `assignment to ${chainDisplay(s.target.base, segs)}`);
+      const want = FB_INPUTS[v.fbType]?.[segs[0].nameLower];
+      const val = rhsV.fromUnknownDefault && want && rhsV.type !== want ? defaultedScalar(want) : rhsV;
+      if (setFbInput(v, segs[0].nameLower, val, s.line)) return;
+      throw new StRuntimeError(
+        'type-mismatch', s.line,
+        `"${segs[0].name}" is not an input of ${v.fbType} — inputs: ${Object.keys(FB_INPUTS[v.fbType] ?? {}).map((k) => k.toUpperCase()).join(', ')}`,
+      );
+    }
     throw new StRuntimeError(
       'type-mismatch', s.line,
       `cannot assign through "${chainDisplay(s.target.base, s.target.segments)}" — "${s.target.base.name}" is a built-in FB, not an unknown-type instance`,
@@ -870,7 +1044,7 @@ function execChainAssign(s: ChainAssignStmt, ctx: ScanContext): void {
     }
   }
 
-  const key = CHAIN_KEY_PREFIX + chainKey(s.target.segments);
+  const key = memberStorageKey(chainKey(s.target.segments));
   const stored: ScalarValue = sv.fromUnknownDefault
     ? { kind: 'scalar', type: sv.type, value: sv.value, fromUnknownDefault: true }
     : { kind: 'scalar', type: sv.type, value: sv.value };
@@ -887,6 +1061,19 @@ function execChainAssign(s: ChainAssignStmt, ctx: ScanContext): void {
  * impossible.
  */
 const CHAIN_KEY_PREFIX = '__chain__';
+
+/**
+ * Storage key in an unknown's `members` map for a chain key. A
+ * chain that is exactly ONE plain member (`stData.nValue` written
+ * through the chain-assign path) uses the bare member name — the
+ * same key `stData.nValue` READS use (evalMember / pokeMember).
+ * Prefixing it too made `stData.nValue := 5; n := stData.nValue;`
+ * read 0, and the Watch table showed a `.__chain__nvalue` row.
+ * Everything longer keeps the prefix.
+ */
+function memberStorageKey(chainKeyStr: string): string {
+  return /^[a-z_][a-z0-9_]*$/.test(chainKeyStr) ? chainKeyStr : CHAIN_KEY_PREFIX + chainKeyStr;
+}
 
 /**
  * Public API for poking the value of a chain expression — the
@@ -912,7 +1099,7 @@ export function pokeChain(
 ): boolean {
   const v = env.get(baseNameLower);
   if (!v || v.kind !== 'unknown') return false;
-  v.members.set(CHAIN_KEY_PREFIX + chainKeyStr, {
+  v.members.set(memberStorageKey(chainKeyStr), {
     kind: 'scalar', type: value.type, value: value.value,
   });
   return true;
@@ -930,7 +1117,7 @@ export function readChain(
 ): ScalarValue | null {
   const v = env.get(baseNameLower);
   if (!v || v.kind !== 'unknown') return null;
-  return v.members.get(CHAIN_KEY_PREFIX + chainKeyStr) ?? null;
+  return v.members.get(memberStorageKey(chainKeyStr)) ?? null;
 }
 
 /** Build a chain key from segments — exported so the inline pill
@@ -949,12 +1136,15 @@ function evalUnary(
       if (operand.type === 'BOOL') {
         return scalar('BOOL', !(operand.value as boolean));
       }
-      // Bitwise NOT on integers
+      // Bitwise NOT on integers, kept within the operand's width:
+      // NOT of WORD 0 is 16#FFFF (65535), not JS ~0 = -1, which made
+      // `(NOT w) = 16#FFFF` FALSE.
       if (typeof operand.value === 'bigint') {
-        return scalar(operand.type, ~operand.value);
+        return scalar(operand.type, wrapToRange(~operand.value, TYPE_META[operand.type]));
       }
       if (typeof operand.value === 'number') {
-        return scalar(operand.type, ~operand.value);
+        const wrapped = wrapToRange(BigInt(~Math.trunc(operand.value)), TYPE_META[operand.type]);
+        return scalar(operand.type, Number(wrapped));
       }
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -965,6 +1155,8 @@ function evalUnary(
         return scalar(operand.type, -operand.value);
       }
       if (typeof operand.value === 'number') {
+        // `-0.1` is still an untyped literal.
+        if (isRealLiteral(operand)) return realScalar('literal', -operand.value);
         return scalar(operand.type, -operand.value);
       }
       throw new StRuntimeError(
@@ -980,8 +1172,20 @@ function evalUnary(
 function evalBinary(
   op: BinaryOp, lIn: RuntimeValue, rIn: RuntimeValue, line: number,
 ): ScalarValue {
-  const l = asScalar(lIn, line, 'binary op left');
-  const r = asScalar(rIn, line, 'binary op right');
+  let l = asScalar(lIn, line, 'binary op left');
+  let r = asScalar(rIn, line, 'binary op right');
+
+  // A defaulted unknown (no poke yet — always BOOL FALSE) meeting a
+  // real value takes the OTHER operand's type default: `Cfg.sName =
+  // 'abc'` compares '' to 'abc', `7 / Cfg.Div` divides by integer 0
+  // (a clean "division by zero"), `n + Cfg.Offset` adds 0. Without
+  // this every such expression halted with a type error, breaking
+  // the "a missing value never halts the program" promise.
+  if (l.fromUnknownDefault && !r.fromUnknownDefault && l.type !== r.type) {
+    l = defaultedScalar(r.type);
+  } else if (r.fromUnknownDefault && !l.fromUnknownDefault && l.type !== r.type) {
+    r = defaultedScalar(l.type);
+  }
 
   // Boolean logical ops on BOOLs
   if (l.type === 'BOOL' && r.type === 'BOOL' &&
@@ -1006,7 +1210,21 @@ function evalBinary(
       r.type === 'REAL' || r.type === 'LREAL') {
     const a = toNumberFromAny(l, line);
     const b = toNumberFromAny(r, line);
-    return realArith(op, a, b, line);
+    return realArith(op, a, b, line, realResultType(l, r));
+  }
+
+  // `'a' + 'b'` concatenated before; TwinCAT wants CONCAT, but keep it.
+  if (op === 'ADD' && l.type === 'STRING' && r.type === 'STRING') {
+    return scalar('STRING', (l.value as string) + (r.value as string));
+  }
+  // BOOL / STRING operands have no arithmetic (`TRUE + 1`).
+  for (const x of [l, r]) {
+    if (x.type === 'BOOL' || x.type === 'STRING') {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `operator "${op}" is not valid on ${x.type}`,
+      );
+    }
   }
 
   // Both integer.
@@ -1026,19 +1244,22 @@ function evalBinary(
 
 function realArith(
   op: BinaryOp, a: number, b: number, line: number,
+  type: 'REAL' | 'LREAL' | 'literal' = 'REAL',
 ): ScalarValue {
+  // Result typed from the operands (it was always REAL, even for
+  // LREAL ⊕ LREAL).
   switch (op) {
-    case 'ADD': return scalar('REAL', a + b);
-    case 'SUB': return scalar('REAL', a - b);
-    case 'MUL': return scalar('REAL', a * b);
+    case 'ADD': return realScalar(type, a + b);
+    case 'SUB': return realScalar(type, a - b);
+    case 'MUL': return realScalar(type, a * b);
     case 'DIV':
-      return scalar('REAL', a / b);
+      return realScalar(type, a / b);
     case 'MOD':
       if (b === 0) {
         throw new StRuntimeError('div-by-zero', line, 'MOD by zero');
       }
-      return scalar('REAL', a % b);
-    case 'POW': return scalar('REAL', a ** b);
+      return realScalar(type, a % b);
+    case 'POW': return realScalar(type, a ** b);
     default:
       throw new StRuntimeError(
         'type-mismatch', line,
@@ -1134,6 +1355,19 @@ function compareValues(
       'type-mismatch', line,
       `BOOLs only support = and <> (got ${op})`,
     );
+  }
+
+  // Real comparison. At REAL precision when a REAL takes part and
+  // no typed LREAL does (so a REAL compared with a literal sees the
+  // literal as REAL, like TwinCAT); otherwise at LREAL precision.
+  // Done before the bigint path, which would truncate the real.
+  if (l.type === 'REAL' || l.type === 'LREAL' || r.type === 'REAL' || r.type === 'LREAL') {
+    const a = toNumberFromAny(l, line);
+    const b = toNumberFromAny(r, line);
+    if (realResultType(l, r) === 'REAL') {
+      return cmpPrimitive(op, Math.fround(a), Math.fround(b));
+    }
+    return cmpPrimitive(op, a, b);
   }
 
   const aBig = TYPE_META[l.type].repr === 'bigint';
@@ -1327,6 +1561,9 @@ function toBigInt(vIn: RuntimeValue, line: number): bigint {
 
 function toIntForCase(vIn: RuntimeValue, line: number): bigint {
   const v = asScalar(vIn, line, 'CASE selector');
+  // Defaulted unknown selector/label (an enum variable nothing has
+  // set yet) → 0, i.e. the first enum value.
+  if (v.fromUnknownDefault) return 0n;
   if (v.type === 'REAL' || v.type === 'LREAL') {
     throw new StRuntimeError(
       'type-mismatch', line,
@@ -1338,6 +1575,9 @@ function toIntForCase(vIn: RuntimeValue, line: number): bigint {
 
 function toIntForLoop(vIn: RuntimeValue, line: number): bigint {
   const v = asScalar(vIn, line, 'FOR loop bound');
+  // Defaulted unknown bound (`TO XTS_Configuration.MoverCount`) → 0,
+  // so the loop runs zero times until the count is poked.
+  if (v.fromUnknownDefault) return 0n;
   if (v.type === 'REAL' || v.type === 'LREAL') {
     throw new StRuntimeError(
       'type-mismatch', line,
@@ -1350,6 +1590,7 @@ function toIntForLoop(vIn: RuntimeValue, line: number): bigint {
 function truthy(vIn: RuntimeValue, line: number): boolean {
   const v = asScalar(vIn, line, 'condition');
   if (v.type === 'BOOL') return v.value as boolean;
+  if (v.fromUnknownDefault) return false;
   throw new StRuntimeError(
     'type-mismatch', line,
     `condition must be BOOL, got ${v.type}`,
@@ -1501,23 +1742,30 @@ function bitShift(
     }
     return scalar(v.type, r);
   }
-  const x = (v.value as number) & ((bits >= 32 ? 0xFFFFFFFF : (1 << bits) - 1));
-  let r: number;
+  // Work on the unsigned bit pattern of the operand's width and mask
+  // the result back to that width: SHL(BYTE 16#80, 1) is 0, and
+  // ROL(BYTE 16#80, 1) is 1 — the result used to keep the bits that
+  // were shifted past the top (256). Signed types get their signed
+  // value back.
+  const width = BigInt(bits);
+  const mask = (1n << width) - 1n;
+  const xb = BigInt(Math.trunc(v.value as number)) & mask;
+  let rb: bigint;
   switch (op) {
-    case 'SHL': r = (x << shift) >>> 0; break;
-    case 'SHR': r = x >>> shift; break;
+    case 'SHL': rb = shift >= bits ? 0n : (xb << BigInt(shift)) & mask; break;
+    case 'SHR': rb = shift >= bits ? 0n : xb >> BigInt(shift); break;
     case 'ROL': {
-      const s = shift % bits;
-      r = ((x << s) | (x >>> (bits - s))) >>> 0;
+      const s = BigInt(shift % bits);
+      rb = ((xb << s) | (xb >> (width - s))) & mask;
       break;
     }
     case 'ROR': {
-      const s = shift % bits;
-      r = ((x >>> s) | (x << (bits - s))) >>> 0;
+      const s = BigInt(shift % bits);
+      rb = ((xb >> s) | (xb << (width - s))) & mask;
       break;
     }
   }
-  return scalar(v.type, r);
+  return scalar(v.type, Number(wrapToRange(rb, meta)));
 }
 
 // Type conversions.
@@ -1719,9 +1967,48 @@ function convertScalar(
     return coerceTo(scalar('LREAL', n), to, line);
   }
 
+  // ---- REAL/LREAL → integer: round, don't truncate. ----
+  // TwinCAT's *_TO_<int> conversions round to the nearest integer
+  // (REAL_TO_INT(1.7) = 2, (1.4) = 1, (-1.5) = -2); truncation is
+  // what TRUNC does. This used to truncate.
+  // (BOOL / TIME / STRING targets were handled above.)
+  if ((v.type === 'REAL' || v.type === 'LREAL') && to !== 'REAL' && to !== 'LREAL') {
+    const n = v.value as number;
+    if (!Number.isFinite(n)) {
+      throw new StRuntimeError(
+        'type-mismatch', line,
+        `${fnName}: cannot convert ${n} to ${to}`,
+      );
+    }
+    const rounded = Math.sign(n) * Math.round(Math.abs(n));
+    return coerceTo(scalar('LREAL', rounded), to, line);
+  }
+
   // ---- Numeric → numeric: coerceTo handles wrapping. ----
   return coerceTo(v, to, line);
 }
+
+/**
+ * TRUNC(x) → DINT and TRUNC_INT(x) → INT: drop the fractional part
+ * (towards zero). Integer arguments pass through. Previously
+ * unknown, so TRUNC(1.7) silently returned the default 0.
+ */
+function truncTo(args: ScalarValue[], line: number, name: string, to: ScalarTypeName): ScalarValue {
+  if (args.length !== 1) {
+    throw new StRuntimeError('type-mismatch', line, `${name} expects 1 argument`);
+  }
+  const v = args[0];
+  if (typeof v.value === 'bigint') return coerceTo(v, to, line);
+  if (typeof v.value !== 'number' || v.type === 'TIME') {
+    throw new StRuntimeError('type-mismatch', line, `${name} expects a number, got ${v.type}`);
+  }
+  if (!Number.isFinite(v.value)) {
+    throw new StRuntimeError('type-mismatch', line, `${name}: cannot convert ${v.value} to ${to}`);
+  }
+  return coerceTo(scalar('LREAL', Math.trunc(v.value)), to, line);
+}
+reg('trunc', (args, line) => truncTo(args, line, 'TRUNC', 'DINT'));
+reg('trunc_int', (args, line) => truncTo(args, line, 'TRUNC_INT', 'INT'));
 
 // Register every <SOURCE>_TO_<TARGET> long form, plus every
 // TO_<TARGET> short form, for every scalar type combination.
@@ -1874,6 +2161,9 @@ const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
    *   - While ET < PT: Q stays TRUE.
    *   - When ET reaches PT: Q goes FALSE, ET capped at PT.
    *   - Rising edge mid-timeout: ET resets to 0, Q goes/stays TRUE.
+   *   - Before IN has ever been TRUE (start, after Reset): Q FALSE,
+   *     ET 0 — there is no falling edge to time from. This used to
+   *     time from scan 0 and report Q = TRUE for the first PT.
    */
   TOF: {
     init: () => ({
@@ -1881,6 +2171,7 @@ const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
       et: 0,
       prevIn: false,
       stoppedAtMs: 0,
+      timing: false,
     }),
     tick(state, args, scanTimeMs, line) {
       const inV = args.get('in');
@@ -1906,12 +2197,17 @@ const FB_SCHEMAS: Record<FbTypeName, FbSchema> = {
         if (state.prevIn) {
           // Falling edge — start the off-delay timer.
           state.stoppedAtMs = scanTimeMs;
+          state.timing = true;
         }
-        const elapsed = Math.max(0, scanTimeMs - (state.stoppedAtMs as number));
-        const et = Math.min(elapsed, pt);
-        state.et = et;
-        // Q goes FALSE only once ET has reached PT.
-        state.q = elapsed < pt;
+        if (state.timing) {
+          const elapsed = Math.max(0, scanTimeMs - (state.stoppedAtMs as number));
+          state.et = Math.min(elapsed, pt);
+          // Q goes FALSE only once ET has reached PT.
+          state.q = elapsed < pt;
+        } else {
+          state.q = false;
+          state.et = 0;
+        }
       }
       state.prevIn = inB;
     },
@@ -1976,7 +2272,11 @@ function makeFbInstance(fbType: FbTypeName): FbInstance {
       `internal: no schema for FB type ${fbType}`,
     );
   }
-  return { kind: 'fb', fbType, state: schema.init() };
+  const inputs = new Map<string, ScalarValue>();
+  for (const [name, type] of Object.entries(FB_INPUTS[fbType] ?? {})) {
+    inputs.set(name, scalar(type, TYPE_META[type].defaultValue));
+  }
+  return { kind: 'fb', fbType, state: schema.init(), inputs };
 }
 
 /** Read a member from an FB instance, e.g. `MyTimer.Q`. */
@@ -1986,7 +2286,11 @@ function readFbMember(
   const schema = FB_SCHEMAS[inst.fbType];
   const m = schema.members[memberLower];
   if (!m) {
-    const valid = Object.keys(schema.members).map((k) => k.toUpperCase()).join(', ');
+    // Inputs are readable too (`fbTon.PT`, `trig.CLK`).
+    const input = inst.inputs.get(memberLower);
+    if (input) return scalar(input.type, input.value);
+    const valid = [...Object.keys(schema.members), ...inst.inputs.keys()]
+      .map((k) => k.toUpperCase()).join(', ');
     throw new StRuntimeError(
       'type-mismatch', line,
       `unknown member ".${memberOriginal}" on ${inst.fbType} — try one of: ${valid}`,
@@ -2082,7 +2386,55 @@ function evalCall(
     const v = evalExpr(a.value, ctx);
     positional.push(asScalar(v, line, `argument to ${originalName}`));
   }
+  retypeDefaultedArgs(nameLower, positional);
   return fn(positional, line);
+}
+
+/**
+ * Give defaulted (unpoked unknown) arguments of a known built-in a
+ * type the built-in accepts, in place: the source type of an
+ * `X_TO_Y` conversion; for SEL the BOOL selector stays and the
+ * inputs follow each other; otherwise the type of the first real
+ * numeric argument, or DINT. `ABS(Cfg.a)`, `MAX(Cfg.b, 3)` and
+ * `LIMIT(0, Cfg.c, 10)` used to halt with "expected a number, got
+ * BOOL".
+ */
+function retypeDefaultedArgs(nameLower: string, args: ScalarValue[]): void {
+  if (!args.some((a) => a.fromUnknownDefault)) return;
+  const conv = /^([a-z]+)_to_[a-z]+$/.exec(nameLower);
+  const fromType = conv ? (conv[1].toUpperCase() as ScalarTypeName) : null;
+  const realNumeric = args.find(
+    (a, i) => !a.fromUnknownDefault && !(nameLower === 'sel' && i === 0) &&
+      a.type !== 'BOOL' && a.type !== 'STRING',
+  );
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.fromUnknownDefault) continue;
+    let want: ScalarTypeName;
+    if (fromType && fromType in TYPE_META) want = fromType;
+    else if (nameLower === 'sel' && i === 0) want = 'BOOL';
+    else want = realNumeric?.type ?? 'DINT';
+    if (a.type !== want) args[i] = defaultedScalar(want);
+  }
+}
+
+/** Declared input types of the built-in FBs, for defaulted arguments. */
+const FB_INPUT_TYPES: Record<string, ScalarTypeName> = { in: 'BOOL', pt: 'TIME', clk: 'BOOL' };
+
+/** Inputs of each built-in FB (lowercased name → type). */
+const FB_INPUTS: Partial<Record<FbTypeName, Record<string, ScalarTypeName>>> = {
+  TON: { in: 'BOOL', pt: 'TIME' },
+  TOF: { in: 'BOOL', pt: 'TIME' },
+  R_TRIG: { clk: 'BOOL' },
+  F_TRIG: { clk: 'BOOL' },
+};
+
+/** Store one input on an FB instance, coerced to the input's type. */
+function setFbInput(inst: FbInstance, nameLower: string, v: ScalarValue, line: number): boolean {
+  const type = FB_INPUTS[inst.fbType]?.[nameLower];
+  if (!type) return false;
+  inst.inputs.set(nameLower, coerceTo(v, type, line));
+  return true;
 }
 
 /**
@@ -2144,8 +2496,15 @@ function tickFbCall(
       // nothing after — TwinCAT's "skip this binding" form.
       // Leave the FB's input at its current value.
       if (!a.value) continue;
-      const v = asScalar(evalExpr(a.value, ctx), a.line, `argument ${a.name}`);
+      let v = asScalar(evalExpr(a.value, ctx), a.line, `argument ${a.name}`);
+      // `TON(PT := Cfg.tDelay)` with nothing poked: give the input
+      // its declared type's default (T#0ms) instead of failing.
+      const want = FB_INPUT_TYPES[a.nameLower];
+      if (v.fromUnknownDefault && want && v.type !== want) v = defaultedScalar(want);
       inputs.set(a.nameLower, v);
+      // Keep it on the instance (unknown input names are ignored,
+      // as before). The tick below still validates the types.
+      if (FB_INPUTS[inst.fbType]?.[a.nameLower]) inst.inputs.set(a.nameLower, v);
     } else {
       // named-out — `target` may be null when the user wrote
       // `Q =>` with nothing after (TwinCAT allows this; the
@@ -2158,7 +2517,10 @@ function tickFbCall(
   }
 
   const schema = FB_SCHEMAS[inst.fbType];
-  schema.tick(inst.state, inputs, ctx.scanTimeMs, line);
+  // Inputs not passed in this call keep their stored values.
+  const merged = new Map(inst.inputs);
+  for (const [k, v] of inputs) merged.set(k, v);
+  schema.tick(inst.state, merged, ctx.scanTimeMs, line);
 
   // Copy outputs to bound variables. `Q => bDone` is equivalent
   // to a post-call `bDone := MyTimer.Q;`.
@@ -2227,6 +2589,7 @@ export function formatRuntimeValue(v: RuntimeValue): string {
     case 'STRING': return `'${v.value as string}'`;
     case 'TIME': return formatTime(v.value as number);
     case 'REAL':
+      return formatReal32(v.value as number);
     case 'LREAL':
       return (v.value as number).toString();
     default: {
@@ -2234,6 +2597,17 @@ export function formatRuntimeValue(v: RuntimeValue): string {
       return Math.trunc(v.value as number).toString();
     }
   }
+}
+
+/** Shortest decimal that reads back as the same 32-bit float, so a
+ *  REAL holding fround(0.1) shows as 0.1, not 0.10000000149011612. */
+function formatReal32(x: number): string {
+  if (!Number.isFinite(x) || Number.isInteger(x)) return x.toString();
+  for (let p = 1; p <= 9; p++) {
+    const t = Number(x.toPrecision(p));
+    if (Math.fround(t) === x) return t.toString();
+  }
+  return x.toString();
 }
 
 function formatTime(ms: number): string {
@@ -2340,7 +2714,9 @@ export function parsePokeInput(
       if (!Number.isFinite(n)) {
         return { ok: false, error: 'expected T#... or a number of ms' };
       }
-      return { ok: true, value: scalar('TIME', Math.max(0, Math.trunc(n))) };
+      // Was silently clamped: "-5" became T#0ms.
+      if (n < 0) return { ok: false, error: 'TIME cannot be negative' };
+      return { ok: true, value: scalar('TIME', Math.trunc(n)) };
     }
 
     if (targetType === 'REAL' || targetType === 'LREAL') {
@@ -2366,6 +2742,17 @@ export function parsePokeInput(
       asBig = BigInt(cleaned);
     }
     const meta = TYPE_META[targetType];
+    // Out-of-range pokes are refused instead of wrapping silently
+    // ("300" into a BYTE used to give 44, "40000" into an INT
+    // -25536). A based literal may give the raw bit pattern
+    // (16#FF into a SINT is -1), so it only has to fit the width.
+    if (meta.min !== null && meta.max !== null) {
+      const fitsValue = asBig >= meta.min && asBig <= meta.max;
+      const fitsBits = !!baseMatch && asBig >= 0n && asBig < (1n << BigInt(meta.bits));
+      if (!fitsValue && !fitsBits) {
+        return { ok: false, error: `${cleaned} is out of range for ${targetType} (${meta.min}..${meta.max})` };
+      }
+    }
     const wrapped = wrapToRange(asBig, meta);
     if (meta.repr === 'bigint') {
       return { ok: true, value: scalar(targetType, wrapped) };

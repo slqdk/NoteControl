@@ -160,11 +160,29 @@ internal sealed class ServerController
             // start/stop via `sc sdset`, so the elevation path is
             // a fallback for: (a) installs done before Ship 66, and
             // (b) machines where sdset failed for some reason.
-            var sc = RunScWithElevationFallback("start " + ServiceName);
-            if (sc.ExitCode != 0)
+            //
+            // A service still in STOP_PENDING (e.g. right after Stop)
+            // can't be started: sc.exe answers 1056 and, once the stop
+            // completes, nothing starts it again. Wait it out first.
+            var state = QueryServiceStateName();
+            if (state == "STOP_PENDING"
+                && !await WaitForServiceStateAsync("STOPPED", ServiceTransitionTimeout, ct))
             {
                 return OperationResult.Fail(
-                    $"sc.exe start failed (exit {sc.ExitCode}). {sc.CombinedOutput}");
+                    $"The service is still stopping after {ServiceTransitionTimeout.TotalSeconds:0} seconds " +
+                    $"(state: {QueryServiceStateName() ?? "unknown"}). Try again in a moment.");
+            }
+
+            if (state != "START_PENDING")
+            {
+                var sc = RunScWithElevationFallback("start " + ServiceName);
+                // 1056 = ERROR_SERVICE_ALREADY_RUNNING: someone (the SCM's
+                // recovery action, another tray) beat us to it — fine.
+                if (sc.ExitCode != 0 && sc.ExitCode != 1056)
+                {
+                    return OperationResult.Fail(
+                        $"sc.exe start failed (exit {sc.ExitCode}). {sc.CombinedOutput}");
+                }
             }
         }
         else
@@ -225,6 +243,18 @@ internal sealed class ServerController
                 return OperationResult.Fail(
                     $"sc.exe stop failed (exit {sc.ExitCode}). {sc.CombinedOutput}");
             }
+
+            // `sc stop` only REQUESTS the stop; the .NET host needs a
+            // second or more to shut down. Report "Stopped" only once
+            // the SCM says so — Restart's start used to arrive during
+            // STOP_PENDING and fail, leaving the server stopped.
+            if (!await WaitForServiceStateAsync("STOPPED", ServiceTransitionTimeout, ct))
+            {
+                return OperationResult.Fail(
+                    $"The service didn't stop within {ServiceTransitionTimeout.TotalSeconds:0} seconds " +
+                    $"(state: {QueryServiceStateName() ?? "unknown"}).");
+            }
+            return OperationResult.Ok("Stopped.");
         }
         else
         {
@@ -322,6 +352,44 @@ internal sealed class ServerController
         // output, so a plain Contains is fine.
         var running = result.CombinedOutput.Contains("RUNNING");
         return (true, running);
+    }
+
+    /// <summary>How long Stop / Start wait for a pending service transition.</summary>
+    private static readonly TimeSpan ServiceTransitionTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The service's SCM state name from <c>sc query</c> — "RUNNING",
+    /// "STOPPED", "STOP_PENDING", "START_PENDING", ... — or null when
+    /// the query fails or the service doesn't exist.
+    /// </summary>
+    internal static string? QueryServiceStateName()
+    {
+        var result = RunSc("query " + ServiceName);
+        if (result.ExitCode != 0) return null;
+        return ParseServiceState(result.CombinedOutput);
+    }
+
+    /// <summary>"STATE : 3  STOP_PENDING" → "STOP_PENDING". Pure.</summary>
+    internal static string? ParseServiceState(string scQueryOutput)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            scQueryOutput, @"STATE\s*:\s*\d+\s+([A-Z_]+)");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>Poll <c>sc query</c> until the service reaches <paramref name="wanted"/>.</summary>
+    private static async Task<bool> WaitForServiceStateAsync(string wanted, TimeSpan timeout, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        while (true)
+        {
+            var state = QueryServiceStateName();
+            if (state == wanted) return true;
+            // Gone entirely while waiting for STOPPED counts as stopped.
+            if (state is null && wanted == "STOPPED") return true;
+            if (sw.Elapsed >= timeout) return false;
+            await Task.Delay(250, ct);
+        }
     }
 
     /// <summary>
