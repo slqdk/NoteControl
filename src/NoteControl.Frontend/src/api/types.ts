@@ -826,3 +826,46 @@ export interface RestoreResultDto {
   preRestoreFolderPath: string | null;
   durationMs: number;
 }
+
+// ---------------------------------------------------------------- Admin: server info, audit, logs
+
+/** GET /api/admin/server/info (Linux-5). */
+export interface ServerInfoDto {
+  version: string;
+  /** "git describe (build time)" from VERSION.txt, null in dev. */
+  build: string | null;
+  startedAt: string;
+  os: string;
+  runtime: string;
+  machineName: string;
+  processUser: string;
+  runningUnderSystemd: boolean;
+  canRestart: boolean;
+  trustedProxies: string[];
+}
+
+/** Mirrors NoteControl.Shared.Admin.AuditEntryDto. */
+export interface AuditEntryDto {
+  id: number;
+  timestamp: string;
+  eventType: string;
+  userId: string | null;
+  username: string | null;
+  ipAddress: string | null;
+  /** JSON string, or null. */
+  details: string | null;
+}
+
+/** Mirrors NoteControl.Shared.Admin.ServerLogLineDto. */
+export interface ServerLogLineDto {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
+/** Mirrors NoteControl.Shared.Admin.ServerLogTailDto. Lines are newest first. */
+export interface ServerLogTailDto {
+  lines: ServerLogLineDto[];
+  logFilePath: string | null;
+  note: string | null;
+}

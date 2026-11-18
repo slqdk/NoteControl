@@ -50,22 +50,6 @@ try
     // signals READY once Kestrel has bound and handles SIGTERM as a
     // graceful shutdown. Outside systemd (dev, tests) it is a no-op.
     builder.Host.UseSystemd();
-    // preserveStaticLogger: true is critical for test re-runs.
-    //
-    // The default behaviour of UseSerilog((ctx, lc) => ...) is to freeze
-    // the static Log.Logger ReloadableLogger during host build. A
-    // ReloadableLogger can only be frozen once; on the second host build
-    // in the same process (i.e. the second WebApplicationFactory test
-    // class), it throws "The logger is already frozen".
-    //
-    // With preserveStaticLogger: true, Serilog builds a fresh logger
-    // scoped to this host's DI container and leaves Log.Logger alone.
-    // In production (one host build per process) the visible behaviour
-    // is unchanged.
-    builder.Host.UseSerilog(
-        (ctx, lc) => lc.ReadFrom.Configuration(ctx.Configuration),
-        preserveStaticLogger: true);
-
     // -------------------------------------------------------------------
     // Layered config: overlay {DataRoot}/.server/config.json on top of
     // appsettings.json + env vars. This is what makes the data folder
@@ -106,6 +90,59 @@ try
             // requirement.
         }
     }
+
+    // -------------------------------------------------------------------
+    // Serilog. Placed AFTER the config.json overlay so the admin-set
+    // Logging section (Administration -> Settings) is visible here.
+    //
+    // Linux-5: Logging:MinimumLevel and Logging:RetainDays used to be
+    // saved but never applied (Serilog only read its own "Serilog"
+    // section). Now:
+    //   - MinimumLevel drives a LoggingLevelSwitch, updated live from
+    //     IOptionsMonitor<LoggingOptions> below (no restart).
+    //   - RetainDays is copied into the File sink's
+    //     retainedFileCountLimit (one file per day) before the sink is
+    //     built, so a change applies at the next restart.
+    // The per-namespace overrides in Serilog:MinimumLevel:Override
+    // (Microsoft = Warning, ...) still apply on top.
+    // -------------------------------------------------------------------
+    var logLevelSwitch = new Serilog.Core.LoggingLevelSwitch(
+        NoteControl.Server.Options.LoggingOptions.ParseLevel(builder.Configuration["Logging:MinimumLevel"]));
+    if (NoteControl.Server.Bootstrap.AdminCli.IsCliInvocation(cliArgs))
+    {
+        // Maintenance commands print their own output.
+        logLevelSwitch.MinimumLevel = Serilog.Events.LogEventLevel.Warning;
+    }
+    {
+        var retainDays = builder.Configuration.GetValue<int?>("Logging:RetainDays");
+        if (retainDays is >= 1 and <= 365)
+        {
+            foreach (var sink in builder.Configuration.GetSection("Serilog:WriteTo").GetChildren())
+            {
+                if (string.Equals(sink["Name"], "File", StringComparison.OrdinalIgnoreCase))
+                {
+                    builder.Configuration[$"Serilog:WriteTo:{sink.Key}:Args:retainedFileCountLimit"] =
+                        retainDays.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+        }
+    }
+    // preserveStaticLogger: true is critical for test re-runs.
+    //
+    // The default behaviour of UseSerilog((ctx, lc) => ...) is to freeze
+    // the static Log.Logger ReloadableLogger during host build. A
+    // ReloadableLogger can only be frozen once; on the second host build
+    // in the same process (i.e. the second WebApplicationFactory test
+    // class), it throws "The logger is already frozen".
+    //
+    // With preserveStaticLogger: true, Serilog builds a fresh logger
+    // scoped to this host's DI container and leaves Log.Logger alone.
+    // In production (one host build per process) the visible behaviour
+    // is unchanged.
+    builder.Host.UseSerilog(
+        (ctx, lc) => lc.ReadFrom.Configuration(ctx.Configuration)
+            .MinimumLevel.ControlledBy(logLevelSwitch),
+        preserveStaticLogger: true);
 
     // -------------------------------------------------------------------
     // Bind address: read the Network section EARLY (before host build)
@@ -423,6 +460,15 @@ try
     builder.Services.AddSwaggerGen();
 
     var app = builder.Build();
+
+    // Linux-5: live log level from Administration -> Settings.
+    app.Services.GetRequiredService<
+        Microsoft.Extensions.Options.IOptionsMonitor<NoteControl.Server.Options.LoggingOptions>>()
+        .OnChange((o, _) =>
+        {
+            if (!NoteControl.Server.Bootstrap.AdminCli.IsCliInvocation(cliArgs))
+                logLevelSwitch.MinimumLevel = NoteControl.Server.Options.LoggingOptions.ParseLevel(o.MinimumLevel);
+        });
 
     // -------------------------------------------------------------------
     // SPA hosting (step 37).
@@ -790,6 +836,7 @@ try
     app.MapAdminConfigEndpoints();
     app.MapAdminBackupEndpoints();
     app.MapAdminAuditEndpoints();
+    NoteControl.Server.Admin.Endpoints.AdminServerEndpoints.MapAdminServerEndpoints(app);
     NoteControl.Server.Export.ExportEndpoints.MapExportEndpoints(app);
 
     // SPA fallback — registered LAST so all explicit endpoints

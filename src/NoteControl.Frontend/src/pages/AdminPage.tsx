@@ -5,18 +5,25 @@ import { TopBar } from '../components/TopBar';
 import { AdminUsers } from '../components/admin/AdminUsers';
 import { AdminVaults } from '../components/admin/AdminVaults';
 import { AdminBackups } from '../components/admin/AdminBackups';
+import { AdminSettings } from '../components/admin/AdminSettings';
+import { AdminLogs } from '../components/admin/AdminLogs';
 import '../components/admin/admin.css';
 
 const TABS = [
   { key: 'users', label: 'Users' },
   { key: 'vaults', label: 'Vaults' },
   { key: 'backups', label: 'Backups & export' },
+  { key: 'settings', label: 'Settings' },
+  { key: 'logs', label: 'Logs' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
 /**
  * /admin — server administration in the web UI (replaces the
  * Windows tray's admin windows on the Linux deployment).
+ *
+ * Tabs: users, vaults, backups (+ export), settings (network, auth,
+ * logging, restart), logs (audit + server log).
  *
  * Tabs live in the query string (?tab=vaults) so a reload or a
  * bookmark lands on the same tab. Admin-only: the server enforces
@@ -62,6 +69,8 @@ export function AdminPage() {
             {tab === 'users' && <AdminUsers />}
             {tab === 'vaults' && <AdminVaults />}
             {tab === 'backups' && <AdminBackups />}
+            {tab === 'settings' && <AdminSettings />}
+            {tab === 'logs' && <AdminLogs />}
           </>
         )}
       </main>

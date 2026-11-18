@@ -126,4 +126,7 @@ public static class AuditEventTypes
     // vault export = one vault folder (vault owner).
     public const string DataExported        = "admin.data.exported";
     public const string VaultExported       = "vault.exported";
+
+    // Linux-5: restart requested from Administration -> Settings.
+    public const string ServerRestartRequested = "admin.server.restart";
 }

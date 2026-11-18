@@ -3,6 +3,7 @@
 
 import type {
   ArchivedRelease,
+  AuditEntryDto,
   AuthMeDto,
   AssignmentsConfigDto,
   BackupListItemDto,
@@ -23,6 +24,8 @@ import type {
   RestoreResultDto,
   SearchResponseDto,
   ServerConfigDto,
+  ServerInfoDto,
+  ServerLogTailDto,
   StartpageConfigDto,
   SessionDto,
   UpdateNoteRequest,
@@ -351,6 +354,33 @@ export const adminApi = {
    * vault's folder with the copy in the backup. The live folder is
    * kept as "<name>.pre-restore-<time>".
    */
+  /** GET /api/admin/server/info — version, uptime, OS, restart capability. */
+  serverInfo: () => request<ServerInfoDto>('/api/admin/server/info'),
+
+  /**
+   * POST /api/admin/server/restart — 202, then the process exits and
+   * systemd starts it again (a few seconds). 409 outside systemd.
+   */
+  restartServer: () => request<{ restarting: boolean }>('/api/admin/server/restart', { method: 'POST' }),
+
+  /**
+   * GET /api/admin/audit — newest first, at most 200 per call. Page
+   * backwards by passing the oldest timestamp seen as `until`.
+   */
+  audit: (q: { since?: string; until?: string; userId?: string; eventType?: string; limit?: number }) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) {
+      if (v !== undefined && v !== '') p.set(k, String(v));
+    }
+    const qs = p.toString();
+    return request<AuditEntryDto[]>(`/api/admin/audit${qs ? `?${qs}` : ''}`);
+  },
+
+  auditEventTypes: () => request<string[]>('/api/admin/audit/event-types'),
+
+  /** GET /api/admin/server/logs/tail — last N lines of today's Serilog file, newest first. */
+  logTail: (lines: number) => request<ServerLogTailDto>(`/api/admin/server/logs/tail?lines=${lines}`),
+
   restoreVault: (backupId: string, vaultId: string, vaultFolderInBackup: string) =>
     request<RestoreResultDto>(`/api/admin/server/backup/${encodeURIComponent(backupId)}/restore-vault`, {
       method: 'POST',

@@ -284,6 +284,122 @@ a.nc-btn-primary.nc-admin-linkbtn:hover { color: white; }
 }
 .nc-admin-download-list li:last-child { border-bottom: none; }
 
+/* Settings tab */
+.nc-admin-hint {
+  font-weight: 400;
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+}
+.nc-admin-code-item {
+  display: inline-block;
+  margin: 0 6px 4px 0;
+}
+.nc-admin-warning-inline { color: var(--nc-error-fg); }
+.nc-admin-savebar {
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 10px 14px;
+  box-shadow: var(--nc-shadow);
+  margin-bottom: 20px;
+}
+.nc-admin-section .nc-field input[type='number'] { max-width: 140px; }
+
+/* Logs tab */
+.nc-admin-segment {
+  display: inline-flex;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  overflow: hidden;
+}
+.nc-admin-segment button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  background: var(--nc-bg);
+  color: var(--nc-fg-muted);
+  border: none;
+  cursor: pointer;
+}
+.nc-admin-segment button + button { border-left: 1px solid var(--nc-border); }
+.nc-admin-segment .nc-admin-segment-on {
+  background: var(--nc-accent-bg-soft);
+  color: var(--nc-accent);
+  font-weight: 600;
+}
+.nc-admin-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.nc-admin-filters input[type='date'],
+.nc-admin-filter-text {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+}
+.nc-admin-filter-text { flex: 1; min-width: 160px; }
+.nc-admin-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+}
+.nc-admin-nowrap { white-space: nowrap; }
+.nc-admin-log-table td { vertical-align: top; }
+.nc-admin-details {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+.nc-admin-event {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.nc-admin-event-bad { color: var(--nc-error-fg); }
+.nc-admin-event-warn { color: #b45309; }
+@media (prefers-color-scheme: dark) { .nc-admin-event-warn { color: #fbbf24; } }
+.nc-admin-more { justify-content: center; margin-top: 12px; }
+
+.nc-admin-logbox {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 8px 10px;
+  height: 520px;
+  overflow: auto;
+}
+.nc-admin-logline {
+  display: flex;
+  gap: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.nc-admin-log-time { color: var(--nc-fg-muted); flex: 0 0 auto; }
+.nc-admin-log-level { flex: 0 0 30px; font-weight: 600; color: var(--nc-fg-muted); }
+.nc-admin-log-source { flex: 0 0 auto; color: var(--nc-accent); }
+.nc-admin-log-text { flex: 1; min-width: 0; }
+.nc-admin-log-warning .nc-admin-log-level,
+.nc-admin-log-warning .nc-admin-log-text { color: #b45309; }
+.nc-admin-log-error .nc-admin-log-level,
+.nc-admin-log-error .nc-admin-log-text,
+.nc-admin-log-fatal .nc-admin-log-level,
+.nc-admin-log-fatal .nc-admin-log-text { color: var(--nc-error-fg); }
+@media (prefers-color-scheme: dark) {
+  .nc-admin-log-warning .nc-admin-log-level,
+  .nc-admin-log-warning .nc-admin-log-text { color: #fbbf24; }
+}
+
 /* Account page facts */
 .nc-admin-facts {
   display: grid;

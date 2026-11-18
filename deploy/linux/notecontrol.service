@@ -22,6 +22,10 @@ Environment=DOTNET_NOLOGO=1
 EnvironmentFile=/etc/notecontrol/notecontrol.env
 Restart=on-failure
 RestartSec=5
+# "Restart server" in Administration -> Settings exits with 75: count
+# it as a clean exit, but always start the service again.
+SuccessExitStatus=75
+RestartForceExitStatus=75
 TimeoutStartSec=120
 TimeoutStopSec=30
 KillSignal=SIGTERM
