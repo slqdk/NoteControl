@@ -34,9 +34,17 @@ if (Log.Logger.GetType().Name == "SilentLogger")
         .CreateBootstrapLogger();
 }
 
+// Linux-4: maintenance commands (list-users, reset-password) run in
+// the normal host but return before Kestrel starts. Their arguments
+// are kept away from the configuration command-line provider.
+var cliArgs = args;
+var hostArgs = NoteControl.Server.Bootstrap.AdminCli.IsCliInvocation(args)
+    ? Array.Empty<string>()
+    : args;
+
 try
 {
-    var builder = WebApplication.CreateBuilder(args);
+    var builder = WebApplication.CreateBuilder(hostArgs);
 
     // Linux/systemd: with Type=notify in the unit file, UseSystemd()
     // signals READY once Kestrel has bound and handles SIGTERM as a
@@ -371,6 +379,11 @@ try
     // fires a backup once per day at the configured time.
     builder.Services.AddHostedService<NoteControl.Server.Backups.Services.BackupScheduler>();
 
+    // Linux-4: zip exports (full DataRoot for admins, one vault for
+    // owners). Singleton: stateless apart from options + logger.
+    builder.Services.AddSingleton<NoteControl.Server.Export.IExportService,
+        NoteControl.Server.Export.ExportService>();
+
     // ServerUrlPublisher: hosted service that writes the bound
     // server URL(s) to {DataRoot}/.server/server.url after Kestrel
     // finishes binding. The tray app reads that file at startup
@@ -451,7 +464,11 @@ try
     var wwwrootPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
     var spaPresent = File.Exists(Path.Combine(wwwrootPath, "index.html"));
 
-    if (spaPresent)
+    if (NoteControl.Server.Bootstrap.AdminCli.IsCliInvocation(cliArgs))
+    {
+        // CLI commands print their own output; skip the SPA notice.
+    }
+    else if (spaPresent)
     {
         Log.Information(
             "SPA assets found at {Wwwroot}; serving frontend from this server.",
@@ -476,6 +493,12 @@ try
         db.Database.Migrate();
     }
     await AdminBootstrap.EnsureAdminAsync(app.Services);
+
+    if (NoteControl.Server.Bootstrap.AdminCli.IsCliInvocation(cliArgs))
+    {
+        Environment.ExitCode = await NoteControl.Server.Bootstrap.AdminCli.RunAsync(app.Services, cliArgs);
+        return;
+    }
 
     // Generate the local tray token + write tray.token at startup
     // (rather than lazily on first use) so the tray app can find
@@ -767,6 +790,7 @@ try
     app.MapAdminConfigEndpoints();
     app.MapAdminBackupEndpoints();
     app.MapAdminAuditEndpoints();
+    NoteControl.Server.Export.ExportEndpoints.MapExportEndpoints(app);
 
     // SPA fallback — registered LAST so all explicit endpoints
     // (above) win for their own paths. This catches anything that

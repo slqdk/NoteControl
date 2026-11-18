@@ -121,4 +121,9 @@ public static class AuditEventTypes
     public const string BackupRun           = "admin.backup.run";
     public const string BackupRestored      = "admin.backup.restored";
     public const string BackupDeleted       = "admin.backup.deleted";
+
+    // Linux-4: zip downloads. Full export = whole DataRoot (admin);
+    // vault export = one vault folder (vault owner).
+    public const string DataExported        = "admin.data.exported";
+    public const string VaultExported       = "vault.exported";
 }

@@ -5,6 +5,9 @@ import type {
   ArchivedRelease,
   AuthMeDto,
   AssignmentsConfigDto,
+  BackupListItemDto,
+  BackupRunResultDto,
+  BackupStatusDto,
   CreateNoteRequest,
   FeedDto,
   FolderCoverUploadResponse,
@@ -17,7 +20,9 @@ import type {
   ProblemDetails,
   ReleaseInfo,
   ReleasedVersions,
+  RestoreResultDto,
   SearchResponseDto,
+  ServerConfigDto,
   StartpageConfigDto,
   SessionDto,
   UpdateNoteRequest,
@@ -315,6 +320,54 @@ export const usersApi = {
       method: 'POST',
       body: { currentPassword: null, newPassword },
     }),
+};
+
+// ============================================================== ADMIN: config, backups, export
+
+export const adminApi = {
+  /** GET /api/admin/server/config — effective server configuration. */
+  getConfig: () => request<ServerConfigDto>('/api/admin/server/config'),
+
+  /**
+   * PUT /api/admin/server/config — the whole DTO is saved (the server
+   * persists Auth, Backup, Logging and Network to config.json).
+   * 400 ValidationProblem with per-field `errors` on bad input.
+   */
+  updateConfig: (config: ServerConfigDto) =>
+    request<ServerConfigDto>('/api/admin/server/config', { method: 'PUT', body: config }),
+
+  backupStatus: () => request<BackupStatusDto>('/api/admin/server/backup/status'),
+
+  /** POST /api/admin/server/backup/run — runs synchronously; resolves when done. */
+  runBackup: () => request<BackupRunResultDto>('/api/admin/server/backup/run', { method: 'POST' }),
+
+  listBackups: () => request<BackupListItemDto[]>('/api/admin/server/backup/list'),
+
+  deleteBackup: (id: string) =>
+    request<void>(`/api/admin/server/backup/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /**
+   * POST /api/admin/server/backup/{id}/restore-vault — replaces the live
+   * vault's folder with the copy in the backup. The live folder is
+   * kept as "<name>.pre-restore-<time>".
+   */
+  restoreVault: (backupId: string, vaultId: string, vaultFolderInBackup: string) =>
+    request<RestoreResultDto>(`/api/admin/server/backup/${encodeURIComponent(backupId)}/restore-vault`, {
+      method: 'POST',
+      body: { vaultId, vaultFolderInBackup },
+    }),
+};
+
+/**
+ * Download URLs for the zip exports. Plain GETs with the session
+ * cookie, so they're used as <a href download> targets rather than
+ * fetched — the browser streams the (possibly large) file to disk.
+ */
+export const exportUrls = {
+  /** Whole DataRoot (admin). Importable with deploy/linux/import.sh. */
+  full: () => '/api/admin/export',
+  /** One vault folder (vault owner). */
+  vault: (vaultId: string) => `/api/vaults/${vaultId}/export`,
 };
 
 // ============================================================== SESSIONS

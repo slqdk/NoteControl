@@ -18,6 +18,8 @@
 #        /opt/notecontrol/app      binaries + wwwroot   (replaced each install)
 #        /var/lib/notecontrol      DataRoot             (never touched)
 #        /var/log/notecontrol      Serilog files
+#        /var/backups/notecontrol  default backup target (set it in
+#                                  Administration -> Backups)
 #        /etc/notecontrol          notecontrol.env      (created once)
 #   4. Swaps the new build in, restarts the service and checks /health.
 #      If the new build fails to start, the previous build is restored.
@@ -30,6 +32,7 @@ INSTALL_ROOT="/opt/notecontrol"
 APP_DIR="${INSTALL_ROOT}/app"
 DATA_DIR="/var/lib/notecontrol"
 LOG_DIR="/var/log/notecontrol"
+BACKUP_DIR="/var/backups/notecontrol"
 ETC_DIR="/etc/notecontrol"
 ENV_FILE="${ETC_DIR}/notecontrol.env"
 UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
@@ -195,6 +198,7 @@ fi
 install -d -m 755 -o root -g root "$INSTALL_ROOT"
 install -d -m 750 -o "$SVC_USER" -g "$SVC_USER" "$DATA_DIR"
 install -d -m 750 -o "$SVC_USER" -g "$SVC_USER" "$LOG_DIR"
+install -d -m 750 -o "$SVC_USER" -g "$SVC_USER" "$BACKUP_DIR"
 install -d -m 750 -o root -g "$SVC_USER" "$ETC_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -241,6 +245,7 @@ rm -rf "${INSTALL_ROOT}/app.prev"
 mv "$STAGE_APP" "$APP_DIR"
 
 log "Starting ${APP_NAME}"
+START_EPOCH="$(date +%s)"
 if systemctl start "$APP_NAME" && health_ok; then
     log "NoteControl ${VERSION} is running on port ${PORT}"
 else
@@ -258,8 +263,11 @@ else
     die "Install failed and there is no previous build to roll back to."
 fi
 
-if journalctl -u "$APP_NAME" --no-pager 2>/dev/null | grep -q "BOOTSTRAP ADMIN CREATED"; then
+# Only this start's log lines: the bootstrap admin is created on the
+# very first start (empty user table) and never again.
+if journalctl -u "$APP_NAME" --since "@${START_EPOCH}" --no-pager 2>/dev/null | grep -q "BOOTSTRAP ADMIN CREATED"; then
     echo
     log "First start: a bootstrap admin was created. Password:"
     echo "    journalctl -u ${APP_NAME} | grep 'BOOTSTRAP ADMIN'"
 fi
+echo "    Lost the admin password?  bash ${SCRIPT_DIR}/reset-admin.sh"

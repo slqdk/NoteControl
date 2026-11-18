@@ -422,7 +422,7 @@ public sealed class BackupService : IBackupService
     /// read lock for the duration and produces a clean copy with
     /// no WAL/SHM sidecars needed.
     /// </summary>
-    private static long SqliteSnapshot(string source, string dest)
+    internal static long SqliteSnapshot(string source, string dest)
     {
         // Open in read-only mode so we never accidentally modify
         // the live DB. Mode=ReadOnly + Cache=Shared lets us coexist

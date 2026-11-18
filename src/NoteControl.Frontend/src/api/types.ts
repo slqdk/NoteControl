@@ -752,3 +752,77 @@ export interface NoteWidgetsConfigDto {
   /** note path → ordered widget list. */
   byNote: Record<string, NoteWidgetDto[]>;
 }
+
+// ---------------------------------------------------------------- Admin: config + backups
+
+/** Mirrors NoteControl.Shared.Admin.ServerConfigDto (GET/PUT /api/admin/server/config). */
+export interface ServerConfigDto {
+  storage: { dataRoot: string; configFilePath: string };
+  network: {
+    bindUrl: string;
+    exposeOnLan: boolean;
+    port: number;
+    lanUrls: string[];
+    publicUrl: string;
+    publicHostnames: string[];
+  };
+  auth: {
+    idleTimeoutMinutes: number;
+    absoluteTimeoutMinutes: number;
+    minimumPasswordLength: number;
+    checkPasswordAgainstHibp: boolean;
+    loginAttemptsPerIpPerMinute: number;
+    loginAttemptsPerAccountPerHour: number;
+    accountLockoutMinutes: number;
+  };
+  backup: BackupConfigDto;
+  logging: { minimumLevel: string; retainDays: number };
+}
+
+export interface BackupConfigDto {
+  enabled: boolean;
+  targetPath: string;
+  /** HH:MM, 24-hour, server local time. */
+  dailyTime: string;
+  retainDailyCount: number;
+  retainWeeklyCount: number;
+}
+
+/** Mirrors NoteControl.Shared.Admin.BackupStatusDto. */
+export interface BackupStatusDto {
+  running: boolean;
+  lastRunAt: string | null;
+  lastRunSuccess: boolean | null;
+  lastRunError: string | null;
+  lastRunDurationMs: number | null;
+  currentTargetPath: string | null;
+  backupCount: number;
+  totalBytes: number;
+}
+
+/** Mirrors NoteControl.Shared.Admin.BackupRunResultDto. */
+export interface BackupRunResultDto {
+  success: boolean;
+  backupId: string | null;
+  error: string | null;
+  durationMs: number;
+  bytesCopied: number;
+}
+
+/** Mirrors NoteControl.Shared.Admin.BackupListItemDto. */
+export interface BackupListItemDto {
+  id: string;
+  createdAt: string;
+  sizeBytes: number;
+  absolutePath: string;
+  /** Vault folders inside the backup, DataRoot-relative ("users/soren/Noter"). */
+  vaultFolders: string[];
+}
+
+/** Mirrors NoteControl.Shared.Admin.RestoreResultDto. */
+export interface RestoreResultDto {
+  success: boolean;
+  error: string | null;
+  preRestoreFolderPath: string | null;
+  durationMs: number;
+}

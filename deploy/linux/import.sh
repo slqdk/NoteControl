@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# NoteControl - import a Windows export into the Linux container.
+# NoteControl - import an export zip into the Linux container.
 #
 #   bash deploy/linux/import.sh /root/NoteControl-export-XXXX.zip
 #   bash deploy/linux/import.sh /root/NoteControl-export-XXXX.zip --force
 #
-# The zip comes from deploy/windows/export-windows.ps1. Run as root,
-# after deploy/linux/install.sh has installed the service.
+# The zip comes from Administration -> Backups & export -> "Download
+# full export" (web UI), or from deploy/windows/export-windows.ps1 on an
+# old Windows install. Run as root, after deploy/linux/install.sh has
+# installed the service.
 #
 # What it does:
 #   1. Validates the zip (must contain .server/server.db; no absolute
@@ -80,7 +82,7 @@ log "Checking $ZIP"
 entries="$(unzip -Z1 "$ZIP")" || die "Not a readable zip file."
 grep -qx '.server/server.db' <<<"$entries" || die "Zip has no .server/server.db - not a NoteControl export."
 if grep -q '\\' <<<"$entries"; then
-    die "Zip entry names contain backslashes. Create the zip with export-windows.ps1."
+    die "Zip entry names contain backslashes. Use a zip from the web export or export-windows.ps1."
 fi
 if grep -qE '^/|(^|/)\.\.(/|$)' <<<"$entries"; then
     die "Zip contains absolute or '..' paths - refusing to import."
@@ -254,7 +256,7 @@ for _ in $(seq 1 30); do
 done
 (( ok )) || { journalctl -u "$APP_NAME" -n 40 --no-pager >&2 || true; die "Server did not answer /health on port ${PORT}."; }
 
-log "Import done: ${vault_count} vaults, ${user_count} users. Log in with your Windows accounts."
+log "Import done: ${vault_count} vaults, ${user_count} users. Log in with the accounts from the export."
 if [[ -d "$BACKUP" ]]; then
     echo "    Previous data kept in ${BACKUP} (delete it when you're happy)."
 fi

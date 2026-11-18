@@ -2,7 +2,14 @@ import { ApiError } from '../../api/client';
 
 /** Human-readable error text for a failed API call. */
 export function errorText(e: unknown, fallback: string): string {
-  if (e instanceof ApiError) return e.message || fallback;
+  if (e instanceof ApiError) {
+    // ASP.NET ValidationProblem: { title, errors: { "Backup.TargetPath": ["..."] } }
+    const errors = (e.problem as { errors?: Record<string, string[]> } | null)?.errors;
+    if (errors && Object.keys(errors).length > 0) {
+      return Object.values(errors).flat().join(' ');
+    }
+    return e.message || fallback;
+  }
   if (e instanceof Error) return e.message || fallback;
   return fallback;
 }
@@ -66,4 +73,17 @@ export function describeUserAgent(ua: string | null): string {
     : /Linux/.test(ua) ? 'Linux'
     : '';
   return os ? `${browser} on ${os}` : browser;
+}
+
+/** 1536 -> "1.5 KB", 0 -> "0 B". */
+export function formatBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }

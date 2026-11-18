@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 
-import { usersApi, vaultsApi } from '../../api/client';
+import { exportUrls, usersApi, vaultsApi } from '../../api/client';
 import type { UserDto, VaultDto, VaultMemberDto } from '../../api/types';
 import { useAuth } from '../../auth/AuthContext';
 import { errorText, formatDateTime } from './adminUtil';
@@ -19,8 +19,8 @@ type AdminVault = Omit<VaultDto, 'myRole'> & { myRole: VaultDto['myRole'] | 'non
  * deletes vaults.
  *
  * Server rules this UI follows (see docs/vaults.md):
- *   - A server admin has no implicit access to vaults. Members and
- *     Delete are owner-only, so they're only offered where the admin
+ *   - A server admin has no implicit access to vaults. Download,
+ *     Members and Delete are owner-only, so they're only offered where the admin
  *     is the vault's owner. Other vaults show their owner instead.
  *   - Creating on behalf of another user is admin-only; that user
  *     becomes the owner (and the admin gets no role on it).
@@ -137,8 +137,9 @@ export function AdminVaults() {
         </table>
       )}
       <p className="nc-fg-muted nc-admin-footnote">
-        Admins don&apos;t get access to other users&apos; vaults automatically. Members and Delete are
-        available on vaults you own; the owner of any other vault can share it with you.
+        Admins don&apos;t get access to other users&apos; vaults automatically. Download, Members and
+        Delete are available on vaults you own (a full export of everything is under Backups &amp;
+        export); the owner of any other vault can share it with you.
       </p>
     </section>
   );
@@ -183,6 +184,14 @@ function VaultRows({
         <td className="nc-admin-actions">
           {isOwner && (
             <>
+              <a
+                className="nc-btn nc-admin-linkbtn"
+                href={exportUrls.vault(vault.id)}
+                download
+                title="Download this vault as a zip"
+              >
+                Download
+              </a>
               <button type="button" className={`nc-btn${open ? ' nc-admin-btn-on' : ''}`} onClick={onToggleMembers}>
                 Members
               </button>

@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 
-import { authApi } from '../api/client';
+import { authApi, exportUrls, vaultsApi } from '../api/client';
+import type { VaultDto } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { TopBar } from '../components/TopBar';
 import { PasswordField } from '../components/admin/AdminUsers';
@@ -10,8 +11,9 @@ import { errorText } from '../components/admin/adminUtil';
 import '../components/admin/admin.css';
 
 /**
- * /account — the signed-in user's own account: change password and
- * see / revoke their own sessions. Available to every user.
+ * /account — the signed-in user's own account: change password,
+ * download the vaults they own, see / revoke their own sessions.
+ * Available to every user.
  */
 export function AccountPage() {
   const { state } = useAuth();
@@ -58,6 +60,8 @@ export function AccountPage() {
           </div>
           <ChangePasswordForm onChanged={() => setSessionsKey((k) => k + 1)} />
         </section>
+
+        <OwnedVaultDownloads />
 
         <section className="nc-admin-section">
           <div className="nc-admin-section-head">
@@ -138,5 +142,44 @@ function ChangePasswordForm({ onChanged }: { onChanged: () => void }) {
         </button>
       </div>
     </form>
+  );
+}
+
+/** Zip download per vault the user owns (owner-only on the server). */
+function OwnedVaultDownloads() {
+  const [vaults, setVaults] = useState<VaultDto[] | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await vaultsApi.list();
+        setVaults(list.filter((v) => v.myRole === 'owner').sort((a, b) => a.name.localeCompare(b.name)));
+      } catch {
+        setVaults([]);
+      }
+    })();
+  }, []);
+
+  if (vaults === null || vaults.length === 0) return null;
+
+  return (
+    <section className="nc-admin-section">
+      <div className="nc-admin-section-head">
+        <h2>Download your vaults</h2>
+      </div>
+      <p className="nc-admin-text">
+        A zip of the vault folder: notes, assets, templates, dashboards and release history.
+      </p>
+      <ul className="nc-admin-download-list">
+        {vaults.map((v) => (
+          <li key={v.id}>
+            <span>{v.name}</span>
+            <a className="nc-btn nc-admin-linkbtn" href={exportUrls.vault(v.id)} download>
+              Download
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

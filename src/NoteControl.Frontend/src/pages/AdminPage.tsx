@@ -4,11 +4,13 @@ import { useAuth } from '../auth/AuthContext';
 import { TopBar } from '../components/TopBar';
 import { AdminUsers } from '../components/admin/AdminUsers';
 import { AdminVaults } from '../components/admin/AdminVaults';
+import { AdminBackups } from '../components/admin/AdminBackups';
 import '../components/admin/admin.css';
 
 const TABS = [
   { key: 'users', label: 'Users' },
   { key: 'vaults', label: 'Vaults' },
+  { key: 'backups', label: 'Backups & export' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -59,6 +61,7 @@ export function AdminPage() {
             </nav>
             {tab === 'users' && <AdminUsers />}
             {tab === 'vaults' && <AdminVaults />}
+            {tab === 'backups' && <AdminBackups />}
           </>
         )}
       </main>

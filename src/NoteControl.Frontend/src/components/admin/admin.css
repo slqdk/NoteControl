@@ -237,6 +237,53 @@
   align-items: center;
 }
 
+/* Anchor styled as a button (downloads). */
+a.nc-btn.nc-admin-linkbtn {
+  display: inline-block;
+  text-decoration: none;
+}
+a.nc-btn-primary.nc-admin-linkbtn:hover { color: white; }
+
+.nc-admin-text {
+  font-size: 13px;
+  color: var(--nc-fg-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+.nc-admin-text code,
+.nc-admin-facts code,
+.nc-admin-form .nc-fg-muted code {
+  font-size: 12px;
+  background: var(--nc-bg-elev-2);
+  padding: 1px 5px;
+  border-radius: var(--nc-radius-sm);
+}
+.nc-admin-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.nc-admin-span-2 { grid-column: span 2; }
+@media (max-width: 720px) { .nc-admin-span-2 { grid-column: 1 / -1; } }
+.nc-admin-facts-small { font-size: 13px; margin-bottom: 14px; }
+.nc-admin-download-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nc-admin-download-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--nc-border);
+  font-size: 14px;
+}
+.nc-admin-download-list li:last-child { border-bottom: none; }
+
 /* Account page facts */
 .nc-admin-facts {
   display: grid;

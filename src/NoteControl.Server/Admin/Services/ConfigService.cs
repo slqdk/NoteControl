@@ -378,6 +378,34 @@ public sealed class ConfigService : IConfigService
 
     private static bool Missing(object? section) => section is null;
 
+    /// <summary>
+    /// Create <paramref name="dir"/> if needed and write + delete a
+    /// probe file. Returns null when the server process can write
+    /// there, otherwise a message for the settings form.
+    /// </summary>
+    private static string? ProbeWritable(string dir)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, $".nc-write-test-{Guid.NewGuid():N}");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return OperatingSystem.IsWindows()
+                ? "The server can't write to this folder."
+                : $"The server (user '{Environment.UserName}') can't write to this folder. " +
+                  $"Fix with: chown {Environment.UserName}: {dir}";
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or ArgumentException)
+        {
+            return $"Can't use this folder: {ex.Message}";
+        }
+    }
+
     private static Dictionary<string, string> Validate(ServerConfigDto config)
     {
         var errors = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -412,6 +440,27 @@ public sealed class ConfigService : IConfigService
         // Backup
         if (config.Backup.Enabled && string.IsNullOrWhiteSpace(config.Backup.TargetPath))
             errors["Backup.TargetPath"] = "Required when backups are enabled.";
+        else if (!string.IsNullOrWhiteSpace(config.Backup.TargetPath))
+        {
+            // Linux-4: catch a bad target at save time instead of at
+            // 03:30 when the scheduled run fails. Must be absolute (a
+            // relative path would land in the app folder, and a
+            // Windows path like C:\... is relative on Linux), and the
+            // server's own user must be able to create + write it.
+            var target = config.Backup.TargetPath.Trim();
+            if (!Path.IsPathFullyQualified(target))
+            {
+                errors["Backup.TargetPath"] = OperatingSystem.IsWindows()
+                    ? "Must be an absolute path, e.g. D:\\Backups\\NoteControl."
+                    : "Must be an absolute path, e.g. /var/backups/notecontrol.";
+            }
+            else
+            {
+                var probeError = ProbeWritable(target);
+                if (probeError is not null)
+                    errors["Backup.TargetPath"] = probeError;
+            }
+        }
         if (!System.Text.RegularExpressions.Regex.IsMatch(
             config.Backup.DailyTime ?? "", @"^([01]\d|2[0-3]):[0-5]\d$"))
             errors["Backup.DailyTime"] = "Must be HH:MM (24-hour).";
