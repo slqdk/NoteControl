@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../auth/AuthContext';
 import { DebugLogViewer } from './DebugLogViewer';
@@ -15,6 +16,8 @@ import {
  * inline username + "Sign out" pair with a single 👤 button that
  * opens a dropdown showing:
  *   - the username (small, muted)
+ *   - Account (/account: own password + sessions)
+ *   - (admin only) Administration (/admin: users + vaults)
  *   - a sign-out button
  *   - (admin only) debug recording controls + log viewer launcher
  *
@@ -54,6 +57,7 @@ import {
 export function AccountMenu() {
   const { state, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const [viewerOpen, setViewerOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -120,6 +124,32 @@ export function AccountMenu() {
             <div className="nc-account-username" title={username}>
               {username}
             </div>
+
+            <button
+              type="button"
+              className="nc-account-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                navigate('/account');
+              }}
+            >
+              Account
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="nc-account-item"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  navigate('/admin');
+                }}
+              >
+                Administration
+              </button>
+            )}
+            <div className="nc-account-divider" aria-hidden="true" />
 
             {isAdmin && (
               <>

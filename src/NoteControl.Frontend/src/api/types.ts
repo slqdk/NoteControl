@@ -18,7 +18,28 @@ export interface AuthMeDto {
   csrfToken: string;
 }
 
+/** Mirrors NoteControl.Shared.Auth.SessionDto. */
+export interface SessionDto {
+  id: string;
+  userId: string;
+  createdAt: string;
+  lastActivityAt: string;
+  expiresAt: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  isCurrent: boolean;
+}
+
 // ---------------------------------------------------------------- Vaults
+
+/** Mirrors NoteControl.Shared.Vaults.VaultMemberDto. */
+export interface VaultMemberDto {
+  userId: string;
+  username: string;
+  role: 'owner' | 'editor' | 'viewer';
+  grantedAt: string;
+  grantedByUserId: string | null;
+}
 
 export interface VaultDto {
   id: string;

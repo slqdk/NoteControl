@@ -19,8 +19,11 @@ import type {
   ReleasedVersions,
   SearchResponseDto,
   StartpageConfigDto,
+  SessionDto,
   UpdateNoteRequest,
+  UserDto,
   VaultDto,
+  VaultMemberDto,
 } from './types';
 import { recordApi } from '../util/debugRecorder';
 
@@ -257,6 +260,73 @@ export const authApi = {
 
   /** POST /api/auth/logout — server clears session, we clear CSRF. */
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+
+  /**
+   * POST /api/auth/password — change the caller's own password.
+   * Needs the current password; the server revokes the user's other
+   * sessions and keeps this one. 400 with a reason on a wrong current
+   * password or a policy failure.
+   */
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    request<void>('/api/auth/password', {
+      method: 'POST',
+      body: { currentPassword, newPassword },
+    }),
+};
+
+// ============================================================== USERS (admin)
+
+export interface CreateUserBody {
+  username: string;
+  email: string;
+  password: string;
+  role: 'admin' | 'user';
+}
+
+export interface UpdateUserBody {
+  email?: string;
+  role?: 'admin' | 'user';
+  status?: 'active' | 'locked' | 'disabled';
+}
+
+export const usersApi = {
+  /** GET /api/users — admin only. */
+  list: () => request<UserDto[]>('/api/users'),
+
+  /** POST /api/users — admin only. 409 on duplicate username. */
+  create: (body: CreateUserBody) =>
+    request<UserDto>('/api/users', { method: 'POST', body }),
+
+  /** PUT /api/users/{id} — email / role / status; omitted fields unchanged. */
+  update: (userId: string, body: UpdateUserBody) =>
+    request<UserDto>(`/api/users/${userId}`, { method: 'PUT', body }),
+
+  /** DELETE /api/users/{id} — refused for the last active admin. */
+  remove: (userId: string) =>
+    request<void>(`/api/users/${userId}`, { method: 'DELETE' }),
+
+  /**
+   * POST /api/users/{id}/password — admin reset, no current password.
+   * Revokes ALL of the target's sessions (including the admin's own
+   * when resetting themselves).
+   */
+  resetPassword: (userId: string, newPassword: string) =>
+    request<void>(`/api/users/${userId}/password`, {
+      method: 'POST',
+      body: { currentPassword: null, newPassword },
+    }),
+};
+
+// ============================================================== SESSIONS
+
+export const sessionsApi = {
+  /** GET /api/users/{id}/sessions — self, or any user for admins. */
+  listForUser: (userId: string) =>
+    request<SessionDto[]>(`/api/users/${userId}/sessions`),
+
+  /** DELETE /api/sessions/{id} — session owner or admin. */
+  revoke: (sessionId: string) =>
+    request<void>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
 };
 
 // ============================================================== VAULTS
@@ -264,6 +334,43 @@ export const authApi = {
 export const vaultsApi = {
   /** GET /api/vaults — vaults the caller has any role on. */
   list: () => request<VaultDto[]>('/api/vaults'),
+
+  /**
+   * GET /api/vaults?all=true — admin only: every vault on the server.
+   * Vaults the admin has no permission row on come back with
+   * myRole = "none" (visible, not openable).
+   */
+  listAll: () => request<VaultDto[]>('/api/vaults?all=true'),
+
+  /**
+   * POST /api/vaults — create a new vault. Path is
+   * "users/<ownerUsername>/<name>" (personal) or "shared/<name>".
+   * ownerUserId other than the caller requires admin.
+   */
+  create: (body: { path: string; name?: string; ownerUserId?: string }) =>
+    request<VaultDto>('/api/vaults', { method: 'POST', body }),
+
+  /** DELETE /api/vaults/{id} — owner only. Deletes the folder on disk too. */
+  remove: (vaultId: string) =>
+    request<void>(`/api/vaults/${vaultId}`, { method: 'DELETE' }),
+
+  /** GET /api/vaults/{id}/permissions — members and their roles. */
+  listMembers: (vaultId: string) =>
+    request<VaultMemberDto[]>(`/api/vaults/${vaultId}/permissions`),
+
+  /**
+   * POST /api/vaults/{id}/permissions — owner only. Adds the user or
+   * changes their role (editor | viewer; owner can't be granted).
+   */
+  share: (vaultId: string, username: string, role: 'editor' | 'viewer') =>
+    request<VaultMemberDto>(`/api/vaults/${vaultId}/permissions`, {
+      method: 'POST',
+      body: { username, role },
+    }),
+
+  /** DELETE /api/vaults/{id}/permissions/{userId} — owner only. */
+  unshare: (vaultId: string, userId: string) =>
+    request<void>(`/api/vaults/${vaultId}/permissions/${userId}`, { method: 'DELETE' }),
 
   /**
    * Ship 91: PUT /api/vaults/{id}/appearance — set or clear the

@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, Navigate } from 'react-router-dom';
 
 import { ApiError, vaultsApi } from '../api/client';
 import type { VaultDto } from '../api/types';
+import { useAuth } from '../auth/AuthContext';
 import { TopBar } from '../components/TopBar';
 import { LAST_VAULT_LS_KEY } from '../components/VaultPicker';
+import '../components/admin/admin.css';
 
 /**
  * /vaults — the landing page.
@@ -19,8 +21,10 @@ import { LAST_VAULT_LS_KEY } from '../components/VaultPicker';
  *   3. Otherwise, if there's at least one vault, redirect to the
  *      first one alphabetically (the list is already path-sorted
  *      server-side).
- *   4. If the user has no vaults, render the original "no vaults"
- *      empty state with guidance to ask an administrator.
+ *   4. If the user has no vaults, render an empty state with a
+ *      "create your first vault" form (any user may create their own
+ *      personal vault at users/<username>/<name>) and, for admins, a
+ *      link to Administration.
  *
  * Why this instead of the old visible list:
  *   - Single-user solo dev with 3 vaults: the list page was an
@@ -122,12 +126,71 @@ export function VaultListPage() {
         {vaults === null && !error && <p className="nc-empty">Loading…</p>}
 
         {vaults !== null && vaults.length === 0 && (
-          <p className="nc-empty">
-            You don&apos;t have access to any vaults yet. Ask an administrator
-            to create one for you.
-          </p>
+          <FirstVault onCreated={(v) => setVaults([v])} />
         )}
       </main>
+    </>
+  );
+}
+
+/**
+ * Empty state: create a personal vault. Also points users at the
+ * one-line reason they might not see existing vaults (nobody has
+ * shared one with them) and admins at Administration.
+ */
+function FirstVault({ onCreated }: { onCreated: (v: VaultDto) => void }) {
+  const { state } = useAuth();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (state.status !== 'authenticated') return null;
+  const user = state.user;
+  const trimmed = name.trim();
+  const invalid = /[/\\]/.test(trimmed) || trimmed === '.' || trimmed === '..';
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!trimmed || invalid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const v = await vaultsApi.create({ path: `users/${user.username}/${trimmed}`, name: trimmed });
+      // Setting the list makes the page redirect into the new vault.
+      onCreated(v);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not create the vault.');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <p className="nc-empty">
+        You don&apos;t have any vaults yet. Create a personal one below, or ask
+        another user to share theirs with you.
+        {user.role === 'admin' && (
+          <>
+            {' '}
+            Users and shared vaults are managed under{' '}
+            <Link to="/admin">Administration</Link>.
+          </>
+        )}
+      </p>
+      <form className="nc-vault-create" onSubmit={(e) => void submit(e)}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Vault name, e.g. Notes"
+          aria-label="New vault name"
+          autoFocus
+        />
+        <button type="submit" className="nc-btn nc-btn-primary" disabled={busy || !trimmed || invalid}>
+          {busy ? 'Creating…' : 'Create vault'}
+        </button>
+      </form>
+      {invalid && <div className="nc-form-error">{'The name cannot contain / or \\.'}</div>}
+      {error && <div className="nc-form-error">{error}</div>}
     </>
   );
 }

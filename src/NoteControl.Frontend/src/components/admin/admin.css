@@ -1,0 +1,275 @@
+/* ------------------------------------------------------------------
+   Admin + Account pages (/admin, /account).
+   Builds on the base .nc-page / .nc-field / .nc-btn rules in
+   styles.css and only uses the shared --nc-* variables, so light and
+   dark mode follow automatically.
+   ------------------------------------------------------------------ */
+
+.nc-admin-page {
+  max-width: 1100px;
+}
+
+.nc-admin-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.nc-admin-back {
+  color: var(--nc-accent);
+  text-decoration: none;
+  font-size: 14px;
+}
+.nc-admin-back:hover { text-decoration: underline; }
+
+/* Tabs */
+.nc-admin-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--nc-border);
+  margin-bottom: 20px;
+}
+.nc-admin-tab {
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--nc-fg-muted);
+  cursor: pointer;
+}
+.nc-admin-tab:hover { color: var(--nc-fg); }
+.nc-admin-tab-active {
+  color: var(--nc-fg);
+  border-bottom-color: var(--nc-accent);
+  font-weight: 600;
+}
+
+/* Sections */
+.nc-admin-section {
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  box-shadow: var(--nc-shadow);
+}
+.nc-admin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.nc-admin-section-head h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.nc-admin-notice {
+  color: var(--nc-fg);
+  background: var(--nc-accent-bg-soft);
+  border-left: 3px solid var(--nc-accent);
+  padding: 8px 12px;
+  border-radius: var(--nc-radius-sm);
+  margin: 8px 0;
+  font-size: 13px;
+}
+.nc-admin-warning {
+  color: var(--nc-error-fg);
+  font-size: 13px;
+  margin: 4px 0 8px;
+}
+.nc-admin-footnote {
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+.nc-admin-subtle {
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+/* Tables */
+.nc-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.nc-admin-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--nc-fg-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--nc-border);
+  white-space: nowrap;
+}
+.nc-admin-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--nc-border);
+  vertical-align: middle;
+}
+.nc-admin-table tbody tr:last-child td { border-bottom: none; }
+.nc-admin-table a { color: var(--nc-fg); }
+.nc-admin-table-compact td { padding: 5px 8px; }
+.nc-admin-row-open td { background: var(--nc-bg-elev); }
+.nc-admin-panel-row > td {
+  background: var(--nc-bg-elev);
+  padding: 12px 16px 16px;
+}
+.nc-admin-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.nc-admin-actions .nc-btn + .nc-btn { margin-left: 6px; }
+
+/* Toggled (panel open) button */
+.nc-btn.nc-admin-btn-on,
+.nc-btn.nc-admin-btn-on:hover {
+  background: var(--nc-accent-bg-soft);
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+
+/* Badges + status */
+.nc-admin-badge {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--nc-border-strong);
+  color: var(--nc-fg-muted);
+  vertical-align: middle;
+}
+/* Badge that follows text in the same cell ("admin  [you]"). */
+.nc-admin-badge-after { margin-left: 6px; }
+.nc-admin-badge-accent {
+  border-color: var(--nc-accent);
+  color: var(--nc-accent);
+}
+.nc-admin-badge-muted {
+  border-style: dashed;
+}
+.nc-admin-status {
+  font-size: 12px;
+}
+.nc-admin-status::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--nc-fg-muted);
+  vertical-align: middle;
+}
+.nc-admin-status-active::before { background: #16a34a; }
+.nc-admin-status-locked::before { background: #d97706; }
+.nc-admin-status-disabled::before { background: var(--nc-error-fg); }
+
+/* Forms */
+.nc-admin-form {
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  padding: 12px 14px;
+  margin: 0 0 14px;
+}
+.nc-admin-panel-row .nc-admin-form {
+  margin: 0;
+  background: var(--nc-bg);
+}
+.nc-admin-form-narrow { max-width: 520px; }
+.nc-admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0 14px;
+}
+.nc-admin-password-field { grid-column: 1 / -1; }
+.nc-admin-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.nc-admin-form p { font-size: 12px; margin: 4px 0 10px; }
+.nc-admin-form code {
+  font-size: 12px;
+  background: var(--nc-bg-elev-2);
+  padding: 1px 5px;
+  border-radius: var(--nc-radius-sm);
+}
+
+.nc-admin-page select,
+.nc-admin-page .nc-field select {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+}
+.nc-admin-table select { padding: 3px 6px; }
+
+.nc-admin-password-row {
+  display: flex;
+  gap: 6px;
+}
+.nc-admin-password-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.nc-admin-inline-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+/* Account page facts */
+.nc-admin-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0;
+  font-size: 14px;
+}
+.nc-admin-facts dt { color: var(--nc-fg-muted); }
+.nc-admin-facts dd { margin: 0; }
+.nc-admin-facts a { color: var(--nc-accent); }
+
+/* Vault list empty state (create-your-first-vault form) */
+.nc-empty a { color: var(--nc-accent); }
+.nc-vault-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  max-width: 520px;
+}
+.nc-vault-create input {
+  flex: 1;
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  background: var(--nc-bg);
+  color: var(--nc-fg);
+}
+
+@media (max-width: 720px) {
+  .nc-admin-table th:nth-child(5),
+  .nc-admin-table td:nth-child(5) { display: none; }
+  .nc-admin-actions { white-space: normal; }
+  .nc-admin-actions .nc-btn { margin: 2px 0 2px 4px; }
+}

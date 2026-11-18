@@ -21,6 +21,9 @@ public static class AuthEndpoints
         group.MapPost("/login", LoginAsync);
         group.MapPost("/logout", LogoutAsync).RequireAuth();
         group.MapGet("/me", Me).RequireAuth();
+        // Self-service password change for any signed-in user (the
+        // admin reset lives at POST /api/users/{id}/password).
+        group.MapPost("/password", ChangeOwnPasswordAsync).RequireAuth();
 
         return app;
     }
@@ -164,6 +167,78 @@ public static class AuthEndpoints
         // session resolver re-sets the cookie on this same response.
         var csrf = http.GetSessionCsrfToken() ?? string.Empty;
         return Results.Ok(new MeResponse(ToDto(user), csrf));
+    }
+
+    /// <summary>
+    /// POST /api/auth/password — change the caller's own password.
+    /// Body: <see cref="ChangePasswordRequest"/> with CurrentPassword
+    /// REQUIRED: the session alone isn't proof of identity here (a
+    /// browser left signed in must not be enough to lock the owner
+    /// out). Other sessions of the user are revoked; the current one
+    /// stays valid so the user isn't bounced to the login screen.
+    /// </summary>
+    private static async Task<IResult> ChangeOwnPasswordAsync(
+        ChangePasswordRequest request,
+        HttpContext http,
+        ServerDbContext db,
+        IPasswordHasher hasher,
+        IPasswordPolicy policy,
+        IAuditLog audit,
+        CancellationToken ct)
+    {
+        var caller = http.RequireUser();
+        var session = http.GetSession();
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == caller.Id, ct);
+        if (user is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrEmpty(request.CurrentPassword)
+            || !hasher.Verify(request.CurrentPassword, user.PasswordHash))
+        {
+            await audit.WriteAsync(
+                AuditEventTypes.PasswordChanged,
+                userId: user.Id,
+                ipAddress: http.GetClientIp(),
+                details: new { self = true, success = false, reason = "wrong current password" },
+                ct);
+            return Results.Problem(statusCode: 400, title: "Current password is incorrect.");
+        }
+
+        if (string.Equals(request.CurrentPassword, request.NewPassword, StringComparison.Ordinal))
+        {
+            return Results.Problem(statusCode: 400, title: "The new password must differ from the current one.");
+        }
+
+        var policyCheck = await policy.ValidateAsync(request.NewPassword ?? string.Empty, ct);
+        if (!policyCheck.IsValid)
+        {
+            return Results.Problem(statusCode: 400, title: policyCheck.Reason ?? "Invalid password.");
+        }
+
+        user.PasswordHash = hasher.Hash(request.NewPassword!);
+
+        var currentSessionId = session?.Id;
+        var others = await db.Sessions
+            .Where(s => s.UserId == user.Id && !s.IsRevoked && s.Id != currentSessionId)
+            .ToListAsync(ct);
+        foreach (var s in others)
+        {
+            s.IsRevoked = true;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        await audit.WriteAsync(
+            AuditEventTypes.PasswordChanged,
+            userId: user.Id,
+            ipAddress: http.GetClientIp(),
+            details: new { targetUserId = user.Id, self = true, otherSessionsRevoked = others.Count },
+            ct);
+
+        return Results.NoContent();
     }
 
     internal static UserDto ToDto(Data.Entities.User u)

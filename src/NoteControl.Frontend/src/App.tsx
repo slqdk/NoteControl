@@ -10,6 +10,8 @@ import { DashboardPage } from './pages/DashboardPage';
 import { StartpagePage } from './pages/StartpagePage';
 import { TemplatesPage } from './pages/TemplatesPage';
 import { AssignmentsPage } from './pages/AssignmentsPage';
+import { AdminPage } from './pages/AdminPage';
+import { AccountPage } from './pages/AccountPage';
 import { VaultLayout } from './components/VaultLayout';
 import { useAppliedAppearance } from './settings/appearance';
 
@@ -23,6 +25,8 @@ import { useAppliedAppearance } from './settings/appearance';
  *   /vaults/:vaultId/dashboards/:dashboardId     authenticated; one dashboard's canvas
  *   /vaults/:vaultId/startpage                   legacy alias; redirects to the first dashboard
  *   /vaults/:vaultId/templates                   authenticated; manage templates for the vault
+ *   /account                                     authenticated; own password + sessions
+ *   /admin?tab=users|vaults                      authenticated, admin; users + vaults
  *
  * Anything else redirects to /vaults (which itself bounces to /login
  * for anonymous users via RequireAuth).
@@ -118,6 +122,24 @@ export default function App() {
             element={
               <RequireAuth>
                 <TemplatesPage />
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/account"
+            element={
+              <RequireAuth>
+                <AccountPage />
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/admin"
+            element={
+              <RequireAuth>
+                <AdminPage />
               </RequireAuth>
             }
           />
