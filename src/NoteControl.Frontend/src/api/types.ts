@@ -639,6 +639,8 @@ export interface NoteWidgetDto {
   vfd?: VfdBlockDto | null;
   /** Encoder / feedback comparison payload — present iff kind === 'encoder'. */
   encoder?: EncoderBlockDto | null;
+  /** Type-key (order code) payload — present iff kind === 'typekey'. */
+  typeKey?: TypeKeyBlockDto | null;
 }
 
 /**
@@ -788,6 +790,28 @@ export interface EncoderBlockDto {
   mtExtTurnBits: number;
   /** Whether the animation is running. */
   running: boolean;
+}
+
+/**
+ * Type-key (order code) widget config. Mirrors
+ * NoteControl.Shared.NoteWidgets.TypeKeyBlockDto.
+ *
+ * One Beckhoff product group per widget; the code is decoded / built in
+ * the browser from util/typeKeyData.ts. The server stores both strings
+ * as-is, so a family id from a newer build survives a round-trip.
+ *
+ * x/y ignored in the note stack; width/height drive layout.
+ */
+export interface TypeKeyBlockDto {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Product group id, e.g. 'am8000', 'ax8000', 'el72xx'. */
+  familyId: string;
+  /** The order code as typed or built; '' = empty. Open positions in lower case. */
+  code: string;
 }
 
 /**

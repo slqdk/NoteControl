@@ -27,6 +27,9 @@ import './vfd-block.css';
 // encoder-block.css — same additive-feature pattern. The encoder /
 // feedback comparison note-native widget.
 import './encoder-block.css';
+// typekey-block.css — same additive-feature pattern. The Beckhoff
+// type-key (order code) note-native widget.
+import './typekey-block.css';
 // KaTeX stylesheet — required for math nodes to render correctly.
 // Imported before our own math.css so any selectors in math.css
 // (specifically: tweaks to the .katex-display container's margin

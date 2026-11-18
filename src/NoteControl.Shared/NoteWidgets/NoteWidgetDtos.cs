@@ -133,7 +133,13 @@ public sealed record NoteWidgetDto(
     /// Encoder / feedback comparison payload. Non-null iff
     /// <see cref="Kind"/> is "encoder". Note-native widget.
     /// </summary>
-    EncoderBlockDto? Encoder = null);
+    EncoderBlockDto? Encoder = null,
+
+    /// <summary>
+    /// Type-key (order code) payload. Non-null iff <see cref="Kind"/> is
+    /// "typekey". Note-native widget.
+    /// </summary>
+    TypeKeyBlockDto? TypeKey = null);
 
 /// <summary>
 /// Configuration for the live unit-converter widget. A category is
@@ -422,3 +428,37 @@ public sealed record EncoderBlockDto(
 
     /// <summary>Animation running (the shaft turns, counters count).</summary>
     bool Running = true);
+
+/// <summary>
+/// Type-key (order code) widget config (kind "typekey").
+///
+/// Decodes and builds Beckhoff order codes for one product group
+/// (AM8000, AX8000, EL72xx, …). The type keys themselves live in the
+/// frontend (util/typeKeyData.ts); the server stores only which group is
+/// selected and the code as typed, both as opaque strings — so a group
+/// added in a newer frontend round-trips through an older server.
+///
+/// x/y/width/height mirror the other note widgets: x/y are ignored in
+/// the note stack, width/height drive the widget's own layout.
+/// </summary>
+public sealed record TypeKeyBlockDto(
+    /// <summary>Stable id (client-generated). Opaque to the server.</summary>
+    string Id,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double X = 0,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double Y = 0,
+
+    /// <summary>Widget width in px (host overrides via measurement in-note).</summary>
+    double Width = 760,
+
+    /// <summary>Widget height in px.</summary>
+    double Height = 560,
+
+    /// <summary>Product group id, e.g. "am8000", "ax8000", "el72xx".</summary>
+    string FamilyId = "am8000",
+
+    /// <summary>The order code as typed or built; "" when empty. Open positions in lower case.</summary>
+    string Code = "");

@@ -9,6 +9,7 @@ import type {
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
+  TypeKeyBlockDto,
   VfdBlockDto,
 } from '../api/types';
 import { RssBlock } from './RssBlock';
@@ -19,6 +20,7 @@ import { MotorBlock } from './MotorBlock';
 import { ConvertBlock } from './ConvertBlock';
 import { VfdBlock } from './VfdBlock';
 import { EncoderBlock } from './EncoderBlock';
+import { TypeKeyBlock } from './TypeKeyBlock';
 
 /**
  * Renders the ordered list of widgets attached to a single note, in
@@ -87,6 +89,7 @@ const DEFAULT_HEIGHT: Record<string, number> = {
   convert: 340,
   vfd: 480,
   encoder: 640,
+  typekey: 560,
 };
 
 /** Clamp host height to sane bounds so a drag can't collapse a widget
@@ -105,7 +108,16 @@ function clamp(n: number, lo: number, hi: number): number {
 /** The currently-stored payload for a widget, regardless of kind. */
 function payloadOf(w: NoteWidgetDto): { height?: number } | null {
   return (
-    w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? w.convert ?? w.vfd ?? w.encoder ?? null
+    w.rss ??
+    w.task ??
+    w.links ??
+    w.motion ??
+    w.motor ??
+    w.convert ??
+    w.vfd ??
+    w.encoder ??
+    w.typeKey ??
+    null
   );
 }
 
@@ -256,6 +268,14 @@ function NoteWidgetItem({
     },
     [onChange, w.id, w.encoder],
   );
+  const onChangeTypeKey = useCallback(
+    (patch: Partial<TypeKeyBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      if (w.typeKey) onChange(w.id, { typeKey: { ...w.typeKey, ...rest } });
+    },
+    [onChange, w.id, w.typeKey],
+  );
 
   // Host resize handle → set the payload height (clamped + rounded).
   const setHeight = useCallback(
@@ -269,6 +289,7 @@ function NoteWidgetItem({
       else if (w.convert) onChange(w.id, { convert: { ...w.convert, height: next } });
       else if (w.vfd) onChange(w.id, { vfd: { ...w.vfd, height: next } });
       else if (w.encoder) onChange(w.id, { encoder: { ...w.encoder, height: next } });
+      else if (w.typeKey) onChange(w.id, { typeKey: { ...w.typeKey, height: next } });
     },
     [onChange, w],
   );
@@ -341,6 +362,14 @@ function NoteWidgetItem({
       <EncoderBlock
         block={{ ...w.encoder, x: 0, y: 0, width, height }}
         onChange={onChangeEncoder}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'typekey' && w.typeKey) {
+    body = (
+      <TypeKeyBlock
+        block={{ ...w.typeKey, x: 0, y: 0, width, height }}
+        onChange={onChangeTypeKey}
         onDelete={() => onDelete(w.id)}
       />
     );

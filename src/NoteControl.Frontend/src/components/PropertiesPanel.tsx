@@ -1436,6 +1436,9 @@ function AddNoteWidgetMenu({ notePath }: { notePath: string }) {
           <button type="button" role="menuitem" onClick={() => add('encoder')}>
             🧭 Encoder compare (feedback)
           </button>
+          <button type="button" role="menuitem" onClick={() => add('typekey')}>
+            🏷️ Type key (order code)
+          </button>
           <div className="nc-add-widget-sep" />
           <div className="nc-add-widget-label">Motion calculator</div>
           <button type="button" role="menuitem" onClick={() => add('motion', 'A')}>

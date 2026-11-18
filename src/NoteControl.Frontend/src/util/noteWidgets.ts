@@ -7,10 +7,12 @@ import type {
   NoteWidgetDto,
   RssBlockDto,
   TaskAreaDto,
+  TypeKeyBlockDto,
   VfdBlockDto,
 } from '../api/types';
 import { newId } from './id';
 import { MOTION_DEFAULTS } from '../components/MotionBlock';
+import { familyFromNote } from './typeKeyData';
 
 /**
  * The cross-component contract for adding a widget to a note.
@@ -34,7 +36,8 @@ export type NoteWidgetKind =
   | 'motor'
   | 'convert'
   | 'vfd'
-  | 'encoder';
+  | 'encoder'
+  | 'typekey';
 
 export interface NoteWidgetAddDetail {
   /**
@@ -50,6 +53,12 @@ export interface NoteWidgetAddDetail {
    * dashboard's per-mode insert. Defaults to 'A' if absent.
    */
   motionMode?: MotionBlockDto['mode'];
+  /**
+   * The open note's tags. Filled in by EditorPage (the Properties panel
+   * only knows the path); used to pick the type-key widget's initial
+   * product group.
+   */
+  noteTags?: string[];
 }
 
 /**
@@ -199,6 +208,20 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         running: true,
       };
       return { id, kind: 'encoder', encoder };
+    }
+    case 'typekey': {
+      // Start on the product group the note is about — named in its
+      // title, folder or tags (e.g. "AX8000 kursus.md") — else AM8000.
+      const typeKey: TypeKeyBlockDto = {
+        id: newId(),
+        x: 0,
+        y: 0,
+        width: 760,
+        height: 560,
+        familyId: familyFromNote(detail.notePath, detail.noteTags ?? [])?.id ?? 'am8000',
+        code: '',
+      };
+      return { id, kind: 'typekey', typeKey };
     }
     default: {
       // Exhaustiveness guard — if a new kind is added to the union

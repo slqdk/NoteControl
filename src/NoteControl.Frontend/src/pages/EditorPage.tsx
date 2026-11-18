@@ -88,6 +88,11 @@ export function EditorPage() {
   const navigate = useNavigate();
 
   const [note, setNote] = useState<NoteDto | null>(null);
+  // The open note's tags, for widgets that pick a default from them
+  // (the type-key widget's product group). A ref so the add-widget
+  // listener below doesn't re-subscribe on every autosave.
+  const noteTagsRef = useRef<string[]>([]);
+  noteTagsRef.current = note?.frontmatter?.tags ?? [];
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
 
@@ -300,7 +305,7 @@ export function EditorPage() {
         setWidgetsReload((n) => n + 1);
         return;
       }
-      const widget = buildNoteWidget(detail);
+      const widget = buildNoteWidget({ ...detail, noteTags: noteTagsRef.current });
       setNoteWidgets((current) => [...current, widget]);
     };
     window.addEventListener(NOTE_WIDGET_ADD_EVENT, onAdd);

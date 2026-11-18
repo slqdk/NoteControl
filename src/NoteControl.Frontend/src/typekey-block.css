@@ -1,0 +1,511 @@
+/* ============================================================================
+ * typekey-block.css — type-key (order code) widget (TypeKeyBlock.tsx).
+ * Note-native widget in the same frame vocabulary as vfd-block.css /
+ * encoder-block.css. Separate file, loaded from main.tsx after
+ * styles.css: additive feature, one-delete revert.
+ *
+ * Each field has a colour (--tk-c, set inline) shared by its cells in the
+ * code, its decoding row and its card — the arrows of the old diagrams.
+ * ========================================================================== */
+
+.nc-tk-block {
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 200px;
+  /* Lets the decoding rows react to the widget's own width (see the
+     container query at the bottom), not the window's. */
+  container-type: inline-size;
+  --nc-tk-ok-fg: #15803d;
+  --nc-tk-bad-fg: #b91c1c;
+  --nc-tk-warn-fg: #b45309;
+  --nc-tk-info-fg: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .nc-tk-block {
+    --nc-tk-ok-fg: #4ade80;
+    --nc-tk-bad-fg: #f87171;
+    --nc-tk-warn-fg: #fbbf24;
+    --nc-tk-info-fg: #93c5fd;
+  }
+}
+:root[data-theme='dark'] .nc-tk-block {
+  --nc-tk-ok-fg: #4ade80;
+  --nc-tk-bad-fg: #f87171;
+  --nc-tk-warn-fg: #fbbf24;
+  --nc-tk-info-fg: #93c5fd;
+}
+
+/* ----- Header ------------------------------------------------------------ */
+.nc-tk-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  user-select: none;
+}
+.nc-tk-block-title {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+.nc-tk-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+.nc-tk-block-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nc-tk-block-iconbtn:hover {
+  background: var(--nc-bg);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+/* ----- Body -------------------------------------------------------------- */
+.nc-tk-block-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow: auto;
+}
+
+/* ----- Controls ---------------------------------------------------------- */
+.nc-tk-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+.nc-tk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.nc-tk-field-family {
+  flex: 1 1 260px;
+}
+.nc-tk-field-code {
+  flex: 1 1 220px;
+}
+.nc-tk-label {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-field select,
+.nc-tk-field input {
+  width: 100%;
+  min-width: 0;
+  font-size: 13px;
+  padding: 5px 7px;
+  color: var(--nc-fg);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+}
+.nc-tk-field-code input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+.nc-tk-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.nc-tk-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: var(--nc-fg);
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nc-tk-btn:hover:not(:disabled) {
+  border-color: var(--nc-fg-muted);
+}
+.nc-tk-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ----- Messages ---------------------------------------------------------- */
+.nc-tk-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-tk-msg {
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border-left: 3px solid currentColor;
+}
+.nc-tk-msg.is-info {
+  color: var(--nc-tk-info-fg);
+  background: rgba(59, 130, 246, 0.08);
+}
+.nc-tk-msg.is-warn {
+  color: var(--nc-tk-warn-fg);
+  background: rgba(245, 158, 11, 0.12);
+}
+.nc-tk-msg.is-bad {
+  color: var(--nc-tk-bad-fg);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ----- The code, position by position ------------------------------------ */
+.nc-tk-diagram {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 12px;
+  background: var(--nc-bg);
+  border: 2px solid var(--nc-fg);
+  border-radius: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.nc-tk-lit,
+.nc-tk-sep,
+.nc-tk-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 38px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+.nc-tk-lit {
+  color: var(--nc-fg);
+}
+.nc-tk-lit.is-bad {
+  color: var(--nc-tk-bad-fg);
+  text-decoration: underline wavy;
+}
+.nc-tk-sep {
+  min-width: 14px;
+  color: var(--nc-fg-muted);
+  font-weight: 400;
+}
+.nc-tk-cell {
+  padding: 0 3px;
+  border: 0;
+  border-bottom: 4px solid var(--tk-c);
+  border-radius: 6px 6px 3px 3px;
+  background: color-mix(in srgb, var(--tk-c) 8%, transparent);
+  color: var(--nc-fg-muted);
+  font-family: inherit;
+  font-style: italic;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+.nc-tk-cell.is-set {
+  color: var(--nc-fg);
+  font-style: normal;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--tk-c) 16%, transparent);
+}
+.nc-tk-cell.is-warn {
+  outline: 2px solid var(--nc-tk-warn-fg);
+  outline-offset: 1px;
+}
+.nc-tk-cell.is-bad {
+  color: var(--nc-tk-bad-fg);
+  outline: 2px solid var(--nc-tk-bad-fg);
+  outline-offset: 1px;
+}
+.nc-tk-cell.is-lit {
+  background: color-mix(in srgb, var(--tk-c) 32%, transparent);
+  transform: translateY(-2px);
+}
+.nc-tk-lit.is-off,
+.nc-tk-sep.is-off,
+.nc-tk-cell.is-off {
+  opacity: 0.4;
+}
+
+/* ----- Decoding rows ----------------------------------------------------- */
+.nc-tk-decoded {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(120px, max-content) 1fr;
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 12.5px;
+}
+.nc-tk-row {
+  display: contents;
+  cursor: pointer;
+}
+.nc-tk-row > span {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--nc-border);
+  background: var(--nc-bg);
+}
+.nc-tk-row:last-child > span {
+  border-bottom: 0;
+}
+.nc-tk-row.is-lit > span {
+  background: color-mix(in srgb, var(--tk-c) 10%, var(--nc-bg));
+}
+.nc-tk-row-key {
+  border-left: 4px solid var(--tk-c);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-row-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--nc-fg);
+}
+.nc-tk-row-label {
+  color: var(--nc-fg-muted);
+}
+.nc-tk-row-text {
+  color: var(--nc-fg);
+}
+.nc-tk-row.is-open .nc-tk-row-code,
+.nc-tk-row.is-open .nc-tk-row-text {
+  color: var(--nc-fg-muted);
+  font-style: italic;
+  font-weight: 400;
+}
+.nc-tk-row.is-warn .nc-tk-row-text {
+  color: var(--nc-tk-warn-fg);
+}
+.nc-tk-row.is-bad .nc-tk-row-code,
+.nc-tk-row.is-bad .nc-tk-row-text {
+  color: var(--nc-tk-bad-fg);
+}
+
+/* ----- Field cards (build) ----------------------------------------------- */
+.nc-tk-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+.nc-tk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-top: 4px solid var(--tk-c);
+  border-radius: 10px;
+  min-width: 0;
+  transition: box-shadow 120ms ease;
+}
+.nc-tk-card.is-lit {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tk-c) 55%, transparent);
+}
+.nc-tk-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.nc-tk-card-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--tk-c);
+}
+.nc-tk-card-label {
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--nc-fg);
+}
+.nc-tk-card-opt {
+  font-weight: 400;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-values {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nc-tk-value {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 6px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--nc-fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nc-tk-value:hover {
+  background: var(--nc-bg-elev-2);
+}
+.nc-tk-value.is-active {
+  background: color-mix(in srgb, var(--tk-c) 16%, transparent);
+  border-color: color-mix(in srgb, var(--tk-c) 60%, transparent);
+}
+.nc-tk-value.is-maybe {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--tk-c) 50%, transparent);
+}
+.nc-tk-value.is-dim {
+  opacity: 0.45;
+}
+.nc-tk-value-code {
+  flex: 0 0 auto;
+  min-width: 2.4em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+}
+.nc-tk-value-text {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.nc-tk-value-rule {
+  font-size: 10.5px;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-open-label {
+  flex: 1 1 auto;
+}
+.nc-tk-open input {
+  flex: 0 0 auto;
+  width: 5.5em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 5px;
+  text-transform: uppercase;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 5px;
+}
+.nc-tk-card-note {
+  margin-top: auto;
+  padding-top: 5px;
+  border-top: 1px dashed var(--nc-border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--nc-fg-muted);
+}
+
+/* ----- Badges ------------------------------------------------------------ */
+.nc-tk-badge {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-style: normal;
+}
+.nc-tk-badge.is-new {
+  color: var(--nc-tk-ok-fg);
+  background: rgba(34, 197, 94, 0.14);
+}
+.nc-tk-badge.is-fixed {
+  color: var(--nc-tk-info-fg);
+  background: rgba(59, 130, 246, 0.14);
+}
+.nc-tk-badge.is-check {
+  color: var(--nc-tk-warn-fg);
+  background: rgba(245, 158, 11, 0.16);
+}
+
+/* ----- Footer ------------------------------------------------------------ */
+.nc-tk-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+.nc-tk-foot-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 11.5px;
+  color: var(--nc-fg-muted);
+}
+.nc-tk-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Narrow note column: the 4-column decoding becomes 2 lines per field. */
+@container (max-width: 520px) {
+  .nc-tk-decoded {
+    grid-template-columns: max-content max-content 1fr;
+  }
+  .nc-tk-row-label {
+    display: none;
+  }
+}
