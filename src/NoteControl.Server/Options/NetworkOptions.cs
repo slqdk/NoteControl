@@ -53,7 +53,22 @@ public sealed class NetworkOptions
     public string PublicUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Ship 93: list of public hostnames to serve via Caddy
+    /// Reverse proxies whose X-Forwarded-For header is trusted, as
+    /// IP addresses ("192.168.1.20") or CIDR ranges ("10.0.0.0/24").
+    /// Loopback is always trusted. On the Linux deployment this is
+    /// the Nginx Proxy Manager host. Read once at startup by
+    /// Program.cs (the forwarded-headers middleware is built before
+    /// DI options are live), so a change needs a restart.
+    /// </summary>
+    public List<string> TrustedProxies { get; set; } = new();
+
+    /// <summary>
+    /// LEGACY (Windows/Caddy deployment): no longer used by the
+    /// server since the move to Linux — HTTPS is the reverse proxy's
+    /// job. Still bound and validated because the config DTO in
+    /// NoteControl.Shared carries it; removed in the cleanup ship.
+    ///
+    /// Original Ship 93 description: list of public hostnames to serve via Caddy
     /// (HTTPS). Each hostname becomes a `<host> { reverse_proxy
     /// 127.0.0.1:&lt;Port&gt; }` block in the auto-generated
     /// Caddyfile at <c>{DataRoot}/caddy/Caddyfile</c>. Caddy

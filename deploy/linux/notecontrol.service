@@ -1,0 +1,37 @@
+[Unit]
+Description=NoteControl server
+Documentation=https://github.com/slqdk/NoteControl
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# UseSystemd() in Program.cs sends READY=1 once migrations have run
+# and Kestrel has bound, so `systemctl start` blocks until the server
+# is actually serving (or fails).
+Type=notify
+User=notecontrol
+Group=notecontrol
+WorkingDirectory=/opt/notecontrol/app
+ExecStart=/opt/notecontrol/app/NoteControl.Server
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+# Local settings (port, LAN exposure, trusted proxy, ...). Settings
+# saved from the web UI land in /var/lib/notecontrol/.server/config.json,
+# which overrides this file.
+EnvironmentFile=/etc/notecontrol/notecontrol.env
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+KillSignal=SIGTERM
+# New files (notes, assets, backups) are not world-readable.
+UMask=0027
+LimitNOFILE=65536
+# Kept deliberately light: heavier sandboxing (ProtectSystem=strict,
+# PrivateTmp, ...) needs namespace support that unprivileged LXC
+# containers don't always provide (fails with status 226/NAMESPACE).
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

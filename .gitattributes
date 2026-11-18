@@ -1,0 +1,5 @@
+# Linux deployment files must keep LF endings even when the repo is
+# checked out on Windows (bash and systemd reject CRLF).
+*.sh       text eol=lf
+*.service  text eol=lf
+deploy/linux/*  text eol=lf

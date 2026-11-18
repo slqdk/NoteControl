@@ -71,14 +71,6 @@ public sealed class ConfigService : IConfigService
     /// </summary>
     private readonly IServer _server;
 
-    /// <summary>
-    /// Ship 93: regenerates the Caddyfile + asks a running Caddy
-    /// service to reload after every Network section save. Wraps
-    /// both file-write and reload-invocation; failures are logged
-    /// but don't fail the save.
-    /// </summary>
-    private readonly Caddy.CaddyConfigWriter _caddy;
-
     private readonly ILogger<ConfigService> _log;
 
     public ConfigService(
@@ -90,7 +82,6 @@ public sealed class ConfigService : IConfigService
         IServerConfigStore store,
         IConfiguration config,
         IServer server,
-        Caddy.CaddyConfigWriter caddy,
         ILogger<ConfigService> log)
     {
         _storage = storage;
@@ -101,7 +92,6 @@ public sealed class ConfigService : IConfigService
         _store = store;
         _config = config;
         _server = server;
-        _caddy = caddy;
         _log = log;
     }
 
@@ -245,75 +235,6 @@ public sealed class ConfigService : IConfigService
                 _log.LogWarning(ex, "Configuration reload after save failed; the file watcher will pick the change up.");
             }
         }
-
-        // Ship 93: regenerate Caddyfile based on the new hostname list +
-        // ask Caddy to reload. Both calls are best-effort:
-        //   - Write to disk should be ~always-succeed; if it fails
-        //     (disk full, permissions) we log and move on. The user's
-        //     config save IS persisted; only the Caddy-side artifact
-        //     is missing, which Caddy will pick up next time something
-        //     touches it.
-        //   - Reload may fail silently (Caddy not running, not on PATH).
-        //     Logged at warning level. New config takes effect when
-        //     Caddy restarts.
-        // Both wrapped in try/catch so a Caddy oddity can't fail the
-        // user's settings save flow.
-        try
-        {
-            var hostnames = config.Network.PublicHostnames?.ToList() ?? new List<string>();
-            var caddyfilePath = ResolveCaddyfilePath();
-            var logFilePath = ResolveCaddyLogPath();
-            var contents = Caddy.CaddyfileGenerator.Generate(
-                hostnames, config.Network.Port, logFilePath);
-            _caddy.Write(caddyfilePath, contents);
-            // Fire-and-forget reload. We don't await — the save call
-            // shouldn't block on Caddy I/O. Reload progress lands in
-            // the server log.
-            _ = _caddy.ReloadAsync(caddyfilePath);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex,
-                "Caddyfile regeneration after config save failed. The user's " +
-                "settings WERE persisted; Caddy will pick up the change on " +
-                "next restart if/when the Caddyfile is regenerated.");
-        }
-    }
-
-    /// <summary>
-    /// Ship 93/94: standard path for the auto-generated Caddyfile.
-    ///
-    /// Hardcoded to <c>C:\ProgramData\NoteControl\caddy\Caddyfile</c>
-    /// to match the setup-https.ps1 deployment convention. The Caddy
-    /// service registration points at THIS path; changing it here
-    /// without changing the service registration would silently
-    /// orphan the generated file.
-    ///
-    /// Why not derive from DataRoot? DataRoot is meant to be
-    /// configurable (movable to a D: drive, network share, etc) for
-    /// the user's notes content. The Caddy install location, by
-    /// contrast, is fixed by Windows convention (ProgramData) and
-    /// shared with the setup script. Coupling them was Ship 93's
-    /// initial design and turned out wrong: when DataRoot is
-    /// `C:\ProgramData\NoteControl\NotesData\` (the actual default),
-    /// the server wrote to `...\NotesData\caddy\Caddyfile` while the
-    /// script + service expected `...\caddy\Caddyfile` one level up.
-    /// </summary>
-    private static string ResolveCaddyfilePath()
-    {
-        return @"C:\ProgramData\NoteControl\caddy\Caddyfile";
-    }
-
-    /// <summary>
-    /// Ship 93/94: standard path for the Caddy access log. Lives
-    /// in the same logs/ directory as notecontrol-*.log so the
-    /// user has a single place to look for diagnostic output.
-    /// Hardcoded for the same reason as
-    /// <see cref="ResolveCaddyfilePath"/>.
-    /// </summary>
-    private static string ResolveCaddyLogPath()
-    {
-        return @"C:\ProgramData\NoteControl\logs\caddy-access.log";
     }
 
     // ---------------------------------------------------------------

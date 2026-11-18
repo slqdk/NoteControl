@@ -38,7 +38,10 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseWindowsService();
+    // Linux/systemd: with Type=notify in the unit file, UseSystemd()
+    // signals READY once Kestrel has bound and handles SIGTERM as a
+    // graceful shutdown. Outside systemd (dev, tests) it is a no-op.
+    builder.Host.UseSystemd();
     // preserveStaticLogger: true is critical for test re-runs.
     //
     // The default behaviour of UseSerilog((ctx, lc) => ...) is to freeze
@@ -343,16 +346,6 @@ try
     builder.Services.AddScoped<NoteControl.Server.Admin.Services.IConfigService,
         NoteControl.Server.Admin.Services.ConfigService>();
 
-    // Ship 93: Caddy integration. CaddyConfigWriter is a thin
-    // singleton wrapping (a) atomic file write of the generated
-    // Caddyfile and (b) `caddy reload` invocation. Stateless aside
-    // from the injected ILogger; safe as a singleton.
-    //
-    // CaddyfileGenerator is a static class — no DI registration
-    // needed. ConfigService composes the two: generates the file
-    // contents, asks the writer to put them on disk + reload Caddy.
-    builder.Services.AddSingleton<NoteControl.Server.Caddy.CaddyConfigWriter>();
-
     // Local tray token (step 17). Singleton so the in-memory token
     // is stable for the lifetime of the process. Generated + written
     // to disk in the constructor; we eager-resolve below after the
@@ -421,7 +414,7 @@ try
     // -------------------------------------------------------------------
     // SPA hosting (step 37).
     //
-    // In a packaged build, publish.ps1 copies the Vite output into
+    // In a packaged build, deploy/linux/install.sh copies the Vite output into
     // {ContentRoot}/wwwroot. We probe for it ONCE here, at startup,
     // and decide based on its presence whether to register the
     // static-file middleware + SPA fallback further down.
@@ -447,12 +440,12 @@ try
     //     8080 in a browser" case.
     //
     // We do NOT throw if wwwroot is missing — that would break the
-    // VS dev workflow where the user hasn't run publish.ps1 and
+    // VS dev workflow where the user hasn't run install.sh and
     // doesn't need the server to host the SPA.
     //
     // The probe runs ONCE at startup, not per-request: re-checking
     // every request would let someone delete wwwroot mid-flight to
-    // change behaviour, and we don't want that. publish.ps1 is the
+    // change behaviour, and we don't want that. install.sh is the
     // single source of truth.
     // -------------------------------------------------------------------
     var wwwrootPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
@@ -469,8 +462,8 @@ try
         Log.Warning(
             "SPA assets NOT found at {Wwwroot}. Server will respond to '/' " +
             "with a plain-text status only. This is normal in dev (use Vite at " +
-            "http://localhost:5173). For a deployed build, run publish.ps1 to " +
-            "produce a dist with wwwroot/ populated.",
+            "http://localhost:5173). For a deployed build, run " +
+            "deploy/linux/install.sh, which populates wwwroot/.",
             wwwrootPath);
     }
 
@@ -490,78 +483,74 @@ try
     // problem surfaces in startup logs not under load.
     _ = app.Services.GetRequiredService<NoteControl.Server.Auth.Local.ILocalTrayTokenService>();
 
-    // Ship 93: write the auto-generated Caddyfile on every server
-    // startup so it stays in sync with the current hostname list +
-    // backend port. This handles two cases ConfigService.UpdateAsync
-    // doesn't:
-    //   1. First boot after upgrading from a pre-Ship-93 build —
-    //      no save has happened yet, but Caddy needs a Caddyfile
-    //      to start.
-    //   2. The user edited config.json by hand (rather than via the
-    //      Tray Settings UI). Their hand-edit takes effect on next
-    //      restart, and the Caddyfile is regenerated to match.
-    // We don't try to reload Caddy from here — at startup the user
-    // hasn't run setup-https.ps1 yet on first install, and even on
-    // subsequent boots the Caddy service starts on its own and
-    // reads the latest Caddyfile from disk. No reload needed.
-    try
-    {
-        var network = app.Services.GetRequiredService<
-            Microsoft.Extensions.Options.IOptionsMonitor<
-                NoteControl.Server.Options.NetworkOptions>>().CurrentValue;
-        var caddyWriter = app.Services.GetRequiredService<
-            NoteControl.Server.Caddy.CaddyConfigWriter>();
-        // Ship 94: hardcoded paths matching setup-https.ps1's
-        // deployment convention. See ConfigService.ResolveCaddyfilePath
-        // for rationale (the previous Ship 93 design derived these
-        // from DataRoot, which produced ...\NotesData\caddy\Caddyfile
-        // while the script + service expected one level up).
-        var caddyfilePath = @"C:\ProgramData\NoteControl\caddy\Caddyfile";
-        var logPath = @"C:\ProgramData\NoteControl\logs\caddy-access.log";
-        var contents = NoteControl.Server.Caddy.CaddyfileGenerator.Generate(
-            network.PublicHostnames ?? new List<string>(),
-            network.Port,
-            logPath);
-        caddyWriter.Write(caddyfilePath, contents);
-    }
-    catch (Exception ex)
-    {
-        // Don't let a Caddyfile-write failure prevent the server
-        // from booting. Log loudly; a restart with permissions
-        // fixed will recover.
-        var startupLog = app.Services.GetRequiredService<
-            Microsoft.Extensions.Logging.ILoggerFactory>()
-            .CreateLogger("CaddyfileStartup");
-        startupLog.LogWarning(ex,
-            "Could not generate Caddyfile at startup. The server is " +
-            "running normally; HTTPS via Caddy is unaffected only if " +
-            "an existing Caddyfile is still on disk.");
-    }
-
     // -------------------------------------------------------------------
     // Middleware pipeline.
     // -------------------------------------------------------------------
 
     // Forwarded headers FIRST, so everything after it (login throttle,
-    // audit log, session IP, local-token loopback gate) sees the real
-    // client address instead of Caddy's 127.0.0.1. Without it, behind
-    // Caddy all users shared one per-IP login bucket — five bad logins
-    // a minute from any bot locked everyone out.
+    // audit log, session IP) sees the real client address instead of
+    // the reverse proxy's. Without it, behind a proxy all users share
+    // one per-IP login bucket — five bad logins a minute from any bot
+    // lock everyone out.
     //
-    // Only X-Forwarded-For, and only from loopback: the defaults trust
-    // 127.0.0.0/8 and ::1 (Caddy on the same machine) and nothing else,
-    // with ForwardLimit = 1 (the address Caddy itself appended). A LAN
-    // or internet client connecting to Kestrel directly can't spoof its
-    // address by sending the header. X-Forwarded-Proto is deliberately
-    // left out: it would flip Request.IsHttps and with it HSTS output —
-    // a separate decision.
+    // Only X-Forwarded-For, and only from trusted proxies: loopback by
+    // default (ASP.NET's defaults: KnownNetworks = 127.0.0.0/8,
+    // KnownProxies = ::1), plus whatever Network:TrustedProxies lists —
+    // on Linux this is the Nginx Proxy Manager host, which is on a
+    // different machine/container. ForwardLimit = 1 (the address the
+    // proxy itself appended). A client connecting to Kestrel directly
+    // can't spoof its address by sending the header. X-Forwarded-Proto
+    // is deliberately left out: it would flip Request.IsHttps and with
+    // it HSTS output — the proxy owns HTTPS and HSTS.
+    //
+    // Read once at startup: changing TrustedProxies needs a restart.
     var forwarded = new ForwardedHeadersOptions
     {
         ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor,
     };
-    // ASP.NET's defaults: KnownNetworks = 127.0.0.0/8, KnownProxies = ::1.
     // Add IPv4-mapped ::ffff:127.0.0.1 for dual-stack sockets.
     forwarded.KnownProxies.Add(System.Net.IPAddress.Parse("::ffff:127.0.0.1"));
+    {
+        var trusted = app.Configuration
+            .GetSection($"{NetworkOptions.SectionName}:TrustedProxies")
+            .Get<List<string>>() ?? new List<string>();
+        var accepted = new List<string>();
+        foreach (var raw in trusted)
+        {
+            var entry = (raw ?? "").Trim();
+            if (entry.Length == 0) continue;
+            var slash = entry.IndexOf('/');
+            if (slash > 0
+                && System.Net.IPAddress.TryParse(entry[..slash], out var netAddr)
+                && int.TryParse(entry[(slash + 1)..], out var prefix)
+                && prefix >= 0
+                && prefix <= (netAddr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128))
+            {
+                forwarded.KnownNetworks.Add(
+                    new Microsoft.AspNetCore.HttpOverrides.IPNetwork(netAddr, prefix));
+                if (netAddr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                {
+                    // Dual-stack sockets report IPv4 peers as ::ffff:a.b.c.d.
+                    forwarded.KnownNetworks.Add(
+                        new Microsoft.AspNetCore.HttpOverrides.IPNetwork(netAddr.MapToIPv6(), 96 + prefix));
+                }
+                accepted.Add(entry);
+            }
+            else if (System.Net.IPAddress.TryParse(entry, out var addr))
+            {
+                forwarded.KnownProxies.Add(addr);
+                if (addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    forwarded.KnownProxies.Add(addr.MapToIPv6());
+                accepted.Add(entry);
+            }
+            else
+            {
+                Log.Warning("Ignoring invalid Network:TrustedProxies entry {Entry} (expected an IP or CIDR).", entry);
+            }
+        }
+        if (accepted.Count > 0)
+            Log.Information("Trusting X-Forwarded-For from: {Proxies}", string.Join(", ", accepted));
+    }
     app.UseForwardedHeaders(forwarded);
 
     if (app.Environment.IsDevelopment())
