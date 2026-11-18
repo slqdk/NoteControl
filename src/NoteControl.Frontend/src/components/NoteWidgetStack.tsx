@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 import type {
   ConvertBlockDto,
+  EncoderBlockDto,
   LinkBlockDto,
   MotionBlockDto,
   MotorBlockDto,
@@ -17,6 +18,7 @@ import { MotionBlock } from './MotionBlock';
 import { MotorBlock } from './MotorBlock';
 import { ConvertBlock } from './ConvertBlock';
 import { VfdBlock } from './VfdBlock';
+import { EncoderBlock } from './EncoderBlock';
 
 /**
  * Renders the ordered list of widgets attached to a single note, in
@@ -84,6 +86,7 @@ const DEFAULT_HEIGHT: Record<string, number> = {
   motor: 420,
   convert: 340,
   vfd: 480,
+  encoder: 640,
 };
 
 /** Clamp host height to sane bounds so a drag can't collapse a widget
@@ -101,7 +104,9 @@ function clamp(n: number, lo: number, hi: number): number {
 
 /** The currently-stored payload for a widget, regardless of kind. */
 function payloadOf(w: NoteWidgetDto): { height?: number } | null {
-  return w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? w.convert ?? w.vfd ?? null;
+  return (
+    w.rss ?? w.task ?? w.links ?? w.motion ?? w.motor ?? w.convert ?? w.vfd ?? w.encoder ?? null
+  );
 }
 
 /** The default/reset height for a widget, accounting for Motion-D. */
@@ -243,6 +248,14 @@ function NoteWidgetItem({
     },
     [onChange, w.id, w.vfd],
   );
+  const onChangeEncoder = useCallback(
+    (patch: Partial<EncoderBlockDto>) => {
+      const { x: _x, y: _y, ...rest } = patch;
+      void _x; void _y;
+      if (w.encoder) onChange(w.id, { encoder: { ...w.encoder, ...rest } });
+    },
+    [onChange, w.id, w.encoder],
+  );
 
   // Host resize handle → set the payload height (clamped + rounded).
   const setHeight = useCallback(
@@ -255,6 +268,7 @@ function NoteWidgetItem({
       else if (w.motor) onChange(w.id, { motor: { ...w.motor, height: next } });
       else if (w.convert) onChange(w.id, { convert: { ...w.convert, height: next } });
       else if (w.vfd) onChange(w.id, { vfd: { ...w.vfd, height: next } });
+      else if (w.encoder) onChange(w.id, { encoder: { ...w.encoder, height: next } });
     },
     [onChange, w],
   );
@@ -319,6 +333,14 @@ function NoteWidgetItem({
       <VfdBlock
         block={{ ...w.vfd, x: 0, y: 0, width, height }}
         onChange={onChangeVfd}
+        onDelete={() => onDelete(w.id)}
+      />
+    );
+  } else if (w.kind === 'encoder' && w.encoder) {
+    body = (
+      <EncoderBlock
+        block={{ ...w.encoder, x: 0, y: 0, width, height }}
+        onChange={onChangeEncoder}
         onDelete={() => onDelete(w.id)}
       />
     );

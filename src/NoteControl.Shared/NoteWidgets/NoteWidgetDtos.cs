@@ -127,7 +127,13 @@ public sealed record NoteWidgetDto(
     /// VFD control-mode comparison payload. Non-null iff
     /// <see cref="Kind"/> is "vfd". Note-native widget.
     /// </summary>
-    VfdBlockDto? Vfd = null);
+    VfdBlockDto? Vfd = null,
+
+    /// <summary>
+    /// Encoder / feedback comparison payload. Non-null iff
+    /// <see cref="Kind"/> is "encoder". Note-native widget.
+    /// </summary>
+    EncoderBlockDto? Encoder = null);
 
 /// <summary>
 /// Configuration for the live unit-converter widget. A category is
@@ -335,3 +341,84 @@ public sealed record VfdBlockDto(
     /// "induction". Default "induction".
     /// </summary>
     string MotorType = "induction");
+
+/// <summary>
+/// Encoder / feedback comparison widget config (kind "encoder").
+///
+/// Compares position feedback by principle — incremental (TTL/RS422,
+/// HTL), SinCos 1 Vpp, resolver, absolute single-turn and absolute
+/// multi-turn — for one operating point (speed, screw lead, travel),
+/// with a power-cycle demo showing which principle still knows the
+/// axis position after power-up. Each card maps to Beckhoff hardware:
+/// the AM8000 feedback code (type key letter "y") or the EtherCAT
+/// encoder terminal / AX8000 multi-feedback option.
+///
+/// All product data and the model live in the frontend
+/// (EncoderBlock.tsx); the server treats this payload as opaque, so
+/// adding a variant is a frontend-only change. Variant fields are
+/// plain strings/ints so an unknown value from a newer build survives
+/// a round-trip through an older one.
+///
+/// x/y/width/height mirror the other note widgets: x/y are ignored in
+/// the note stack, width/height drive the widget's own layout.
+/// </summary>
+public sealed record EncoderBlockDto(
+    /// <summary>Stable id (client-generated). Opaque to the server.</summary>
+    string Id,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double X = 0,
+
+    /// <summary>Dashboard-canvas coordinate; ignored in the note stack.</summary>
+    double Y = 0,
+
+    /// <summary>Widget width in px (host overrides via measurement in-note).</summary>
+    double Width = 760,
+
+    /// <summary>Widget height in px.</summary>
+    double Height = 640,
+
+    /// <summary>Motor speed, rpm (0..6000) — drives signal frequency and the animation.</summary>
+    double SpeedRpm = 3000,
+
+    /// <summary>Linear travel per motor revolution, mm (screw lead, belt, rack, gearbox folded in).</summary>
+    double LeadMm = 10,
+
+    /// <summary>Axis travel, mm — checked against single-turn (1 rev) and the multi-turn range.</summary>
+    double TravelMm = 1000,
+
+    /// <summary>Incremental encoder lines (pulses) per revolution.</summary>
+    int IncLines = 2048,
+
+    /// <summary>Incremental signal level: "ttl" (5 V RS422/TTL, EL5101) or "htl" (24 V, EL5151).</summary>
+    string IncSignal = "ttl",
+
+    /// <summary>SinCos 1 Vpp periods per revolution.</summary>
+    int SinCosPeriods = 2048,
+
+    /// <summary>Interpolation bits per SinCos period (EL5021: 8..13).</summary>
+    int SinCosInterpBits = 10,
+
+    /// <summary>Absolute single-turn card: AM8000 feedback code ("1", "A", "G", "I", "3") or "ext".</summary>
+    string StVariant = "G",
+
+    /// <summary>Single-turn card, "ext" only: interface "ssi", "biss" or "endat".</summary>
+    string StExtInterface = "biss",
+
+    /// <summary>Single-turn card, "ext" only: bits per revolution.</summary>
+    int StExtBits = 17,
+
+    /// <summary>Absolute multi-turn card: AM8000 feedback code ("2", "B", "H", "L", "J", "4") or "ext".</summary>
+    string MtVariant = "H",
+
+    /// <summary>Multi-turn card, "ext" only: interface "ssi", "biss" or "endat".</summary>
+    string MtExtInterface = "biss",
+
+    /// <summary>Multi-turn card, "ext" only: bits per revolution.</summary>
+    int MtExtBits = 17,
+
+    /// <summary>Multi-turn card, "ext" only: bits for the turn counter (12 = 4096 rev).</summary>
+    int MtExtTurnBits = 12,
+
+    /// <summary>Animation running (the shaft turns, counters count).</summary>
+    bool Running = true);

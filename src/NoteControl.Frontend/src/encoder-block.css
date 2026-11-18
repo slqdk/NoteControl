@@ -1,0 +1,618 @@
+/* ============================================================================
+ * encoder-block.css — encoder / feedback comparison widget (EncoderBlock.tsx).
+ * A note-native widget that follows the same frame vocabulary as
+ * vfd-block.css / motor-block.css so the widgets read as siblings when
+ * stacked above a note.
+ *
+ * Separate file (loaded from main.tsx after styles.css) for the same
+ * reason the other block stylesheets are: additive feature, one-delete
+ * revert, explicit cascade order.
+ *
+ * Colour roles:
+ *   ok   — green (referenced / within the limit)
+ *   warn — amber (angle right, turn count lost)
+ *   bad  — red   (position lost / over the limit / beyond range)
+ * ========================================================================== */
+
+.nc-enc-block {
+  display: flex;
+  flex-direction: column;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: var(--nc-radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 320px;
+  /* Status text colours, tuned for a light card; lifted for dark below. */
+  --nc-enc-ok-fg: #15803d;
+  --nc-enc-bad-fg: #b91c1c;
+  --nc-enc-warn-fg: #b45309;
+  --nc-enc-st-fg: #1d4ed8;
+  --nc-enc-mt-fg: #6d28d9;
+}
+
+/* Dark theme: same two selectors styles.css uses — OS preference with
+   no explicit choice, or an explicit data-theme="dark". */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .nc-enc-block {
+    --nc-enc-ok-fg: #4ade80;
+    --nc-enc-bad-fg: #f87171;
+    --nc-enc-warn-fg: #fbbf24;
+    --nc-enc-st-fg: #93c5fd;
+    --nc-enc-mt-fg: #c4b5fd;
+  }
+}
+:root[data-theme='dark'] .nc-enc-block {
+  --nc-enc-ok-fg: #4ade80;
+  --nc-enc-bad-fg: #f87171;
+  --nc-enc-warn-fg: #fbbf24;
+  --nc-enc-st-fg: #93c5fd;
+  --nc-enc-mt-fg: #c4b5fd;
+}
+
+/* ----- Header ------------------------------------------------------------ */
+.nc-enc-block-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--nc-bg-elev-2);
+  border-bottom: 1px solid var(--nc-border);
+  user-select: none;
+}
+.nc-enc-block-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nc-fg);
+}
+.nc-enc-block-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+.nc-enc-block-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--nc-fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.nc-enc-block-iconbtn:hover {
+  background: var(--nc-bg);
+  border-color: var(--nc-border);
+  color: var(--nc-fg);
+}
+
+/* ----- Body -------------------------------------------------------------- */
+.nc-enc-block-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow: auto;
+}
+
+/* ----- Operating-point sliders ------------------------------------------- */
+.nc-enc-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px 18px;
+}
+.nc-enc-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nc-enc-control-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-control-label strong {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-control input[type='range'] {
+  width: 100%;
+  accent-color: var(--nc-accent);
+  cursor: pointer;
+}
+.nc-enc-summary {
+  margin-top: -6px;
+  font-size: 12.5px;
+  color: var(--nc-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-summary strong {
+  font-weight: 600;
+  color: var(--nc-fg);
+}
+
+/* ----- Stage: code disc + axis + power cycle ------------------------------ */
+.nc-enc-stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 20px;
+  padding: 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+.nc-enc-disc {
+  flex: 0 0 auto;
+  width: 150px;
+  height: 150px;
+  transition: opacity 150ms ease, filter 150ms ease;
+}
+.nc-enc-disc.is-unpowered {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.nc-enc-disc-rim {
+  fill: none;
+  stroke: var(--nc-border);
+  stroke-width: 2;
+}
+.nc-enc-disc-face {
+  fill: var(--nc-bg-elev-2);
+  stroke: var(--nc-border);
+  stroke-width: 1;
+}
+.nc-enc-disc-tick {
+  stroke: var(--nc-fg-muted);
+  stroke-width: 1.5;
+}
+.nc-enc-disc-code {
+  fill: none;
+  stroke: var(--nc-accent);
+  stroke-width: 8;
+  opacity: 0.85;
+}
+.nc-enc-disc-index {
+  stroke: #ef4444;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.nc-enc-disc-hub {
+  fill: var(--nc-bg-elev);
+  stroke: var(--nc-border);
+  stroke-width: 2;
+}
+.nc-enc-disc-head {
+  fill: var(--nc-fg);
+}
+
+.nc-enc-stage-side {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.nc-enc-truth {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nc-enc-truth-label {
+  font-size: 12px;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-truth-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The axis: a rail with a carriage whose left% is set by the rAF loop. */
+.nc-enc-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.nc-enc-axis-track {
+  position: relative;
+  height: 16px;
+  margin: 0 8px;
+}
+.nc-enc-axis-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--nc-bg-elev-2);
+  border: 1px solid var(--nc-border);
+}
+.nc-enc-axis-carriage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 4px;
+  background: var(--nc-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.nc-enc-axis-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--nc-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nc-enc-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nc-enc-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  cursor: pointer;
+}
+.nc-enc-btn:hover:not(:disabled) {
+  border-color: var(--nc-fg-muted);
+}
+.nc-enc-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.nc-enc-btn-power {
+  color: var(--nc-enc-bad-fg);
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+}
+.nc-enc-btn-power.is-off {
+  opacity: 1;
+  color: #fff;
+  background: #ef4444;
+  border-color: #ef4444;
+}
+.nc-enc-event {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--nc-fg-muted);
+  min-height: 2.9em;
+}
+
+/* ----- Cards ------------------------------------------------------------- */
+.nc-enc-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 12px;
+}
+.nc-enc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+  min-width: 0;
+}
+.nc-enc-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.nc-enc-card-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--nc-fg);
+}
+.nc-enc-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+.nc-enc-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nc-enc-badge-rel {
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+}
+.nc-enc-badge-st {
+  color: var(--nc-enc-st-fg);
+  background: rgba(59, 130, 246, 0.14);
+}
+.nc-enc-badge-mt {
+  color: var(--nc-enc-mt-fg);
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.nc-enc-card-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.nc-enc-select {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 90px;
+  min-width: 0;
+}
+.nc-enc-select.is-wide {
+  flex-basis: 100%;
+}
+.nc-enc-select-label {
+  font-size: 10.5px;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-select select {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 3px 4px;
+  color: var(--nc-fg);
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+}
+.nc-enc-fixed {
+  font-size: 11.5px;
+  color: var(--nc-fg-muted);
+  padding: 4px 0;
+}
+
+/* Live readout box */
+.nc-enc-live {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
+  background: var(--nc-bg-elev);
+  border: 1px solid var(--nc-border);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-live-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nc-enc-live-name {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-live-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: right;
+}
+.nc-enc-verdict {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nc-enc-verdict.ok {
+  color: var(--nc-enc-ok-fg);
+  background: rgba(34, 197, 94, 0.14);
+}
+.nc-enc-verdict.warn {
+  color: var(--nc-enc-warn-fg);
+  background: rgba(245, 158, 11, 0.16);
+}
+.nc-enc-verdict.bad {
+  color: var(--nc-enc-bad-fg);
+  background: rgba(239, 68, 68, 0.14);
+}
+.nc-enc-verdict.off {
+  color: var(--nc-fg-muted);
+  background: var(--nc-bg-elev-2);
+}
+.nc-enc-err {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Unpowered: dim the numbers, keep the frame. */
+.nc-enc-card.is-unpowered .nc-enc-live {
+  opacity: 0.6;
+}
+
+/* Metrics */
+.nc-enc-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nc-enc-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+.nc-enc-metric-top {
+  align-self: stretch;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nc-enc-metric-name {
+  font-size: 11.5px;
+  color: var(--nc-fg-muted);
+  white-space: nowrap;
+}
+.nc-enc-metric-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--nc-fg);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.nc-enc-worked {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-chip.ok {
+  color: var(--nc-enc-ok-fg);
+  background: rgba(34, 197, 94, 0.14);
+}
+.nc-enc-chip.bad {
+  color: var(--nc-enc-bad-fg);
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.nc-enc-warn {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--nc-enc-warn-fg);
+}
+
+/* Hardware mapping + note, pinned to the card bottom */
+.nc-enc-hw {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px dashed var(--nc-border);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--nc-fg);
+}
+.nc-enc-hw-label {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-safety {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--nc-enc-warn-fg);
+  background: rgba(245, 158, 11, 0.16);
+  white-space: nowrap;
+}
+.nc-enc-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--nc-fg-muted);
+}
+
+/* ----- Attribute matrix -------------------------------------------------- */
+.nc-enc-matrix-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-x: auto;
+}
+.nc-enc-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.nc-enc-matrix th,
+.nc-enc-matrix td {
+  text-align: left;
+  vertical-align: top;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--nc-border);
+}
+.nc-enc-matrix thead th {
+  color: var(--nc-fg-muted);
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.nc-enc-matrix tbody th {
+  font-weight: 600;
+  color: var(--nc-fg);
+  white-space: nowrap;
+}
+.nc-enc-matrix tbody td {
+  color: var(--nc-fg);
+}
+.nc-enc-matrix-note {
+  font-size: 11px;
+  color: var(--nc-fg-muted);
+}
+
+/* ----- Footer: caveats + sources ----------------------------------------- */
+.nc-enc-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--nc-bg);
+  border: 1px solid var(--nc-border);
+  border-radius: 10px;
+}
+.nc-enc-foot-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--nc-fg-muted);
+}
+.nc-enc-foot-note strong {
+  color: var(--nc-fg);
+}

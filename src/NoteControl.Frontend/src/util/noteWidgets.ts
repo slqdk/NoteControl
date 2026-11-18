@@ -1,5 +1,6 @@
 import type {
   ConvertBlockDto,
+  EncoderBlockDto,
   LinkBlockDto,
   MotionBlockDto,
   MotorBlockDto,
@@ -25,7 +26,15 @@ import { MOTION_DEFAULTS } from '../components/MotionBlock';
  */
 export const NOTE_WIDGET_ADD_EVENT = 'nc:add-note-widget';
 
-export type NoteWidgetKind = 'rss' | 'task' | 'links' | 'motion' | 'motor' | 'convert' | 'vfd';
+export type NoteWidgetKind =
+  | 'rss'
+  | 'task'
+  | 'links'
+  | 'motion'
+  | 'motor'
+  | 'convert'
+  | 'vfd'
+  | 'encoder';
 
 export interface NoteWidgetAddDetail {
   /**
@@ -161,6 +170,35 @@ export function buildNoteWidget(detail: NoteWidgetAddDetail): NoteWidgetDto {
         motorType: 'induction',
       };
       return { id, kind: 'vfd', vfd };
+    }
+    case 'encoder': {
+      const encoder: EncoderBlockDto = {
+        id: newId(),
+        x: 0,
+        y: 0,
+        width: 760,
+        height: 640,
+        // 3000 rpm on a 10 mm screw over 1 m (100 motor rev): every
+        // card has something to say. Switch the incremental card to
+        // HTL to hit the EL5151's 100 kHz; stretch the travel past
+        // ~41 m to run out of the 4096-rev multi-turn range.
+        speedRpm: 3000,
+        leadMm: 10,
+        travelMm: 1000,
+        incLines: 2048,
+        incSignal: 'ttl',
+        sinCosPeriods: 2048,
+        sinCosInterpBits: 10,
+        stVariant: 'G',
+        stExtInterface: 'biss',
+        stExtBits: 17,
+        mtVariant: 'H',
+        mtExtInterface: 'biss',
+        mtExtBits: 17,
+        mtExtTurnBits: 12,
+        running: true,
+      };
+      return { id, kind: 'encoder', encoder };
     }
     default: {
       // Exhaustiveness guard — if a new kind is added to the union

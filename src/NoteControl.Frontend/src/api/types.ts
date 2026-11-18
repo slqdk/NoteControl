@@ -637,6 +637,8 @@ export interface NoteWidgetDto {
   convert?: ConvertBlockDto | null;
   /** VFD control-mode comparison payload — present iff kind === 'vfd'. */
   vfd?: VfdBlockDto | null;
+  /** Encoder / feedback comparison payload — present iff kind === 'encoder'. */
+  encoder?: EncoderBlockDto | null;
 }
 
 /**
@@ -731,6 +733,61 @@ export interface VfdBlockDto {
   ratedSlipPct: number;
   /** Motor type: induction (slip), pm or reluctance (synchronous, no slip). */
   motorType: 'induction' | 'pm' | 'reluctance';
+}
+
+/**
+ * Encoder / feedback comparison widget config. Mirrors
+ * NoteControl.Shared.NoteWidgets.EncoderBlockDto.
+ *
+ * Compares position feedback by principle — incremental (TTL/RS422,
+ * HTL), SinCos 1 Vpp, resolver, absolute single-turn, absolute
+ * multi-turn — at one operating point (speed, travel per motor rev,
+ * axis travel), with a power-cycle demo of what each principle still
+ * knows after power-up. Each card maps to Beckhoff hardware (AM8000
+ * feedback code "y", EtherCAT encoder terminal, AX8000/AX5000).
+ *
+ * The model and the product data live in EncoderBlock.tsx; the server
+ * treats this payload as opaque. Variant fields are plain strings so an
+ * unknown value from a newer build survives a round-trip.
+ *
+ * x/y ignored in the note stack; width/height drive layout.
+ */
+export interface EncoderBlockDto {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Motor speed, rpm (0..6000). */
+  speedRpm: number;
+  /** Linear travel per motor revolution, mm. */
+  leadMm: number;
+  /** Axis travel, mm. */
+  travelMm: number;
+  /** Incremental encoder lines per revolution. */
+  incLines: number;
+  /** 'ttl' (5 V RS422/TTL, EL5101) or 'htl' (24 V, EL5151). */
+  incSignal: string;
+  /** SinCos 1 Vpp periods per revolution. */
+  sinCosPeriods: number;
+  /** Interpolation bits per SinCos period (EL5021: 8..13). */
+  sinCosInterpBits: number;
+  /** Single-turn card: AM8000 feedback code ('1','A','G','I','3') or 'ext'. */
+  stVariant: string;
+  /** Single-turn 'ext': 'ssi' | 'biss' | 'endat'. */
+  stExtInterface: string;
+  /** Single-turn 'ext': bits per revolution. */
+  stExtBits: number;
+  /** Multi-turn card: AM8000 feedback code ('2','B','H','L','J','4') or 'ext'. */
+  mtVariant: string;
+  /** Multi-turn 'ext': 'ssi' | 'biss' | 'endat'. */
+  mtExtInterface: string;
+  /** Multi-turn 'ext': bits per revolution. */
+  mtExtBits: number;
+  /** Multi-turn 'ext': turn-counter bits (12 = 4096 rev). */
+  mtExtTurnBits: number;
+  /** Whether the animation is running. */
+  running: boolean;
 }
 
 /**
