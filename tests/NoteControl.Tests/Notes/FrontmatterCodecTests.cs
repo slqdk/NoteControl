@@ -74,7 +74,9 @@ public sealed class FrontmatterCodecTests
         output.Should().StartWith("---\n");
         output.Should().Contain("created: 2026-01-02T03:04:05Z");
         output.Should().Contain("updated: 2026-04-26T12:00:00Z");
-        output.Should().Contain("locked: true");
+        // `locked` is no longer emitted: the body lock derives from
+        // `state: released`, so an explicit flag could drift out of sync.
+        output.Should().NotContain("locked:");
         output.Should().Contain("Some body.");
     }
 
@@ -94,7 +96,8 @@ public sealed class FrontmatterCodecTests
         parsed.Created.Should().Be(original.Created);
         parsed.Updated.Should().Be(original.Updated);
         parsed.Tags.Should().Equal(original.Tags);
-        parsed.Locked.Should().BeTrue();
+        // Not round-tripped: Combine no longer writes `locked`.
+        parsed.Locked.Should().BeFalse();
         body.Trim().Should().Be("Body content.");
     }
 

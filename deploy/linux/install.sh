@@ -10,7 +10,8 @@
 #
 # What it does (idempotent):
 #   1. Installs build/runtime prerequisites: .NET 8 SDK (via Microsoft's
-#      dotnet-install.sh into /usr/share/dotnet), Node.js + npm (apt), ICU.
+#      dotnet-install.sh into /usr/share/dotnet), Node.js + npm, ICU, and
+#      unzip + sqlite3 for import.sh (apt).
 #   2. Builds the server (self-contained, linux-x64/arm64) and the
 #      frontend (npm ci + vite build) into a staging folder.
 #   3. Creates the 'notecontrol' system user and the folders:
@@ -92,7 +93,7 @@ install_deps() {
     [[ $EUID -eq 0 ]] || die "Installing prerequisites needs root (or pass --skip-deps)."
     command -v apt-get >/dev/null || die "apt-get not found - this script targets Debian/Ubuntu."
 
-    log "Installing apt packages (curl, ICU, Node.js, npm)"
+    log "Installing apt packages (curl, git, unzip, sqlite3, ICU, Node.js, npm)"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     # ICU package name carries the version (libicu72 on bookworm,
@@ -101,7 +102,7 @@ install_deps() {
     icu="$(apt-cache pkgnames 2>/dev/null | grep -E '^libicu[0-9]+$' | sort -V | tail -n1 || true)"
     [[ -n "$icu" ]] || die "No libicuNN package found in apt."
     apt-get install -y -qq --no-install-recommends \
-        ca-certificates curl git "$icu" nodejs npm >/dev/null
+        ca-certificates curl git unzip sqlite3 "$icu" nodejs npm >/dev/null
 
     local node_major
     node_major="$(node -p 'process.versions.node.split(".")[0]')"
@@ -146,6 +147,15 @@ mkdir -p "$STAGE_APP"
 VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 log "Building NoteControl ${VERSION} for ${RID}"
 
+# The SDK's first run takes a named mutex ("NuGet-Migrations") to run a
+# one-off NuGet folder-permission migration. In some Proxmox LXC
+# containers creating that mutex fails ("The system cannot open the
+# device or file specified"). NuGet skips the mutex entirely when the
+# migration marker exists, and the migration only fixes folders left by
+# old SDKs - nothing to migrate on a fresh container.
+mkdir -p "${HOME:-/root}/.local/share/NuGet/Migrations"
+touch "${HOME:-/root}/.local/share/NuGet/Migrations/1"
+
 log "Server: dotnet publish (self-contained)"
 "$DOTNET" publish "$SERVER_PROJ" \
     -c Release -r "$RID" --self-contained true \
@@ -156,7 +166,9 @@ log "Frontend: npm ci + build"
 (
     cd "$FRONTEND_DIR"
     npm ci --no-audit --no-fund --loglevel=error
-    npm run build --silent
+    # Arguments after -- are appended to the script ("tsc -b && vite build"),
+    # i.e. they reach vite: only warnings/errors, no per-asset listing.
+    npm run build --silent -- --logLevel warn
 )
 [[ -f "${FRONTEND_DIR}/dist/index.html" ]] || die "Frontend build produced no dist/index.html."
 rm -rf "${STAGE_APP}/wwwroot"

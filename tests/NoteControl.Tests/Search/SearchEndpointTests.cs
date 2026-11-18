@@ -55,8 +55,8 @@ public sealed class SearchEndpointTests : IClassFixture<TestServerFactory>
 
         result.Results.Should().HaveCount(1);
         result.Results[0].Path.Should().Be("Inbox.md");
-        result.Results[0].Snippet.Should().Contain("**fox**",
-            because: "the configured highlight markers are double-asterisks for markdown-friendliness");
+        result.Results[0].Snippet.Should().Contain("\u0001fox\u0002",
+            because: "matches are wrapped in C0 control characters (STX/SOT), which can't occur in user markdown; the frontend turns them into <strong>");
     }
 
     [Fact]
